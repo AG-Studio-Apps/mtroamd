@@ -82,7 +82,7 @@ print flags:
   --bin=PATH      override ExecStart binary path
   --addr=H:P            override QUIC bind address (default 0.0.0.0:49820)
   --roam-tcp-addr=H:P   override Roam-over-TCP bind address (default 0.0.0.0:49821)
-                        Pass `-` to omit the flag (QUIC-only).
+                        Pass '-' to omit the flag (QUIC-only).
   --socket=PATH         override IPC socket path
 
 Example:
