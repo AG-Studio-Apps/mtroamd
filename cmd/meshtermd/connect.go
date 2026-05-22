@@ -137,6 +137,25 @@ func runConnect(args []string) int {
 	fmt.Printf("MTRM_QUIC 1 %d %s %s %s\n",
 		resp.Port, resp.SessionID, resp.CertFP, resp.AttachToken)
 
+	// If the daemon was started with --roam-tcp-addr, emit a parallel
+	// MTRM_TCP line carrying the TCP port. iOS clients in embedded-
+	// Tailscale routing mode parse this to learn where to dial via
+	// their in-process tsnet — they can't run Apple's QUIC over the
+	// TailscaleKit userspace fd, so a TCP variant of the Roam
+	// transport handles that path. Older clients (no embedded
+	// mode) ignore the line.
+	//
+	// Format intentionally minimal: just version + port. The
+	// session_id / cert_fp / attach_token from MTRM_QUIC apply
+	// to either transport — Roam framing is identical on both,
+	// and the attach-token authenticates the client to the
+	// daemon at the protocol layer regardless of how the bytes
+	// got there. WireGuard provides the wire-level encryption
+	// for the TCP path (used inside a tailnet only).
+	if resp.TCPPort != 0 {
+		fmt.Printf("MTRM_TCP 1 %d\n", resp.TCPPort)
+	}
+
 	// Emit the daemon version on a second line so the iOS client (or
 	// mtctl, or anything else parsing connect's stdout) can compare
 	// the installed daemon to the version it pins. Forward-compat:
