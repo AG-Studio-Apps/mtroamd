@@ -111,6 +111,19 @@ func TestServerAcceptsClientWithCorrectFingerprint(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
+	// The handler now fires AFTER the server has accepted a bidi
+	// stream (the AcceptStream moved out of HandleConnection into
+	// Server.Serve when Conn was abstracted). Open one client-side
+	// so the server's accept-stream call returns; the test doesn't
+	// care about the stream's contents.
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), time.Second)
+	defer streamCancel()
+	stream, err := conn.OpenStreamSync(streamCtx)
+	if err != nil {
+		t.Fatalf("client open stream: %v", err)
+	}
+	defer stream.Close()
+
 	// Wait for the handler to fire.
 	deadline := time.Now().Add(time.Second)
 	for connected.Load() == 0 && time.Now().Before(deadline) {
