@@ -114,8 +114,11 @@ func TestServerAcceptsClientWithCorrectFingerprint(t *testing.T) {
 	// The handler now fires AFTER the server has accepted a bidi
 	// stream (the AcceptStream moved out of HandleConnection into
 	// Server.Serve when Conn was abstracted). Open one client-side
-	// so the server's accept-stream call returns; the test doesn't
-	// care about the stream's contents.
+	// AND write a byte — quic-go's bidi streams are lazy on the
+	// wire until first write, so OpenStreamSync alone doesn't
+	// trigger the peer's AcceptStream. The test doesn't care
+	// about response bytes; the write is purely to materialise
+	// the stream on the wire.
 	streamCtx, streamCancel := context.WithTimeout(context.Background(), time.Second)
 	defer streamCancel()
 	stream, err := conn.OpenStreamSync(streamCtx)
@@ -123,6 +126,9 @@ func TestServerAcceptsClientWithCorrectFingerprint(t *testing.T) {
 		t.Fatalf("client open stream: %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Write([]byte{0}); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
 
 	// Wait for the handler to fire.
 	deadline := time.Now().Add(time.Second)
