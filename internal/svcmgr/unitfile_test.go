@@ -24,7 +24,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/meshtermd serve --addr 0.0.0.0:49820 --socket %h/.local/share/meshtermd/meshtermd.sock
+ExecStart=%h/.local/bin/meshtermd serve --addr 0.0.0.0:49820 --roam-tcp-addr 0.0.0.0:49821 --socket %h/.local/share/meshtermd/meshtermd.sock
 Restart=on-failure
 RestartSec=5
 # KillMode=process so ` + "`systemctl restart`" + ` only SIGTERMs the main
@@ -55,9 +55,20 @@ func TestRenderUserUnitHonoursOverrides(t *testing.T) {
 		BinPath:    "/opt/meshtermd/bin/meshtermd",
 		Addr:       "100.64.0.1:51820",
 		SocketPath: "/run/meshtermd/meshtermd.sock",
+		TCPAddr:    "100.64.0.1:51821",
 	})
-	wantExec := "ExecStart=/opt/meshtermd/bin/meshtermd serve --addr 100.64.0.1:51820 --socket /run/meshtermd/meshtermd.sock"
+	wantExec := "ExecStart=/opt/meshtermd/bin/meshtermd serve --addr 100.64.0.1:51820 --roam-tcp-addr 100.64.0.1:51821 --socket /run/meshtermd/meshtermd.sock"
 	if !strings.Contains(got, wantExec) {
 		t.Errorf("override ExecStart line missing; got:\n%s", got)
+	}
+}
+
+// TestRenderUserUnitTCPOptOut verifies the sentinel "-" suppresses
+// the --roam-tcp-addr flag entirely. Used by operators who want
+// QUIC-only on hosts where the TCP port can't be reserved.
+func TestRenderUserUnitTCPOptOut(t *testing.T) {
+	got := RenderUserUnit(&UserUnitOptions{TCPAddr: "-"})
+	if strings.Contains(got, "--roam-tcp-addr") {
+		t.Errorf("TCPAddr=\"-\" should suppress the --roam-tcp-addr flag; got:\n%s", got)
 	}
 }

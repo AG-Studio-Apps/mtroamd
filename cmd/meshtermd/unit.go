@@ -50,6 +50,9 @@ func runUnitPrint(args []string, out io.Writer) int {
 		"QUIC bind address host:port (default 0.0.0.0:49820)")
 	socket := fs.String("socket", "",
 		"IPC socket path (default %h/.local/share/meshtermd/meshtermd.sock)")
+	tcpAddr := fs.String("roam-tcp-addr", "",
+		"Roam-over-TCP listener bind address (default 0.0.0.0:49821). "+
+			"Pass `-` to suppress the listener entirely (QUIC-only).")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -57,6 +60,7 @@ func runUnitPrint(args []string, out io.Writer) int {
 		BinPath:    *binPath,
 		Addr:       *addr,
 		SocketPath: *socket,
+		TCPAddr:    *tcpAddr,
 	})
 	if _, err := io.WriteString(out, content); err != nil {
 		fmt.Fprintf(os.Stderr, "meshtermd unit print: write: %v\n", err)
@@ -76,8 +80,10 @@ Actions:
 
 print flags:
   --bin=PATH      override ExecStart binary path
-  --addr=H:P      override QUIC bind address (default 0.0.0.0:49820)
-  --socket=PATH   override IPC socket path
+  --addr=H:P            override QUIC bind address (default 0.0.0.0:49820)
+  --roam-tcp-addr=H:P   override Roam-over-TCP bind address (default 0.0.0.0:49821)
+                        Pass '-' to omit the flag (QUIC-only).
+  --socket=PATH         override IPC socket path
 
 Example:
   meshtermd unit print > ~/.config/systemd/user/meshtermd.service

@@ -30,6 +30,21 @@ type UserUnitOptions struct {
 	// Defaults to "%h/.local/share/meshtermd/meshtermd.sock" matching
 	// the default-path lookup in `cmd/meshtermd/connect.go`.
 	SocketPath string
+
+	// TCPAddr is the optional Roam-over-TCP listener bind address
+	// (used by iOS clients in embedded-Tailscale routing mode).
+	// Defaults to "0.0.0.0:49821" — sits one port above QUIC's
+	// 49820, all interfaces so the host's tailnet IP receives
+	// traffic arriving via tsnet. Emit unconditionally in the
+	// canonical unit so a future iOS-side mode switch to embedded
+	// doesn't need a re-install. Auth model is identical to QUIC:
+	// the daemon's attach-token flow authenticates the client at
+	// the Roam protocol layer regardless of transport, so binding
+	// to all interfaces is safe even on multi-homed hosts.
+	//
+	// Operators who specifically want QUIC-only can pass the
+	// sentinel "-" to disable the TCP listener.
+	TCPAddr string
 }
 
 // RenderUserUnit returns the canonical `~/.config/systemd/user/
@@ -58,6 +73,9 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 	if o.SocketPath == "" {
 		o.SocketPath = "%h/.local/share/meshtermd/meshtermd.sock"
 	}
+	if o.TCPAddr == "" {
+		o.TCPAddr = "0.0.0.0:49821"
+	}
 
 	var b strings.Builder
 	fmt.Fprintln(&b, "[Unit]")
@@ -67,7 +85,16 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "[Service]")
 	fmt.Fprintln(&b, "Type=simple")
-	fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --socket %s\n", o.BinPath, o.Addr, o.SocketPath)
+	// Operator opt-out: "-" suppresses the --roam-tcp-addr flag for
+	// the rare case someone wants QUIC-only. Everything else emits
+	// both transports so an iOS-side embedded-mode switch needs no
+	// re-install.
+	if o.TCPAddr == "-" {
+		fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --socket %s\n", o.BinPath, o.Addr, o.SocketPath)
+	} else {
+		fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --roam-tcp-addr %s --socket %s\n",
+			o.BinPath, o.Addr, o.TCPAddr, o.SocketPath)
+	}
 	fmt.Fprintln(&b, "Restart=on-failure")
 	fmt.Fprintln(&b, "RestartSec=5")
 	fmt.Fprintln(&b, "# KillMode=process so `systemctl restart` only SIGTERMs the main")
