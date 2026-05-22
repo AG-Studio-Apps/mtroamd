@@ -6,8 +6,6 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/quic-go/quic-go"
-
 	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
 	"github.com/AG-Studio-Apps/meshtermd/internal/session"
 )
@@ -34,7 +32,7 @@ type frameWriter func(t uint8, body []byte) error
 // write when the peer's flow-control window is full; CancelWrite
 // on ctx-cancel unblocks that path so the goroutine exits within
 // milliseconds of teardown rather than at MaxIdleTimeout.
-func outputPump(ctx context.Context, sess *session.Session, s *quic.Stream, write frameWriter, fromSeq uint64) error {
+func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, fromSeq uint64) error {
 	cancelOnDone(ctx, func() { s.CancelWrite(0) })
 	buf := sess.Buffer()
 	if buf == nil {
@@ -78,7 +76,7 @@ func outputPump(ctx context.Context, sess *session.Session, s *quic.Stream, writ
 // quic-go's Read does NOT abort on context cancel; without an
 // explicit CancelRead a stuck Read would pin this goroutine until
 // QUIC's idle timeout. We watch ctx in a sidecar (audit F11).
-func readPump(ctx context.Context, sess *session.Session, s *quic.Stream, write frameWriter, mode session.AttachMode) error {
+func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, mode session.AttachMode) error {
 	cancelOnDone(ctx, func() { s.CancelRead(0) })
 	for {
 		if err := ctx.Err(); err != nil {

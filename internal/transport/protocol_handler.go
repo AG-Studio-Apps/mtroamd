@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
-
 	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
 	"github.com/AG-Studio-Apps/meshtermd/internal/session"
 )
@@ -22,13 +20,14 @@ import (
 // connection down. quic-go's Stream.Close marks the write side
 // done but doesn't block until bytes drain — without the drain
 // the client sees a bare CONNECTION_CLOSE instead of our typed
-// AttachAck error message.
+// AttachAck error message. Behaviour is identical on plain TCP:
+// the deadline + Discard idiom drains either transport.
 //
 // Audit F-G (v0.0.2 review): replaces an earlier ctxReader pattern
-// that spawned a child goroutine per Read and leaked it until QUIC
-// teardown. SetReadDeadline does the same job natively without the
-// goroutine cost.
-func drainBriefly(s *quic.Stream, d time.Duration) {
+// that spawned a child goroutine per Read and leaked it until
+// teardown. SetReadDeadline does the same job natively without
+// the goroutine cost.
+func drainBriefly(s Conn, d time.Duration) {
 	_ = s.SetReadDeadline(time.Now().Add(d))
 	_, _ = io.Copy(io.Discard, s)
 }
@@ -71,26 +70,26 @@ type ProtocolHandler struct {
 	PTYSpawner func(sess *session.Session, rows, cols uint16) (session.PTY, error)
 }
 
-// HandleConnection implements Handler.
-func (h *ProtocolHandler) HandleConnection(ctx context.Context, conn *quic.Conn) {
-	log := h.logger().With("remote", conn.RemoteAddr().String())
+// HandleConnection implements Handler. The Conn argument bundles the
+// single bidirectional byte stream (QUIC accepted stream or raw TCP
+// conn) with connection-level operations the protocol needs. The
+// QUIC AcceptStream / TCP no-op-because-already-a-stream step
+// happens in the respective Server's accept loop before the call,
+// so this function is transport-agnostic.
+func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
+	log := h.logger().With("remote", ctrl.RemoteAddr().String())
 	log.InfoContext(ctx, "accepted connection")
 
 	// Default close: 0 + empty (graceful). Pumps may overwrite if
-	// they hit a protocol violation.
+	// they hit a protocol violation. On QUIC this becomes the
+	// CONNECTION_CLOSE typed code; on TCP it's discarded — the
+	// Roam framing layer already wrote a typed Goodbye / AttachAck
+	// frame on the wire before we land here.
 	closeErr := uint64(0)
 	closeMsg := ""
 	defer func() {
-		_ = conn.CloseWithError(quic.ApplicationErrorCode(closeErr), closeMsg)
+		_ = ctrl.CloseWithError(closeErr, closeMsg)
 	}()
-
-	// Accept the single bidi stream — the whole protocol multiplexes
-	// over this one stream via tagged-frame envelopes.
-	ctrl, err := conn.AcceptStream(ctx)
-	if err != nil {
-		log.WarnContext(ctx, "accept stream", "err", err)
-		return
-	}
 
 	att, err := readAttach(ctrl)
 	if err != nil {
@@ -261,7 +260,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, conn *quic.Conn)
 		Peers:           sess.PeerModes(attachGen),
 		Restored:        wasRestored,
 		FreshlyCreated:  freshlyCreated,
-		RTTNanos:        conn.ConnectionStats().SmoothedRTT.Nanoseconds(),
+		RTTNanos:        rttNanosFor(ctrl),
 		AltScreenActive: sess.WedgeAltScreenActive(),
 		LastTitle:       sess.LastTitle(),
 	})
@@ -318,9 +317,10 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, conn *quic.Conn)
 			case <-pumpsCtx.Done():
 				return
 			case <-ticker.C:
-				rtt := conn.ConnectionStats().SmoothedRTT.Nanoseconds()
+				rtt := rttNanosFor(ctrl)
 				if rtt <= 0 {
-					continue // handshake hasn't seeded the smoothing window yet
+					continue // handshake hasn't seeded the smoothing window
+					// yet, or transport (TCP) doesn't measure RTT.
 				}
 				body, err := protocol.MarshalRTTNotify(protocol.RTTNotify{RTTNanos: rtt})
 				if err != nil {
@@ -454,7 +454,7 @@ func (h *ProtocolHandler) logger() *slog.Logger {
 // resolveAttach validates the token + session id and consumes the
 // token. On failure it sends an AttachAck{ok:false} on the control
 // stream and returns the underlying error so the caller can log.
-func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl *quic.Stream) (*session.Session, error) {
+func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer) (*session.Session, error) {
 	if len(att.Token) != session.AttachTokenLen {
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
 			V:   1,
@@ -509,7 +509,7 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl *quic.Stream) 
 // the wrapped error — that string round-trips into the
 // CONNECTION_CLOSE reason via closeMsgFor, and we don't echo peer
 // bytes there (audit F8).
-func readAttach(s *quic.Stream) (protocol.Attach, error) {
+func readAttach(s io.Reader) (protocol.Attach, error) {
 	frameType, body, err := protocol.ReadTaggedFrame(s)
 	if err != nil {
 		return protocol.Attach{}, fmt.Errorf("%w: %v", errAttachBadFrame, err)
@@ -534,7 +534,7 @@ func readAttach(s *quic.Stream) (protocol.Attach, error) {
 // sendAttachAck encodes a CBOR AttachAck and writes it as a control-
 // type tagged frame on the single stream. Used by resolveAttach for
 // failure responses where the writeMu serialiser isn't yet in scope.
-func sendAttachAck(s *quic.Stream, ack protocol.AttachAck) error {
+func sendAttachAck(s io.Writer, ack protocol.AttachAck) error {
 	body, err := protocol.MarshalAttachAck(ack)
 	if err != nil {
 		return err
@@ -604,4 +604,16 @@ func computeReplayWindow(buf *session.RingBuffer, ack uint64) (start, head uint6
 		start = head
 	}
 	return start, head, trunc
+}
+
+// rttNanosFor returns the smoothed RTT from the transport, or 0 when
+// the transport doesn't measure RTT (plain TCP) or the smoothing
+// window hasn't seeded yet. Callers compare against 0 to decide
+// whether to emit RTTNotify frames or carry the value in AttachAck.
+func rttNanosFor(c Conn) int64 {
+	rtt, ok := c.SmoothedRTT()
+	if !ok {
+		return 0
+	}
+	return rtt.Nanoseconds()
 }
