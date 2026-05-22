@@ -108,6 +108,14 @@ type AllocateResponse struct {
 	SessionID   string `cbor:"sid,omitempty"`     // 32 hex chars
 	AttachToken string `cbor:"tok,omitempty"`     // 32 hex chars, single-use, 30s TTL
 	Port        uint16 `cbor:"port,omitempty"`    // QUIC UDP port
+	// TCPPort is the plain-TCP Roam listener's bound port, populated
+	// when the daemon was started with --roam-tcp-addr. Surfaced on
+	// the bootstrap line as MTRM_TCP so the iOS client can dial the
+	// daemon over its in-process tsnet (embedded-Tailscale mode).
+	// Omitted (0) when the TCP listener is disabled — clients with
+	// embedded mode enabled then surface "host needs daemon update"
+	// to the user.
+	TCPPort     uint16 `cbor:"tcp_port,omitempty"`
 	CertFP      string `cbor:"cert_fp,omitempty"` // 64 hex chars, SHA-256 of cert DER
 	// Name is the resolved user-visible session label. Echoed back
 	// so the client knows what the daemon synthesised when the

@@ -491,11 +491,21 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		return ipc.AllocateResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
 	}
 
+	// Surface the optional Roam-over-TCP port to the iOS client.
+	// 0 when --roam-tcp-addr wasn't supplied at startup; clients
+	// in embedded-Tailscale mode then know to surface "host needs
+	// daemon update" rather than try a dial that won't succeed.
+	var tcpPort uint16
+	if d.tcp != nil {
+		tcpPort = uint16(d.tcp.Addr().Port)
+	}
+
 	return ipc.AllocateResponse{
 		Ok:          true,
 		SessionID:   sess.ID().String(),
 		AttachToken: tok.String(),
 		Port:        uint16(d.quic.Addr().Port),
+		TCPPort:     tcpPort,
 		CertFP:      d.certFP.String(),
 		Name:        sess.Name(),
 	}
