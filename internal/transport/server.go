@@ -68,14 +68,14 @@ const MaxConcurrentHandlers = 64
 // (graceful Goodbye, peer close, error, or ctx done). The Server
 // does not call CloseWithError on its behalf.
 type Handler interface {
-	HandleConnection(ctx context.Context, conn *quic.Conn)
+	HandleConnection(ctx context.Context, c Conn)
 }
 
 // HandlerFunc adapts a plain function to the Handler interface.
-type HandlerFunc func(ctx context.Context, conn *quic.Conn)
+type HandlerFunc func(ctx context.Context, c Conn)
 
 // HandleConnection implements Handler.
-func (f HandlerFunc) HandleConnection(ctx context.Context, conn *quic.Conn) { f(ctx, conn) }
+func (f HandlerFunc) HandleConnection(ctx context.Context, c Conn) { f(ctx, c) }
 
 // Config tunes the QUIC + TLS layer.
 type Config struct {
@@ -253,10 +253,22 @@ func (s *Server) Serve(ctx context.Context) error {
 		// growth faster than HandshakeIdleTimeout reaps them.
 		select {
 		case s.inflight <- struct{}{}:
-			go func() {
+			go func(conn *quic.Conn) {
 				defer func() { <-s.inflight }()
-				s.handler.HandleConnection(ctx, conn)
-			}()
+				// Accept the single client-initiated bidi stream
+				// out here (was inside ProtocolHandler before the
+				// transport-abstraction refactor). The whole
+				// protocol multiplexes over this one stream via
+				// tagged-frame envelopes — Handler doesn't see
+				// quic.* types, so the protocol layer is symmetric
+				// between QUIC and TCP.
+				stream, err := conn.AcceptStream(ctx)
+				if err != nil {
+					_ = conn.CloseWithError(0x10E, "accept stream")
+					return
+				}
+				s.handler.HandleConnection(ctx, NewQUICAdapter(conn, stream))
+			}(conn)
 		default:
 			// At capacity: shed load with a server-busy signal.
 			// 0x10F = arbitrary application error code; we don't

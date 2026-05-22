@@ -68,7 +68,7 @@ func connectingClient(addr string, fp cert.Fingerprint, alpn string) (*quic.Conn
 
 func TestServerNewRejectsEmptyCert(t *testing.T) {
 	t.Parallel()
-	_, err := New(Config{Handler: HandlerFunc(func(ctx context.Context, c *quic.Conn) {})})
+	_, err := New(Config{Handler: HandlerFunc(func(ctx context.Context, c Conn) {})})
 	if err == nil {
 		t.Error("New accepted a Config with empty Cert")
 	}
@@ -91,7 +91,7 @@ func TestServerAcceptsClientWithCorrectFingerprint(t *testing.T) {
 	srv, err := New(Config{
 		Addr: "127.0.0.1:0",
 		Cert: c,
-		Handler: HandlerFunc(func(ctx context.Context, conn *quic.Conn) {
+		Handler: HandlerFunc(func(ctx context.Context, conn Conn) {
 			connected.Add(1)
 			_ = conn.CloseWithError(0, "test ok")
 		}),
@@ -111,6 +111,25 @@ func TestServerAcceptsClientWithCorrectFingerprint(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
+	// The handler now fires AFTER the server has accepted a bidi
+	// stream (the AcceptStream moved out of HandleConnection into
+	// Server.Serve when Conn was abstracted). Open one client-side
+	// AND write a byte — quic-go's bidi streams are lazy on the
+	// wire until first write, so OpenStreamSync alone doesn't
+	// trigger the peer's AcceptStream. The test doesn't care
+	// about response bytes; the write is purely to materialise
+	// the stream on the wire.
+	streamCtx, streamCancel := context.WithTimeout(context.Background(), time.Second)
+	defer streamCancel()
+	stream, err := conn.OpenStreamSync(streamCtx)
+	if err != nil {
+		t.Fatalf("client open stream: %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Write([]byte{0}); err != nil {
+		t.Fatalf("client write: %v", err)
+	}
+
 	// Wait for the handler to fire.
 	deadline := time.Now().Add(time.Second)
 	for connected.Load() == 0 && time.Now().Before(deadline) {
@@ -129,7 +148,7 @@ func TestServerRejectsClientWithWrongFingerprint(t *testing.T) {
 	srv, err := New(Config{
 		Addr: "127.0.0.1:0",
 		Cert: c,
-		Handler: HandlerFunc(func(ctx context.Context, conn *quic.Conn) {
+		Handler: HandlerFunc(func(ctx context.Context, conn Conn) {
 			t.Error("handler fired despite cert pin mismatch")
 			_ = conn.CloseWithError(0, "")
 		}),
@@ -155,7 +174,7 @@ func TestServerRejectsClientWithWrongALPN(t *testing.T) {
 	srv, err := New(Config{
 		Addr: "127.0.0.1:0",
 		Cert: c,
-		Handler: HandlerFunc(func(ctx context.Context, conn *quic.Conn) {
+		Handler: HandlerFunc(func(ctx context.Context, conn Conn) {
 			t.Error("handler fired despite ALPN mismatch")
 			_ = conn.CloseWithError(0, "")
 		}),
@@ -180,7 +199,7 @@ func TestServerCloseStopsServe(t *testing.T) {
 	srv, err := New(Config{
 		Addr:    "127.0.0.1:0",
 		Cert:    c,
-		Handler: HandlerFunc(func(ctx context.Context, conn *quic.Conn) {}),
+		Handler: HandlerFunc(func(ctx context.Context, conn Conn) {}),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +238,7 @@ func TestServerServeReturnsOnContextCancel(t *testing.T) {
 	srv, err := New(Config{
 		Addr:    "127.0.0.1:0",
 		Cert:    c,
-		Handler: HandlerFunc(func(ctx context.Context, conn *quic.Conn) {}),
+		Handler: HandlerFunc(func(ctx context.Context, conn Conn) {}),
 	})
 	if err != nil {
 		t.Fatal(err)

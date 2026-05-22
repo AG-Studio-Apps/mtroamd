@@ -47,6 +47,20 @@ type Config struct {
 	// release does this for testing).
 	QUICAddr string
 
+	// TCPAddr is the optional bind address for the plain-TCP Roam
+	// listener. Empty (default) disables the listener — daemon
+	// ships QUIC-only, behaving exactly as before. When non-empty,
+	// the daemon serves the Roam protocol over TCP IN ADDITION to
+	// QUIC, on the supplied address. Designed for use inside a
+	// Tailscale tailnet where WireGuard provides transport
+	// security; see transport.TCPServer doc comment for the
+	// when-to-use rationale.
+	//
+	// Wired from --roam-tcp-port at the CLI. iOS clients in
+	// embedded-Tailscale mode dial this listener; system /
+	// direct mode clients use the QUIC listener.
+	TCPAddr string
+
 	// IPCSocketPath is the unix socket `meshtermd connect` dials.
 	// Required.
 	IPCSocketPath string
@@ -120,7 +134,10 @@ type Daemon struct {
 	certFP   cert.Fingerprint
 	registry *session.Registry
 	quic     *transport.Server
-	ipc      *ipc.Server
+	// tcp is the optional plain-TCP listener used by iOS clients
+	// in embedded-Tailscale mode. Nil when Config.TCPAddr is "".
+	tcp *transport.TCPServer
+	ipc *ipc.Server
 	// stateDir is the persistence root resolved at New(). Reused by
 	// spawnSession when starting the per-session flusher.
 	stateDir string
@@ -269,38 +286,66 @@ func New(cfg Config) (*Daemon, error) {
 		logger.Info("session.sidecar.reattached", "count", discovered)
 	}
 
-	d.quic, err = transport.New(transport.Config{
-		Addr: cfg.QUICAddr,
-		Cert: tlsCert,
-		Handler: &transport.ProtocolHandler{
-			Registry: reg,
-			Logger:   logger,
-			// PTYSpawner gives protocol_handler a way to lazy-spawn
-			// the child shell for a restored session on its first
-			// attach. We spawn an out-of-process sidecar so the
-			// child shell survives subsequent daemon restarts —
-			// see internal/ptysidecar for the design.
-			PTYSpawner: func(sess *session.Session, rows, cols uint16) (session.PTY, error) {
-				// context.Background here is fine: SpawnNew only uses
-				// the ctx for the bounded 3 s dial-with-backoff, and a
-				// daemon-shutdown that races a fresh spawn will just
-				// see the sidecar disconnect cleanly via socket-close.
-				return ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
-					SessionID:    sess.ID().String(),
-					Rows:         rows,
-					Cols:         cols,
-					ExtraEnv:     sessionExtraEnv(sess),
-					StateDir:     stateDir,
-					DaemonBinary: daemonBinary,
-					Logger:       logger,
-					Stderr:       cfg.SidecarStderr,
-				})
-			},
+	// Construct the protocol handler once and share between the
+	// QUIC server and the optional TCP server. Same Registry, same
+	// session lifecycle, same attach-token plumbing — only the
+	// transport differs (QUIC over kernel UDP vs TCP, the latter
+	// reached via tsnet's userspace stack on the iOS side).
+	roamHandler := &transport.ProtocolHandler{
+		Registry: reg,
+		Logger:   logger,
+		// PTYSpawner gives protocol_handler a way to lazy-spawn
+		// the child shell for a restored session on its first
+		// attach. We spawn an out-of-process sidecar so the
+		// child shell survives subsequent daemon restarts —
+		// see internal/ptysidecar for the design.
+		PTYSpawner: func(sess *session.Session, rows, cols uint16) (session.PTY, error) {
+			// context.Background here is fine: SpawnNew only uses
+			// the ctx for the bounded 3 s dial-with-backoff, and a
+			// daemon-shutdown that races a fresh spawn will just
+			// see the sidecar disconnect cleanly via socket-close.
+			return ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
+				SessionID:    sess.ID().String(),
+				Rows:         rows,
+				Cols:         cols,
+				ExtraEnv:     sessionExtraEnv(sess),
+				StateDir:     stateDir,
+				DaemonBinary: daemonBinary,
+				Logger:       logger,
+				Stderr:       cfg.SidecarStderr,
+			})
 		},
+	}
+
+	d.quic, err = transport.New(transport.Config{
+		Addr:     cfg.QUICAddr,
+		Cert:     tlsCert,
+		Handler:  roamHandler,
 		StateDir: stateDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
+	}
+
+	// Optional TCP listener for the Roam-over-TCP transport (iOS
+	// embedded-Tailscale mode). Shares the ProtocolHandler so
+	// session state, attach tokens, and per-session lifecycle are
+	// identical across both transports. Off by default; opt-in via
+	// --roam-tcp-port. See transport.TCPServer doc comment for the
+	// security model (relies on WireGuard for transport security
+	// when used inside a tailnet — do not enable on the public
+	// internet without front-running with something that handles
+	// TLS).
+	if cfg.TCPAddr != "" {
+		d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
+			Addr:    cfg.TCPAddr,
+			Handler: roamHandler,
+			Logger:  logger,
+		})
+		if err != nil {
+			_ = d.quic.Close()
+			return nil, fmt.Errorf("tcp transport: %w", err)
+		}
 	}
 
 	d.ipc, err = ipc.NewServer(cfg.IPCSocketPath, d)
@@ -316,6 +361,18 @@ func New(cfg Config) (*Daemon, error) {
 // tests and for logging "we're ready" lines that include the
 // chosen port.
 func (d *Daemon) Addr() string { return d.quic.Addr().String() }
+
+// TCPAddr returns the optional Roam-over-TCP listener's bound
+// address, or "" when the TCP listener is disabled (Config.TCPAddr
+// was empty). Surfaced via meshtermd doctor JSON so iOS clients
+// in embedded-Tailscale mode can discover the port via the same
+// SSH-bootstrap mechanism that learns the QUIC port.
+func (d *Daemon) TCPAddr() string {
+	if d.tcp == nil {
+		return ""
+	}
+	return d.tcp.Addr().String()
+}
 
 // CertFingerprint returns the SHA-256 fingerprint of the daemon's
 // TLS cert — the value the iOS client pins via the bootstrap line.
@@ -360,6 +417,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Optional TCP serve goroutine — only when --roam-tcp-port was
+	// supplied at CLI time and the listener bound successfully.
+	if d.tcp != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.tcp.Serve(ctx); err != nil {
+				errCh <- fmt.Errorf("tcp serve: %w", err)
+				cancel()
+			}
+		}()
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -372,6 +442,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	<-ctx.Done()
 	_ = d.ipc.Close()
 	_ = d.quic.Close()
+	if d.tcp != nil {
+		_ = d.tcp.Close()
+	}
 	wg.Wait()
 
 	select {
@@ -481,6 +554,7 @@ func (d *Daemon) HandleStatus(ctx context.Context, _ ipc.StatusRequest) ipc.Stat
 		StartedAtNs:      d.startedAt.UnixNano(),
 		UptimeNs:         now.Sub(d.startedAt).Nanoseconds(),
 		QUICAddr:         d.quic.Addr().String(),
+		RoamTCPAddr:      d.TCPAddr(),
 		CertFingerprint:  d.certFP.String(),
 		SessionCount:     d.registry.Len(),
 		MaxSessions:      d.registry.Capacity(),

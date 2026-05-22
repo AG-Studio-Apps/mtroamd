@@ -3,29 +3,25 @@ package transport
 import (
 	"context"
 	"log/slog"
-
-	"github.com/quic-go/quic-go"
 )
 
 // LoggingHandler is the v0.0.x placeholder Handler. It logs each
-// accepted connection's remote address + ALPN, then closes with a
+// accepted connection's remote address, then closes with a
 // "not implemented" application error. Replaced in a later commit
 // by the real protocol handler that drives Attach / replay / stream
-// demux.
+// demux. Used by tests + early bring-up; not on the hot path.
 type LoggingHandler struct {
 	Logger *slog.Logger
 }
 
 // HandleConnection implements Handler.
-func (h *LoggingHandler) HandleConnection(ctx context.Context, conn *quic.Conn) {
-	state := conn.ConnectionState()
+func (h *LoggingHandler) HandleConnection(ctx context.Context, c Conn) {
 	logger := h.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	logger.InfoContext(ctx, "accepted connection",
-		"remote", conn.RemoteAddr().String(),
-		"alpn", state.TLS.NegotiatedProtocol,
+		"remote", c.RemoteAddr().String(),
 	)
-	_ = conn.CloseWithError(0, "not implemented yet")
+	_ = c.CloseWithError(0, "not implemented yet")
 }

@@ -25,6 +25,7 @@ type daemonDoctorReport struct {
 		Version      string `json:"version,omitempty"`
 		UptimeNs     int64  `json:"uptime_ns,omitempty"`
 		QUICAddr     string `json:"quic_addr,omitempty"`
+		RoamTCPAddr  string `json:"roam_tcp_addr,omitempty"`
 		CertFP       string `json:"cert_fingerprint,omitempty"`
 		SessionCount int    `json:"session_count"`
 		MaxSessions  int    `json:"max_sessions,omitempty"`

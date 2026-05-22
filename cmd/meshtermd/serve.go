@@ -48,6 +48,12 @@ func runServe(args []string) int {
 		"how often each persisted session checkpoints its scrollback to disk. 0 = default 30s. Shorter = more "+
 			"frequent disk I/O; longer = more scrollback lost on crash. The final snapshot on graceful shutdown "+
 			"runs regardless.")
+	tcpAddr := fs.String("roam-tcp-addr", "",
+		"OPTIONAL plain-TCP Roam listener address (host:port). Empty (default) keeps the daemon QUIC-only. "+
+			"When set, the daemon also accepts the Roam protocol over TCP — used by iOS clients in embedded-"+
+			"Tailscale mode, which can't run QUIC over TailscaleKit's userspace fd. Designed for use inside a "+
+			"Tailscale tailnet where WireGuard provides transport security; do NOT expose on the public internet "+
+			"without front-running TLS. Example: --roam-tcp-addr=0.0.0.0:49821")
 	verbose := fs.Bool("v", false, "verbose logging (slog DEBUG level)")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: meshtermd serve [flags]\n\n")
@@ -85,6 +91,7 @@ func runServe(args []string) int {
 
 	d, err := daemon.New(daemon.Config{
 		QUICAddr:                 *addr,
+		TCPAddr:                  *tcpAddr,
 		IPCSocketPath:            socketPath,
 		MaxSessions:              *maxSessions,
 		IdleTimeout:              *idleTimeout,
