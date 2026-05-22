@@ -234,6 +234,13 @@ type StatusResponse struct {
 	StartedAtNs         int64  `cbor:"sat,omitempty" json:"started_at_ns"`
 	UptimeNs            int64  `cbor:"upt,omitempty" json:"uptime_ns"`
 	QUICAddr            string `cbor:"qa,omitempty" json:"quic_addr"`
+	// RoamTCPAddr is the plain-TCP Roam listener's bound address,
+	// surfaced when the daemon is started with --roam-tcp-addr.
+	// Empty when the TCP listener is disabled (the default —
+	// daemon ships QUIC-only). iOS clients in embedded-Tailscale
+	// mode use this to dial the daemon via tsnet; system / direct
+	// mode clients ignore it and use QUICAddr.
+	RoamTCPAddr         string `cbor:"rta,omitempty" json:"roam_tcp_addr,omitempty"`
 	CertFingerprint     string `cbor:"fp,omitempty" json:"cert_fingerprint"`
 	SessionCount        int    `cbor:"sc,omitempty" json:"session_count"`
 	MaxSessions         int    `cbor:"ms,omitempty" json:"max_sessions"`

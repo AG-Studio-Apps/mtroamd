@@ -50,6 +50,11 @@ type DaemonHealth struct {
 	Version      string `json:"version,omitempty"`
 	UptimeNs     int64  `json:"uptime_ns,omitempty"`
 	QUICAddr     string `json:"quic_addr,omitempty"`
+	// RoamTCPAddr is the optional plain-TCP Roam listener address.
+	// Present when the daemon was started with --roam-tcp-addr;
+	// omitted otherwise. iOS clients in embedded-Tailscale mode
+	// parse this to learn where to dial via tsnet.
+	RoamTCPAddr  string `json:"roam_tcp_addr,omitempty"`
 	CertFP       string `json:"cert_fingerprint,omitempty"`
 	SessionCount int    `json:"session_count"`
 	MaxSessions  int    `json:"max_sessions,omitempty"`
@@ -168,6 +173,7 @@ func buildDoctorReport(socketPath string, timeout time.Duration) DoctorReport {
 		r.Daemon.Version = status.Version
 		r.Daemon.UptimeNs = status.UptimeNs
 		r.Daemon.QUICAddr = status.QUICAddr
+		r.Daemon.RoamTCPAddr = status.RoamTCPAddr
 		r.Daemon.CertFP = status.CertFingerprint
 		r.Daemon.SessionCount = status.SessionCount
 		r.Daemon.MaxSessions = status.MaxSessions
@@ -283,6 +289,9 @@ func printDoctorReport(out *os.File, r DoctorReport) {
 		fmt.Fprintf(out, "  Status:          ✓ running (%s)\n", r.Daemon.Version)
 		fmt.Fprintf(out, "  Uptime:          %s\n", time.Duration(r.Daemon.UptimeNs))
 		fmt.Fprintf(out, "  QUIC addr:       %s\n", r.Daemon.QUICAddr)
+		if r.Daemon.RoamTCPAddr != "" {
+			fmt.Fprintf(out, "  Roam TCP addr:   %s\n", r.Daemon.RoamTCPAddr)
+		}
 		fmt.Fprintf(out, "  Cert FP:         %s\n", r.Daemon.CertFP)
 		fmt.Fprintf(out, "  Sessions:        %d / %d\n", r.Daemon.SessionCount, r.Daemon.MaxSessions)
 		fmt.Fprintf(out, "  Idle timeout:    %s\n", time.Duration(r.Daemon.IdleNs))
