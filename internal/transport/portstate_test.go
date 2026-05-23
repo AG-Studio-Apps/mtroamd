@@ -143,3 +143,60 @@ func TestBuildCandidatePortsStickinessSameAsPref(t *testing.T) {
 		t.Errorf("default port appears %d times, want exactly 1", count)
 	}
 }
+
+// TestBuildCandidatePortsStickinessOutOfRange covers the migration
+// case where a `quic-port` file written by a pre-v1.1.6 daemon (whose
+// default UDP port was 51820, well outside the v1.2.x walk range
+// 49820..49919) survives across upgrades. The stickiness layer must
+// reject the out-of-range port and walk the configured range
+// normally; otherwise the old default keeps winning indefinitely
+// even after the architectural default moves.
+func TestBuildCandidatePortsStickinessOutOfRange(t *testing.T) {
+	cases := []struct {
+		name  string
+		stuck uint16
+	}{
+		{"pre-v1.1.6 default (51820)", 51820},
+		{"just above span", DefaultQUICPort + FallbackPortSpan + 1},
+		{"way below prefPort", 1024},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := buildCandidatePorts(DefaultQUICPort, c.stuck)
+			if got[0] != DefaultQUICPort {
+				t.Errorf("out-of-range stuck=%d should not lead candidate list; got first=%d, want %d",
+					c.stuck, got[0], DefaultQUICPort)
+			}
+			for _, p := range got {
+				if p == c.stuck {
+					t.Errorf("out-of-range stuck=%d leaked into candidates: %v", c.stuck, got)
+					break
+				}
+			}
+			if uint16(len(got)) != FallbackPortSpan+1 {
+				t.Errorf("with stuck out-of-range, expected %d candidates (walk range only), got %d",
+					FallbackPortSpan+1, len(got))
+			}
+		})
+	}
+}
+
+// TestBuildCandidatePortsStickinessUpperEdge: a stuck port at exactly
+// the top of the walk range is still legitimate and should be tried
+// first. Pinning the inclusive-upper-bound semantics.
+func TestBuildCandidatePortsStickinessUpperEdge(t *testing.T) {
+	stuck := DefaultQUICPort + FallbackPortSpan
+	got := buildCandidatePorts(DefaultQUICPort, stuck)
+	if got[0] != stuck {
+		t.Errorf("upper-edge stuck=%d should lead; got first=%d", stuck, got[0])
+	}
+	count := 0
+	for _, p := range got {
+		if p == stuck {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("upper-edge stuck=%d appears %d times, want 1", stuck, count)
+	}
+}

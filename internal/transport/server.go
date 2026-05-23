@@ -312,7 +312,8 @@ func bindUDPWithFallback(addr string, stateDir string) (*net.UDPConn, error) {
 	}
 
 	prefPort := uint16(udpAddr.Port)
-	candidates := buildCandidatePorts(prefPort, readPortState(stateDir))
+	stuck := readPortState(stateDir)
+	candidates := buildCandidatePorts(prefPort, stuck)
 
 	var lastErr error
 	for _, p := range candidates {
@@ -320,7 +321,19 @@ func bindUDPWithFallback(addr string, stateDir string) (*net.UDPConn, error) {
 		try.Port = int(p)
 		conn, err := net.ListenUDP("udp", &try)
 		if err == nil {
-			if p != prefPort {
+			// Log the bind outcome honestly so an operator
+			// tail-reading the journal can tell apart "we reused
+			// the persisted (sticky) port without trying preferred"
+			// from "we genuinely fell through after preferred was
+			// taken." Pre-2026-05 versions conflated the two under
+			// one misleading "preferred UDP port unavailable"
+			// message, which fired even when no bind on prefPort
+			// was attempted.
+			switch {
+			case p == stuck && stuck != prefPort:
+				slog.Info("transport: bound persisted (sticky) UDP port",
+					"preferred", prefPort, "bound", p)
+			case p != prefPort:
 				slog.Info("transport: preferred UDP port unavailable, fell through",
 					"preferred", prefPort, "bound", p)
 			}
@@ -337,14 +350,25 @@ func bindUDPWithFallback(addr string, stateDir string) (*net.UDPConn, error) {
 }
 
 // buildCandidatePorts returns the bind-attempt order. Stickiness
-// (stuck) is tried first when set, distinct from prefPort, AND only
-// when prefPort equals DefaultQUICPort — otherwise an explicit user-
-// configured non-default port overrides any persisted state. After
-// the optional stuck port, the loop walks prefPort .. prefPort + FallbackPortSpan
+// (stuck) is tried first when set, distinct from prefPort, only
+// when prefPort equals DefaultQUICPort (explicit user-configured
+// non-default ports override any persisted state), AND only when
+// stuck falls inside the configured walk range. After the optional
+// stuck port, the loop walks prefPort .. prefPort + FallbackPortSpan
 // in order, skipping the already-queued stuck port.
+//
+// The range guard rejects out-of-range persisted state — e.g. an
+// install that migrated forward from a pre-v1.1.6 daemon whose
+// default port was 51820. Without this, a `quic-port` file written
+// against the old default kept being honoured indefinitely, so
+// upgraded hosts silently bound the old port even after the
+// architectural default moved. Out-of-range persisted state is
+// effectively dead-letter — the next successful bind overwrites the
+// file with the new in-range port.
 func buildCandidatePorts(prefPort, stuck uint16) []uint16 {
 	candidates := make([]uint16, 0, int(FallbackPortSpan)+2)
-	useStuck := stuck != 0 && stuck != prefPort && prefPort == DefaultQUICPort
+	inRange := stuck >= prefPort && stuck <= prefPort+FallbackPortSpan
+	useStuck := stuck != 0 && stuck != prefPort && prefPort == DefaultQUICPort && inRange
 	if useStuck {
 		candidates = append(candidates, stuck)
 	}
