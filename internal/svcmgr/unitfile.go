@@ -33,17 +33,19 @@ type UserUnitOptions struct {
 
 	// TCPAddr is the optional Roam-over-TCP listener bind address
 	// (used by iOS clients in embedded-Tailscale routing mode).
-	// Defaults to "0.0.0.0:49821" — sits one port above QUIC's
-	// 49820, all interfaces so the host's tailnet IP receives
-	// traffic arriving via tsnet. Emit unconditionally in the
-	// canonical unit so a future iOS-side mode switch to embedded
-	// doesn't need a re-install. Auth model is identical to QUIC:
-	// the daemon's attach-token flow authenticates the client at
-	// the Roam protocol layer regardless of transport, so binding
-	// to all interfaces is safe even on multi-homed hosts.
+	// Defaults to "tailnet:49821" — the daemon resolves the local
+	// tailnet IP at startup and binds there. The unencrypted TCP
+	// path trusts WireGuard for confidentiality, so it MUST NOT be
+	// exposed on non-tailnet interfaces; binding to a resolved
+	// tailnet IP enforces that at the kernel layer. If Tailscale
+	// isn't running at startup the daemon refuses to bind the TCP
+	// listener and logs an explicit error — failing loud beats
+	// silently exposing plaintext on a public interface.
 	//
-	// Operators who specifically want QUIC-only can pass the
-	// sentinel "-" to disable the TCP listener.
+	// Operators with a reason to bypass that posture (a TLS-
+	// terminating reverse proxy in front, a non-Tailscale private
+	// network) can pass an explicit "host:port" pair. The sentinel
+	// "-" suppresses the --roam-tcp-addr flag entirely (QUIC-only).
 	TCPAddr string
 }
 
@@ -74,7 +76,7 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 		o.SocketPath = "%h/.local/share/meshtermd/meshtermd.sock"
 	}
 	if o.TCPAddr == "" {
-		o.TCPAddr = "0.0.0.0:49821"
+		o.TCPAddr = "tailnet:49821"
 	}
 
 	var b strings.Builder

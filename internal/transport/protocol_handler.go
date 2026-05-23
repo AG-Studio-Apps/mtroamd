@@ -102,6 +102,13 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		closeMsg = closeMsgFor(closeErr)
 		return
 	}
+	// Pre-auth read deadline (set by TCPServer.Serve) has done its
+	// job — Attach arrived in time. Clear it so the live session
+	// isn't subject to a 5-second idle reset. QUIC connections never
+	// had a deadline set; for them this is a harmless no-op (a zero
+	// time.Time clears the deadline on net.Conn, and *quic.Stream
+	// treats it the same).
+	_ = ctrl.SetReadDeadline(time.Time{})
 
 	sess, err := h.resolveAttach(att, ctrl)
 	if err != nil {

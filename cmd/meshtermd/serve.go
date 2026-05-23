@@ -15,6 +15,7 @@ import (
 	"github.com/AG-Studio-Apps/meshtermd/internal/cert"
 	"github.com/AG-Studio-Apps/meshtermd/internal/daemon"
 	"github.com/AG-Studio-Apps/meshtermd/internal/ipc"
+	"github.com/AG-Studio-Apps/meshtermd/internal/transport"
 )
 
 // runServe is the long-running daemon mode. It owns the session
@@ -49,11 +50,13 @@ func runServe(args []string) int {
 			"frequent disk I/O; longer = more scrollback lost on crash. The final snapshot on graceful shutdown "+
 			"runs regardless.")
 	tcpAddr := fs.String("roam-tcp-addr", "",
-		"OPTIONAL plain-TCP Roam listener address (host:port). Empty (default) keeps the daemon QUIC-only. "+
-			"When set, the daemon also accepts the Roam protocol over TCP — used by iOS clients in embedded-"+
-			"Tailscale mode, which can't run QUIC over TailscaleKit's userspace fd. Designed for use inside a "+
-			"Tailscale tailnet where WireGuard provides transport security; do NOT expose on the public internet "+
-			"without front-running TLS. Example: --roam-tcp-addr=0.0.0.0:49821")
+		"OPTIONAL plain-TCP Roam listener address. Empty (default) keeps the daemon QUIC-only. "+
+			"Accepts a fully-specified host:port OR the sentinel \"tailnet:<port>\" which resolves at startup "+
+			"to a local Tailscale interface IP and binds there — the safe default for the iOS embedded-Tailscale "+
+			"path (the TCP transport runs unencrypted, trusting WireGuard for confidentiality, so it MUST NOT "+
+			"be exposed on non-tailnet interfaces). If \"tailnet:\" is used and no Tailscale interface is found, "+
+			"the daemon exits with an explicit error rather than silently binding to 0.0.0.0. Operators with a "+
+			"reason to bypass that posture (TLS-terminating proxy in front, etc.) can pass an explicit address.")
 	verbose := fs.Bool("v", false, "verbose logging (slog DEBUG level)")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: meshtermd serve [flags]\n\n")
@@ -89,9 +92,25 @@ func runServe(args []string) int {
 		return 2
 	}
 
+	// Expand the "tailnet:<port>" sentinel into a concrete bind
+	// IP before handing the address to the daemon. Fail loud rather
+	// than silently fall back to 0.0.0.0 — exposing the plaintext
+	// TCP listener on non-tailnet interfaces would break the
+	// transport's trust model (see internal/transport/tcp_server.go
+	// for the design note).
+	resolvedTCPAddr, resolvedIP, resolveErr := transport.ResolveBindAddr(*tcpAddr)
+	if resolveErr != nil {
+		fmt.Fprintf(os.Stderr, "meshtermd serve: %v\n", resolveErr)
+		return 2
+	}
+	if resolvedIP != nil {
+		logger.Info("roam-tcp bound to tailnet interface",
+			"requested", *tcpAddr, "resolved", resolvedTCPAddr, "ip", resolvedIP.String())
+	}
+
 	d, err := daemon.New(daemon.Config{
 		QUICAddr:                 *addr,
-		TCPAddr:                  *tcpAddr,
+		TCPAddr:                  resolvedTCPAddr,
 		IPCSocketPath:            socketPath,
 		MaxSessions:              *maxSessions,
 		IdleTimeout:              *idleTimeout,
