@@ -9,7 +9,21 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 )
+
+// defaultPreAuthReadDeadline bounds how long a TCP client can sit on
+// an inflight slot before sending its Attach frame. Without this, an
+// attacker who opens MaxInflight TCP connections and never writes a
+// byte holds every slot indefinitely, denying service to legitimate
+// clients. QUIC has handshake/idle timers that close this off
+// implicitly; plain TCP doesn't, so we set one explicitly. The
+// deadline is cleared by ProtocolHandler.HandleConnection once a
+// valid Attach has been read. Five seconds is generous for a healthy
+// client (Attach is the first thing on the wire after TCP connect)
+// and short enough that slowloris-style holds are economically
+// pointless. Overridable via TCPConfig.PreAuthReadDeadline.
+const defaultPreAuthReadDeadline = 5 * time.Second
 
 // TCPServer is the plain-TCP variant of Server. Accepts TCP
 // connections and drives the same ProtocolHandler that the QUIC
@@ -37,10 +51,11 @@ import (
 //   threads through to that field. If unset, the daemon ships
 //   today's QUIC-only posture.
 type TCPServer struct {
-	listener net.Listener
-	handler  Handler
-	logger   *slog.Logger
-	inflight chan struct{}
+	listener            net.Listener
+	handler             Handler
+	logger              *slog.Logger
+	inflight            chan struct{}
+	preAuthReadDeadline time.Duration
 }
 
 // TCPConfig parallels transport.Config but without TLS or
@@ -60,6 +75,11 @@ type TCPConfig struct {
 	// MaxInflight bounds concurrent handlers. Defaults to 64 if
 	// zero. Matches the QUIC server's backpressure shape.
 	MaxInflight int
+
+	// PreAuthReadDeadline is the per-connection budget for the
+	// first Attach frame to arrive. Defaults to 5s if zero. Tests
+	// override this to run fast.
+	PreAuthReadDeadline time.Duration
 }
 
 // NewTCPServer binds the listener. Returns an error if the bind
@@ -71,6 +91,9 @@ func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 	if cfg.MaxInflight <= 0 {
 		cfg.MaxInflight = 64
 	}
+	if cfg.PreAuthReadDeadline <= 0 {
+		cfg.PreAuthReadDeadline = defaultPreAuthReadDeadline
+	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -80,10 +103,11 @@ func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 		return nil, fmt.Errorf("tcp listen %q: %w", cfg.Addr, err)
 	}
 	return &TCPServer{
-		listener: listener,
-		handler:  cfg.Handler,
-		logger:   logger,
-		inflight: make(chan struct{}, cfg.MaxInflight),
+		listener:            listener,
+		handler:             cfg.Handler,
+		logger:              logger,
+		inflight:            make(chan struct{}, cfg.MaxInflight),
+		preAuthReadDeadline: cfg.PreAuthReadDeadline,
 	}, nil
 }
 
@@ -122,6 +146,11 @@ func (s *TCPServer) Serve(ctx context.Context) error {
 		case s.inflight <- struct{}{}:
 			go func(nc net.Conn) {
 				defer func() { <-s.inflight }()
+				// Pre-auth deadline kicks in before any bytes are
+				// read. The handler clears it once the Attach frame
+				// has been consumed; until then, an idle client
+				// holds its slot for at most preAuthReadDeadline.
+				_ = nc.SetReadDeadline(time.Now().Add(s.preAuthReadDeadline))
 				s.handler.HandleConnection(ctx, NewTCPAdapter(nc))
 			}(conn)
 		default:
