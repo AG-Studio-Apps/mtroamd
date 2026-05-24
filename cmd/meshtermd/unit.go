@@ -51,7 +51,7 @@ func runUnitPrint(args []string, out io.Writer) int {
 	socket := fs.String("socket", "",
 		"IPC socket path (default %h/.local/share/meshtermd/meshtermd.sock)")
 	tcpAddr := fs.String("roam-tcp-addr", "",
-		"Roam-over-TCP listener bind address (default 0.0.0.0:49821). "+
+		"Roam-over-TCP listener bind address (default tailnet:49821). "+
 			"Pass `-` to suppress the listener entirely (QUIC-only).")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -81,7 +81,7 @@ Actions:
 print flags:
   --bin=PATH      override ExecStart binary path
   --addr=H:P            override QUIC bind address (default 0.0.0.0:49820)
-  --roam-tcp-addr=H:P   override Roam-over-TCP bind address (default 0.0.0.0:49821)
+  --roam-tcp-addr=H:P   override Roam-over-TCP bind address (default tailnet:49821)
                         Pass '-' to omit the flag (QUIC-only).
   --socket=PATH         override IPC socket path
 

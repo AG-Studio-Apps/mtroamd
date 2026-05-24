@@ -48,6 +48,93 @@ func TestIsTailnetIP(t *testing.T) {
 	})
 }
 
+func TestResolveTailnetIP(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []interfaceEntry
+		wantIP  string // empty means expect error
+	}{
+		{
+			"prefers tailscale0 over other CGNAT",
+			[]interfaceEntry{
+				{"eth0", net.ParseIP("100.64.0.1")},
+				{"tailscale0", net.ParseIP("100.100.1.1")},
+			},
+			"100.100.1.1",
+		},
+		{
+			"CGNAT collision: docker bridge ignored when tailscale0 present",
+			[]interfaceEntry{
+				{"docker0", net.ParseIP("100.64.0.1")},
+				{"tailscale0", net.ParseIP("100.100.1.2")},
+			},
+			"100.100.1.2",
+		},
+		{
+			"fallback when no tailscale0 (macOS utun)",
+			[]interfaceEntry{
+				{"utun3", net.ParseIP("100.100.1.3")},
+			},
+			"100.100.1.3",
+		},
+		{
+			"fallback IPv6",
+			[]interfaceEntry{
+				{"utun5", net.ParseIP("fd7a:115c:a1e0::1")},
+			},
+			"fd7a:115c:a1e0::1",
+		},
+		{
+			"tailscale0 with IPv6",
+			[]interfaceEntry{
+				{"tailscale0", net.ParseIP("fd7a:115c:a1e0::1")},
+			},
+			"fd7a:115c:a1e0::1",
+		},
+		{
+			"tailscale0 has non-tailnet IP: falls back to other iface",
+			[]interfaceEntry{
+				{"tailscale0", net.ParseIP("192.168.1.1")},
+				{"utun3", net.ParseIP("100.100.1.5")},
+			},
+			"100.100.1.5",
+		},
+		{
+			"no match",
+			[]interfaceEntry{
+				{"eth0", net.ParseIP("192.168.1.1")},
+				{"wlan0", net.ParseIP("10.0.0.5")},
+			},
+			"",
+		},
+		{
+			"empty entries",
+			nil,
+			"",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveTailnetIP(c.entries)
+			if c.wantIP == "" {
+				if !errors.Is(err, ErrNoTailnetInterface) {
+					t.Fatalf("err = %v, want ErrNoTailnetInterface", err)
+				}
+				if got != nil {
+					t.Fatalf("ip = %v, want nil", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.String() != c.wantIP {
+				t.Errorf("ip = %s, want %s", got, c.wantIP)
+			}
+		})
+	}
+}
+
 func TestResolveBindAddr_Passthrough(t *testing.T) {
 	// Non-sentinel inputs are returned untouched without invoking
 	// the tailnet resolver — so the daemon honours operators who

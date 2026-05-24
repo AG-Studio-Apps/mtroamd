@@ -29,3 +29,6 @@ go.work
 # Local cert / state directories used during dev
 .local-state/
 testdata/keys/
+
+# Local review notes
+/docs/security-review-local.md

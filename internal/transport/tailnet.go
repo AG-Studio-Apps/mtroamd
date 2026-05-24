@@ -6,8 +6,14 @@ package transport
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 )
+
+type interfaceEntry struct {
+	Name string
+	IP   net.IP
+}
 
 // ErrNoTailnetInterface is returned by ResolveTailnetBindIP when no
 // local interface has an address in a Tailscale range. Callers
@@ -15,41 +21,65 @@ import (
 // failure logs.
 var ErrNoTailnetInterface = errors.New("no local interface has a Tailscale address (is Tailscale running?)")
 
-// ResolveTailnetBindIP walks the host's local interfaces and returns
-// the first IP that falls inside one of Tailscale's well-known
-// address ranges:
+// ResolveTailnetBindIP walks the host's network interfaces and
+// returns the first IP that falls inside one of Tailscale's
+// well-known address ranges, preferring the canonical tailscale0
+// interface on Linux to avoid CGNAT address collisions.
 //
-//   - IPv4 100.64.0.0/10 — Tailscale's CGNAT block
-//   - IPv6 fd7a:115c:a1e0::/48 — Tailscale's ULA prefix
+// Two-pass resolution:
 //
-// Used at daemon startup to honour the "bind TCP to tailnet only"
-// posture: the Roam-over-TCP listener runs unencrypted, trusting
-// WireGuard for confidentiality, so the port MUST NOT be exposed on
-// any non-Tailscale interface. Binding to this resolved IP enforces
-// that at the kernel layer.
+//  1. Prefer IPs on "tailscale0" — Linux's unambiguous Tailscale
+//     interface. This eliminates false positives from ISP/VPN/
+//     container interfaces that also use 100.64.0.0/10 (RFC 6598).
+//  2. Fall back to the first Tailscale-range IP on any interface.
+//     Needed for macOS (utunN — shared name, can't filter) and
+//     embedded tsnet.
 //
 // Cross-platform: works identically on Linux and macOS via the
-// standard library's net.InterfaceAddrs(). Doesn't shell out to the
+// standard library's net.Interfaces(). Doesn't shell out to the
 // `tailscale` CLI, so it's robust against PATH quirks and works
 // regardless of how Tailscale was installed (system app, CLI-only,
 // embedded tsnet binary).
 //
 // Returns ErrNoTailnetInterface if no tailnet address is found.
-// Operators who hit that error need to bring up Tailscale first
-// (or, if they specifically need a non-Tailscale bind, pass an
-// explicit IP to --roam-tcp-addr rather than the "tailnet:" prefix).
 func ResolveTailnetBindIP() (net.IP, error) {
-	addrs, err := net.InterfaceAddrs()
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		return nil, fmt.Errorf("enumerate interfaces: %w", err)
 	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok {
+	var entries []interfaceEntry
+	for _, ifc := range ifaces {
+		addrs, err := ifc.Addrs()
+		if err != nil {
 			continue
 		}
-		if IsTailnetIP(ipnet.IP) {
-			return ipnet.IP, nil
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			entries = append(entries, interfaceEntry{
+				Name: ifc.Name,
+				IP:   ipnet.IP,
+			})
+		}
+	}
+	return resolveTailnetIP(entries)
+}
+
+func resolveTailnetIP(entries []interfaceEntry) (net.IP, error) {
+	for _, e := range entries {
+		if e.Name == "tailscale0" && IsTailnetIP(e.IP) {
+			slog.Debug("tailnet bind: resolved via tailscale0",
+				"ip", e.IP.String(), "iface", e.Name)
+			return e.IP, nil
+		}
+	}
+	for _, e := range entries {
+		if IsTailnetIP(e.IP) {
+			slog.Debug("tailnet bind: resolved via fallback (no tailscale0)",
+				"ip", e.IP.String(), "iface", e.Name)
+			return e.IP, nil
 		}
 	}
 	return nil, ErrNoTailnetInterface
