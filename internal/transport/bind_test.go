@@ -84,10 +84,31 @@ func TestBindUDPWithFallbackFallsThroughOnEADDRINUSE(t *testing.T) {
 }
 
 func TestBindUDPWithFallbackHonoursStickiness(t *testing.T) {
-	// Set up a state file pointing at a specific port. Use
-	// DefaultQUICPort as the preferred port so stickiness is
-	// active (it's gated to default-port preference only).
-	stickyPort := pickFreeUDPPort(t)
+	// Set up a state file pointing at a port inside the valid
+	// fallback range. The range guard in buildCandidatePorts
+	// rejects persisted ports outside DefaultQUICPort..
+	// DefaultQUICPort+FallbackPortSpan, so the sticky port must
+	// land within that window. We scan the range for a free port
+	// rather than using pickFreeUDPPort (which returns an
+	// arbitrary ephemeral port that's almost certainly out of
+	// range).
+	stickyPort := uint16(0)
+	for offset := FallbackPortSpan; offset >= 1; offset-- {
+		candidate := DefaultQUICPort + offset
+		probe, err := net.ListenUDP("udp", &net.UDPAddr{
+			IP: net.ParseIP("127.0.0.1"), Port: int(candidate),
+		})
+		if err != nil {
+			continue
+		}
+		probe.Close()
+		stickyPort = candidate
+		break
+	}
+	if stickyPort == 0 || stickyPort == DefaultQUICPort {
+		t.Skip("no free port in fallback range for stickiness test")
+	}
+
 	dir := t.TempDir()
 	if err := os.WriteFile(
 		filepath.Join(dir, portStateFile),
@@ -100,11 +121,6 @@ func TestBindUDPWithFallbackHonoursStickiness(t *testing.T) {
 	addr := "127.0.0.1:" + strconv.FormatUint(uint64(DefaultQUICPort), 10)
 	conn, err := bindUDPWithFallback(addr, dir)
 	if err != nil {
-		// If DefaultQUICPort happens to be in use in CI, the
-		// test would land on a fallback. Stickiness should still
-		// have placed stickyPort *first* in the candidate list,
-		// so we'd land on stickyPort unless that's ALSO taken.
-		// Just skip the test in that pathological case.
 		t.Skipf("bind: %v (possibly transient port conflict)", err)
 	}
 	defer conn.Close()
