@@ -139,7 +139,7 @@ func runConnect(args []string) int {
 	}
 
 	if *stdio {
-		return runStdioMode(resp)
+		return runStdioMode(&resp)
 	}
 
 	// Print the bootstrap line per docs/roam-protocol.md § 4.2:
