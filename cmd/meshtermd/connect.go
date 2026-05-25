@@ -5,6 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -55,6 +57,10 @@ func runConnect(args []string) int {
 	noPersist := fs.Bool("no-persist", false,
 		"opt this session OUT of cross-restart persistence. Use on hosts where --persistence-default is on "+
 			"but a specific session is sensitive (e.g. one-off commands you don't want lingering on disk).")
+	stdio := fs.Bool("stdio", false,
+		"keep the process running and speak the Roam wire protocol over stdin/stdout. "+
+			"The iOS client uses this to tunnel Roam through the SSH exec channel — no separate "+
+			"QUIC/TCP connection or firewall hole needed.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: meshtermd connect [flags]\n\n")
 		fs.PrintDefaults()
@@ -132,6 +138,10 @@ func runConnect(args []string) int {
 		}
 	}
 
+	if *stdio {
+		return runStdioMode(resp)
+	}
+
 	// Print the bootstrap line per docs/roam-protocol.md § 4.2:
 	//   MTRM_QUIC <version> <port> <session_id> <cert_fp> <attach_token>\n
 	fmt.Printf("MTRM_QUIC 1 %d %s %s %s\n",
@@ -169,5 +179,60 @@ func runConnect(args []string) int {
 	// client strips any suffix before semver comparison).
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
+	return connectExitOK
+}
+
+// runStdioMode keeps the process running, speaking the Roam wire
+// protocol over stdin/stdout. The iOS client tunnels Roam through
+// the SSH exec channel this way — no separate QUIC/TCP connection
+// or firewall hole needed.
+//
+// Flow:
+//  1. Print MTRM_STDIO handshake (session ID + attach token)
+//  2. Connect to the daemon's TCP listener on loopback
+//  3. Bidirectional copy: stdin → TCP → daemon, daemon → TCP → stdout
+//
+// The daemon's ProtocolHandler runs the normal Attach/AttachAck
+// handshake over the TCP connection; the connect process is a
+// transparent byte-level bridge. When either side closes (stdin
+// EOF from SSH channel teardown, or daemon disconnects), the
+// bridge tears down and the process exits.
+func runStdioMode(resp *ipc.AllocateResponse) int {
+	if resp.TCPPort == 0 {
+		fmt.Fprintln(os.Stderr, "meshtermd connect --stdio: daemon has no TCP listener (needs --roam-tcp-addr)")
+		return connectExitGenericError
+	}
+
+	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
+	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
+	// Flush stdout so the handshake lines reach the SSH channel
+	// before we switch to binary framing. os.Stdout is unbuffered
+	// in Go, but explicit sync is belt-and-braces.
+	os.Stdout.Sync()
+
+	addr := fmt.Sprintf("127.0.0.1:%d", resp.TCPPort)
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "meshtermd connect --stdio: dial %s: %v\n", addr, err)
+		return connectExitGenericError
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// stdin → daemon
+	go func() {
+		defer cancel()
+		_, _ = io.Copy(conn, os.Stdin)
+	}()
+
+	// daemon → stdout
+	go func() {
+		defer cancel()
+		_, _ = io.Copy(os.Stdout, conn)
+	}()
+
+	<-ctx.Done()
 	return connectExitOK
 }
