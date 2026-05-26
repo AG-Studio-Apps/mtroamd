@@ -33,7 +33,7 @@ type UserUnitOptions struct {
 
 	// TCPAddr is the optional Roam-over-TCP listener bind address
 	// (used by iOS clients in embedded-Tailscale routing mode).
-	// Defaults to "tailnet:49821" — the daemon resolves the local
+	// Defaults to "tailnet:49920" — the daemon resolves the local
 	// tailnet IP at startup and binds there. The unencrypted TCP
 	// path trusts WireGuard for confidentiality, so it MUST NOT be
 	// exposed on non-tailnet interfaces; binding to a resolved
@@ -76,7 +76,7 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 		o.SocketPath = "%h/.local/share/meshtermd/meshtermd.sock"
 	}
 	if o.TCPAddr == "" {
-		o.TCPAddr = "tailnet:49821"
+		o.TCPAddr = "tailnet:49920"
 	}
 
 	var b strings.Builder
