@@ -338,9 +338,10 @@ func New(cfg Config) (*Daemon, error) {
 	// TLS).
 	if cfg.TCPAddr != "" {
 		d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
-			Addr:    cfg.TCPAddr,
-			Handler: roamHandler,
-			Logger:  logger,
+			Addr:     cfg.TCPAddr,
+			StateDir: stateDir,
+			Handler:  roamHandler,
+			Logger:   logger,
 		})
 		if err != nil {
 			_ = d.quic.Close()

@@ -38,6 +38,13 @@ const DefaultQUICPort uint16 = 49820
 // genuine conflict.
 const FallbackPortSpan uint16 = 99
 
+// DefaultTCPPort is the preferred TCP port for the Roam-over-TCP
+// listener (used by iOS embedded-Tailscale clients). Sits above the
+// QUIC fallback range (DefaultQUICPort + FallbackPortSpan) so the
+// two can never collide. The TCP listener uses the same
+// FallbackPortSpan for its own walk range.
+const DefaultTCPPort uint16 = DefaultQUICPort + FallbackPortSpan + 1 // 49920
+
 // Server wraps a quic-go listener configured with our ALPN, the
 // daemon's pinned-fingerprint TLS cert, and a Handler that drives the
 // per-connection protocol state machine.
@@ -366,9 +373,13 @@ func bindUDPWithFallback(addr string, stateDir string) (*net.UDPConn, error) {
 // effectively dead-letter — the next successful bind overwrites the
 // file with the new in-range port.
 func buildCandidatePorts(prefPort, stuck uint16) []uint16 {
+	return buildCandidatePortsWithDefault(prefPort, stuck, DefaultQUICPort)
+}
+
+func buildCandidatePortsWithDefault(prefPort, stuck, defaultPort uint16) []uint16 {
 	candidates := make([]uint16, 0, int(FallbackPortSpan)+2)
 	inRange := stuck >= prefPort && stuck <= prefPort+FallbackPortSpan
-	useStuck := stuck != 0 && stuck != prefPort && prefPort == DefaultQUICPort && inRange
+	useStuck := stuck != 0 && stuck != prefPort && prefPort == defaultPort && inRange
 	if useStuck {
 		candidates = append(candidates, stuck)
 	}

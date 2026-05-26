@@ -32,3 +32,5 @@ testdata/keys/
 
 # Local review notes
 /docs/security-review-local.md
+
+/docs/pre-v1.4-codex-security-audit.md

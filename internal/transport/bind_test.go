@@ -111,7 +111,7 @@ func TestBindUDPWithFallbackHonoursStickiness(t *testing.T) {
 
 	dir := t.TempDir()
 	if err := os.WriteFile(
-		filepath.Join(dir, portStateFile),
+		filepath.Join(dir, quicPortStateFile),
 		[]byte(strconv.FormatUint(uint64(stickyPort), 10)+"\n"),
 		0o600,
 	); err != nil {

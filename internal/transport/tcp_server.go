@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"syscall"
 	"time"
 )
 
@@ -62,8 +63,12 @@ type TCPServer struct {
 // QUIC-specific knobs. Tunes the TCP-only listener.
 type TCPConfig struct {
 	// Addr to listen on (e.g. "127.0.0.1:0" for ephemeral,
-	// ":49821" for a fixed port on all interfaces).
+	// ":49920" for a fixed port on all interfaces).
 	Addr string
+
+	// StateDir is the daemon data directory where the sticky
+	// tcp-port file is read/written. Empty disables stickiness.
+	StateDir string
 
 	// Handler receives accepted connections wrapped as Conn.
 	// Same handler can be shared with a QUIC Server.
@@ -82,8 +87,11 @@ type TCPConfig struct {
 	PreAuthReadDeadline time.Duration
 }
 
-// NewTCPServer binds the listener. Returns an error if the bind
-// fails (port in use, permission, etc.).
+// NewTCPServer binds the listener with port-walk fallback. Returns
+// (nil, nil) if the entire port range is exhausted — the caller
+// should log a warning and continue without a TCP server (QUIC and
+// SSH tunnelling still work). Returns a non-nil error only for hard
+// failures (permission denied, malformed address, etc.).
 func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 	if cfg.Handler == nil {
 		return nil, errors.New("transport.NewTCPServer: Handler required")
@@ -98,9 +106,12 @@ func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	listener, err := net.Listen("tcp", cfg.Addr)
+	listener, err := bindTCPWithFallback(cfg.Addr, cfg.StateDir)
 	if err != nil {
-		return nil, fmt.Errorf("tcp listen %q: %w", cfg.Addr, err)
+		return nil, err
+	}
+	if listener == nil {
+		return nil, nil
 	}
 	return &TCPServer{
 		listener:            listener,
@@ -109,6 +120,54 @@ func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 		inflight:            make(chan struct{}, cfg.MaxInflight),
 		preAuthReadDeadline: cfg.PreAuthReadDeadline,
 	}, nil
+}
+
+// bindTCPWithFallback mirrors bindUDPWithFallback for the TCP
+// listener. Walks a port range on EADDRINUSE, with stickiness via
+// the tcp-port state file. Returns (nil, nil) on range exhaustion
+// — TCP is optional (only used for Tailscale embedded path).
+func bindTCPWithFallback(addr string, stateDir string) (net.Listener, error) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve tcp addr %q: %w", addr, err)
+	}
+
+	if tcpAddr.Port == 0 {
+		ln, err := net.ListenTCP("tcp", tcpAddr)
+		if err != nil {
+			return nil, fmt.Errorf("listen tcp: %w", err)
+		}
+		return ln, nil
+	}
+
+	prefPort := uint16(tcpAddr.Port)
+	stuck := readTCPPortState(stateDir)
+	candidates := buildCandidatePortsWithDefault(prefPort, stuck, DefaultTCPPort)
+
+	for _, p := range candidates {
+		try := *tcpAddr
+		try.Port = int(p)
+		ln, err := net.ListenTCP("tcp", &try)
+		if err == nil {
+			switch {
+			case p == stuck && stuck != prefPort:
+				slog.Info("transport: bound persisted (sticky) TCP port",
+					"preferred", prefPort, "bound", p)
+			case p != prefPort:
+				slog.Info("transport: preferred TCP port unavailable, fell through",
+					"preferred", prefPort, "bound", p)
+			}
+			writeTCPPortState(stateDir, p)
+			return ln, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, fmt.Errorf("listen tcp %s: %w", try.String(), err)
+		}
+	}
+
+	slog.Warn("transport: no free TCP port in range, TCP listener disabled",
+		"from", prefPort, "to", prefPort+FallbackPortSpan)
+	return nil, nil
 }
 
 // Addr returns the listener's bound local TCP address. Useful for

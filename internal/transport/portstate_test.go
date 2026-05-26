@@ -32,7 +32,7 @@ func TestReadPortStateEmptyStateDir(t *testing.T) {
 
 func TestReadPortStateUnparseable(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, portStateFile)
+	path := filepath.Join(dir, quicPortStateFile)
 	if err := os.WriteFile(path, []byte("not a number"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestReadPortStateZero(t *testing.T) {
 	// matching the missing-file case. Otherwise port 0 (the OS
 	// ephemeral allocator) would shadow stickiness logic.
 	dir := t.TempDir()
-	path := filepath.Join(dir, portStateFile)
+	path := filepath.Join(dir, quicPortStateFile)
 	if err := os.WriteFile(path, []byte("0\n"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}

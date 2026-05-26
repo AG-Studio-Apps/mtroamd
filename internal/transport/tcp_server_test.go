@@ -6,6 +6,9 @@ package transport
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -103,5 +106,145 @@ func TestTCPServer_PreAuthDeadline_ReapsIdleClients(t *testing.T) {
 	cancel()
 	if err := <-serveErr; err != nil {
 		t.Fatalf("Serve returned: %v", err)
+	}
+}
+
+func pickFreeTCPPort(t *testing.T) uint16 {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("pick free TCP port: %v", err)
+	}
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	return port
+}
+
+func TestBindTCPWithFallbackHappyPath(t *testing.T) {
+	port := pickFreeTCPPort(t)
+	dir := t.TempDir()
+	addr := "127.0.0.1:" + strconv.FormatUint(uint64(port), 10)
+
+	ln, err := bindTCPWithFallback(addr, dir)
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if ln == nil {
+		t.Fatal("expected non-nil listener on happy path")
+	}
+	defer ln.Close()
+
+	bound := uint16(ln.Addr().(*net.TCPAddr).Port)
+	if bound != port {
+		t.Errorf("happy path bound %d, want %d", bound, port)
+	}
+	if stuck := readTCPPortState(dir); stuck != port {
+		t.Errorf("state file: got %d, want %d", stuck, port)
+	}
+}
+
+func TestBindTCPWithFallbackFallsThrough(t *testing.T) {
+	port := pickFreeTCPPort(t)
+
+	blocker, err := net.Listen("tcp", "127.0.0.1:"+strconv.FormatUint(uint64(port), 10))
+	if err != nil {
+		t.Fatalf("pre-bind blocker: %v", err)
+	}
+	defer blocker.Close()
+
+	dir := t.TempDir()
+	addr := "127.0.0.1:" + strconv.FormatUint(uint64(port), 10)
+
+	ln, err := bindTCPWithFallback(addr, dir)
+	if err != nil {
+		t.Fatalf("bind with collision: %v", err)
+	}
+	if ln == nil {
+		t.Fatal("expected non-nil listener after fallback")
+	}
+	defer ln.Close()
+
+	bound := uint16(ln.Addr().(*net.TCPAddr).Port)
+	if bound == port {
+		t.Errorf("bound the blocked port %d — fallback didn't trigger", port)
+	}
+	if bound < port || bound > port+FallbackPortSpan {
+		t.Errorf("bound %d outside fallback range %d–%d",
+			bound, port, port+FallbackPortSpan)
+	}
+	if stuck := readTCPPortState(dir); stuck != bound {
+		t.Errorf("state file: got %d, want %d", stuck, bound)
+	}
+}
+
+func TestBindTCPWithFallbackStickiness(t *testing.T) {
+	stickyPort := uint16(0)
+	for offset := FallbackPortSpan; offset >= 1; offset-- {
+		candidate := DefaultTCPPort + offset
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.FormatUint(uint64(candidate), 10))
+		if err != nil {
+			continue
+		}
+		ln.Close()
+		stickyPort = candidate
+		break
+	}
+	if stickyPort == 0 || stickyPort == DefaultTCPPort {
+		t.Skip("no free port in TCP fallback range for stickiness test")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, tcpPortStateFile),
+		[]byte(strconv.FormatUint(uint64(stickyPort), 10)+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("seed state file: %v", err)
+	}
+
+	addr := "127.0.0.1:" + strconv.FormatUint(uint64(DefaultTCPPort), 10)
+	ln, err := bindTCPWithFallback(addr, dir)
+	if err != nil {
+		t.Skipf("bind: %v (possibly transient port conflict)", err)
+	}
+	if ln == nil {
+		t.Skip("all ports taken — can't test stickiness")
+	}
+	defer ln.Close()
+
+	bound := uint16(ln.Addr().(*net.TCPAddr).Port)
+	if bound != stickyPort {
+		t.Errorf("with sticky=%d + default pref, bound %d, want %d",
+			stickyPort, bound, stickyPort)
+	}
+}
+
+func TestBindTCPWithFallbackSoftExhaustion(t *testing.T) {
+	port := pickFreeTCPPort(t)
+	dir := t.TempDir()
+
+	blockers := make([]net.Listener, 0, FallbackPortSpan+1)
+	defer func() {
+		for _, ln := range blockers {
+			_ = ln.Close()
+		}
+	}()
+	for offset := uint16(0); offset <= FallbackPortSpan; offset++ {
+		p := port + offset
+		ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.FormatUint(uint64(p), 10))
+		if err != nil {
+			continue
+		}
+		blockers = append(blockers, ln)
+	}
+
+	addr := "127.0.0.1:" + strconv.FormatUint(uint64(port), 10)
+	ln, err := bindTCPWithFallback(addr, dir)
+	if err != nil {
+		t.Fatalf("exhaustion should return (nil, nil), got error: %v", err)
+	}
+	if ln != nil {
+		ln.Close()
+		t.Fatal("expected nil listener on range exhaustion")
 	}
 }

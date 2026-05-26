@@ -11,21 +11,32 @@ import (
 	"strconv"
 )
 
-// portStateFile is the on-disk filename inside the daemon data dir
-// where we persist the last-successfully-bound QUIC UDP port. One
-// integer per file. Plain text so a human can `cat` it.
-const portStateFile = "quic-port"
+const (
+	quicPortStateFile = "quic-port"
+	tcpPortStateFile  = "tcp-port"
+)
 
-// readPortState returns the persisted preferred UDP port, or 0 if
-// the file is missing, empty, unparseable, or otherwise unusable.
-// Never returns an error: a corrupt or unreadable state file just
-// means we have no preference and bind from the configured default.
-// Caller treats 0 as "no preference."
 func readPortState(stateDir string) uint16 {
+	return readPortStateFile(stateDir, quicPortStateFile)
+}
+
+func writePortState(stateDir string, port uint16) {
+	writePortStateFile(stateDir, quicPortStateFile, port)
+}
+
+func readTCPPortState(stateDir string) uint16 {
+	return readPortStateFile(stateDir, tcpPortStateFile)
+}
+
+func writeTCPPortState(stateDir string, port uint16) {
+	writePortStateFile(stateDir, tcpPortStateFile, port)
+}
+
+func readPortStateFile(stateDir, filename string) uint16 {
 	if stateDir == "" {
 		return 0
 	}
-	path := filepath.Join(stateDir, portStateFile)
+	path := filepath.Join(stateDir, filename)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -43,13 +54,7 @@ func readPortState(stateDir string) uint16 {
 	return uint16(n)
 }
 
-// writePortState persists the just-bound UDP port to the daemon
-// data dir. Atomic via tempfile-then-rename so a crash mid-write
-// doesn't leave a corrupt file. Best-effort: a write failure is
-// logged but never returned — the daemon shouldn't refuse to start
-// because the state file is unwriteable (e.g., read-only home dir,
-// quota exhaustion). The next start just rediscovers the port.
-func writePortState(stateDir string, port uint16) {
+func writePortStateFile(stateDir, filename string, port uint16) {
 	if stateDir == "" {
 		return
 	}
@@ -58,8 +63,8 @@ func writePortState(stateDir string, port uint16) {
 			"dir", stateDir, "err", err)
 		return
 	}
-	path := filepath.Join(stateDir, portStateFile)
-	tmp, err := os.CreateTemp(stateDir, portStateFile+".tmp-*")
+	path := filepath.Join(stateDir, filename)
+	tmp, err := os.CreateTemp(stateDir, filename+".tmp-*")
 	if err != nil {
 		slog.Warn("transport: create temp file for port state",
 			"dir", stateDir, "err", err)
