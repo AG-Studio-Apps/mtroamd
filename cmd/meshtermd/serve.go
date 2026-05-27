@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -92,20 +93,24 @@ func runServe(args []string) int {
 		return 2
 	}
 
-	// Expand the "tailnet:<port>" sentinel into a concrete bind
-	// IP before handing the address to the daemon. Fail loud rather
-	// than silently fall back to 0.0.0.0 — exposing the plaintext
-	// TCP listener on non-tailnet interfaces would break the
-	// transport's trust model (see internal/transport/tcp_server.go
-	// for the design note).
-	resolvedTCPAddr, resolvedIP, resolveErr := transport.ResolveBindAddr(*tcpAddr)
-	if resolveErr != nil {
-		fmt.Fprintf(os.Stderr, "meshtermd serve: %v\n", resolveErr)
-		return 2
-	}
-	if resolvedIP != nil {
-		logger.Info("roam-tcp bound to tailnet interface",
-			"requested", *tcpAddr, "resolved", resolvedTCPAddr, "ip", resolvedIP.String())
+	// "tailnet:<port>" sentinel: pass through to the daemon for lazy
+	// resolution. The daemon polls for a Tailscale interface and
+	// enables TCP once one appears — no crash if Tailscale is stopped.
+	// Explicit host:port or empty: resolve immediately (no change).
+	var resolvedTCPAddr string
+	if strings.HasPrefix(*tcpAddr, "tailnet:") {
+		resolvedTCPAddr = *tcpAddr
+	} else {
+		resolved, ip, err := transport.ResolveBindAddr(*tcpAddr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "meshtermd serve: %v\n", err)
+			return 2
+		}
+		resolvedTCPAddr = resolved
+		if ip != nil {
+			logger.Info("roam-tcp bound to tailnet interface",
+				"requested", *tcpAddr, "resolved", resolvedTCPAddr, "ip", ip.String())
+		}
 	}
 
 	d, err := daemon.New(daemon.Config{

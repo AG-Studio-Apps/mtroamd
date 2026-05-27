@@ -16,12 +16,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
-
-	"os"
 
 	"github.com/AG-Studio-Apps/meshtermd/internal/build"
 	"github.com/AG-Studio-Apps/meshtermd/internal/cert"
@@ -135,9 +136,24 @@ type Daemon struct {
 	registry *session.Registry
 	quic     *transport.Server
 	// tcp is the optional plain-TCP listener used by iOS clients
-	// in embedded-Tailscale mode. Nil when Config.TCPAddr is "".
+	// in embedded-Tailscale mode. Nil when Config.TCPAddr is "" or
+	// when a "tailnet:" sentinel is pending resolution.
 	tcp *transport.TCPServer
-	ipc *ipc.Server
+	// tcpMu guards lazy creation/teardown of tcp by the tailnet
+	// poller goroutine. Also guards reads from TCPAddr()/doctorInfo().
+	tcpMu sync.Mutex
+	// deferredTCPSentinel holds the raw "tailnet:<port>" value when
+	// Tailscale wasn't available at startup. Empty when TCP is
+	// disabled or already bound. The poller reads this.
+	deferredTCPSentinel string
+	// tcpBoundIP is the tailnet IP the TCP listener is currently
+	// bound to, set by the poller on successful bind. Used to detect
+	// Tailscale IP changes (re-key) and disappearance.
+	tcpBoundIP net.IP
+	// roamHandler is cached from New() so the poller can create a
+	// TCPServer with the same handler after startup.
+	roamHandler *transport.ProtocolHandler
+	ipc         *ipc.Server
 	// stateDir is the persistence root resolved at New(). Reused by
 	// spawnSession when starting the per-session flusher.
 	stateDir string
@@ -327,16 +343,31 @@ func New(cfg Config) (*Daemon, error) {
 		return nil, fmt.Errorf("transport: %w", err)
 	}
 
-	// Optional TCP listener for the Roam-over-TCP transport (iOS
-	// embedded-Tailscale mode). Shares the ProtocolHandler so
-	// session state, attach tokens, and per-session lifecycle are
-	// identical across both transports. Off by default; opt-in via
-	// --roam-tcp-port. See transport.TCPServer doc comment for the
-	// security model (relies on WireGuard for transport security
-	// when used inside a tailnet — do not enable on the public
-	// internet without front-running with something that handles
-	// TLS).
-	if cfg.TCPAddr != "" {
+	d.roamHandler = roamHandler
+	if strings.HasPrefix(cfg.TCPAddr, "tailnet:") {
+		// Tailscale sentinel: try to resolve now; defer to poller if
+		// Tailscale isn't running yet.
+		resolved, ip, resolveErr := transport.ResolveBindAddr(cfg.TCPAddr)
+		if resolveErr != nil {
+			logger.Info("tailnet not available at startup, TCP deferred",
+				"sentinel", cfg.TCPAddr, "err", resolveErr)
+			d.deferredTCPSentinel = cfg.TCPAddr
+		} else {
+			logger.Info("roam-tcp bound to tailnet interface",
+				"sentinel", cfg.TCPAddr, "resolved", resolved, "ip", ip)
+			d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
+				Addr:     resolved,
+				StateDir: stateDir,
+				Handler:  roamHandler,
+				Logger:   logger,
+			})
+			if err != nil {
+				_ = d.quic.Close()
+				return nil, fmt.Errorf("tcp transport: %w", err)
+			}
+			d.tcpBoundIP = ip
+		}
+	} else if cfg.TCPAddr != "" {
 		d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
 			Addr:     cfg.TCPAddr,
 			StateDir: stateDir,
@@ -369,6 +400,8 @@ func (d *Daemon) Addr() string { return d.quic.Addr().String() }
 // in embedded-Tailscale mode can discover the port via the same
 // SSH-bootstrap mechanism that learns the QUIC port.
 func (d *Daemon) TCPAddr() string {
+	d.tcpMu.Lock()
+	defer d.tcpMu.Unlock()
 	if d.tcp == nil {
 		return ""
 	}
@@ -418,8 +451,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Optional TCP serve goroutine — only when --roam-tcp-port was
-	// supplied at CLI time and the listener bound successfully.
+	d.tcpMu.Lock()
 	if d.tcp != nil {
 		wg.Add(1)
 		go func() {
@@ -428,6 +460,15 @@ func (d *Daemon) Run(ctx context.Context) error {
 				errCh <- fmt.Errorf("tcp serve: %w", err)
 				cancel()
 			}
+		}()
+	}
+	d.tcpMu.Unlock()
+
+	if d.deferredTCPSentinel != "" || d.tcpBoundIP != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.tailnetTCPPoller(ctx, &wg, errCh)
 		}()
 	}
 
@@ -443,9 +484,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	<-ctx.Done()
 	_ = d.ipc.Close()
 	_ = d.quic.Close()
+	d.tcpMu.Lock()
 	if d.tcp != nil {
 		_ = d.tcp.Close()
 	}
+	d.tcpMu.Unlock()
 	wg.Wait()
 
 	select {
@@ -453,6 +496,104 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	default:
 		return nil
+	}
+}
+
+const tailnetPollInterval = 30 * time.Second
+
+func (d *Daemon) tailnetTCPPoller(ctx context.Context, wg *sync.WaitGroup, errCh chan<- error) {
+	port := ""
+	if s := d.deferredTCPSentinel; s != "" {
+		port = s[len("tailnet:"):]
+	} else if d.tcpBoundIP != nil {
+		d.tcpMu.Lock()
+		if d.tcp != nil {
+			port = fmt.Sprintf("%d", d.tcp.Addr().Port)
+		}
+		d.tcpMu.Unlock()
+	}
+	if port == "" {
+		return
+	}
+
+	ticker := time.NewTicker(tailnetPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		ip, err := transport.ResolveTailnetBindIP()
+
+		d.tcpMu.Lock()
+		switch {
+		case err != nil && d.tcp == nil:
+			d.tcpMu.Unlock()
+			d.logger.Debug("tailnet poller: no tailnet interface", "err", err)
+
+		case err != nil && d.tcp != nil:
+			d.logger.Warn("tailnet lost, disabling TCP listener",
+				"was", d.tcpBoundIP)
+			_ = d.tcp.Close()
+			d.tcp = nil
+			d.tcpBoundIP = nil
+			d.deferredTCPSentinel = "tailnet:" + port
+			d.tcpMu.Unlock()
+
+		case err == nil && d.tcp == nil:
+			var addr string
+			if ip.To4() == nil {
+				addr = fmt.Sprintf("[%s]:%s", ip.String(), port)
+			} else {
+				addr = fmt.Sprintf("%s:%s", ip.String(), port)
+			}
+			srv, srvErr := transport.NewTCPServer(transport.TCPConfig{
+				Addr:     addr,
+				StateDir: d.stateDir,
+				Handler:  d.roamHandler,
+				Logger:   d.logger,
+			})
+			if srvErr != nil {
+				d.tcpMu.Unlock()
+				d.logger.Warn("tailnet detected but TCP bind failed",
+					"addr", addr, "err", srvErr)
+				continue
+			}
+			if srv == nil {
+				d.tcpMu.Unlock()
+				d.logger.Warn("tailnet detected but all TCP ports in range occupied")
+				continue
+			}
+			d.tcp = srv
+			d.tcpBoundIP = ip
+			d.deferredTCPSentinel = ""
+			d.tcpMu.Unlock()
+			d.logger.Info("tailnet detected, TCP listener enabled",
+				"addr", srv.Addr().String(), "ip", ip.String())
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if serveErr := srv.Serve(ctx); serveErr != nil {
+					errCh <- fmt.Errorf("tcp serve (deferred): %w", serveErr)
+				}
+			}()
+
+		case err == nil && d.tcp != nil && !d.tcpBoundIP.Equal(ip):
+			d.logger.Info("tailnet IP changed, rebinding TCP",
+				"old", d.tcpBoundIP, "new", ip)
+			_ = d.tcp.Close()
+			d.tcp = nil
+			d.tcpBoundIP = nil
+			d.tcpMu.Unlock()
+			ticker.Reset(time.Second)
+			continue
+
+		default:
+			d.tcpMu.Unlock()
+		}
 	}
 }
 
@@ -497,9 +638,11 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	// in embedded-Tailscale mode then know to surface "host needs
 	// daemon update" rather than try a dial that won't succeed.
 	var tcpPort uint16
+	d.tcpMu.Lock()
 	if d.tcp != nil {
 		tcpPort = uint16(d.tcp.Addr().Port)
 	}
+	d.tcpMu.Unlock()
 
 	return ipc.AllocateResponse{
 		Ok:          true,
