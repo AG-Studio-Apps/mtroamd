@@ -150,6 +150,10 @@ type Daemon struct {
 	// bound to, set by the poller on successful bind. Used to detect
 	// Tailscale IP changes (re-key) and disappearance.
 	tcpBoundIP net.IP
+	// loopbackTCP is an always-on TCP listener bound to 127.0.0.1
+	// for the --stdio bridge. Separate from the tailnet TCP listener
+	// so SSH tunnel mode works regardless of Tailscale state.
+	loopbackTCP *transport.TCPServer
 	// roamHandler is cached from New() so the poller can create a
 	// TCPServer with the same handler after startup.
 	roamHandler *transport.ProtocolHandler
@@ -344,6 +348,18 @@ func New(cfg Config) (*Daemon, error) {
 	}
 
 	d.roamHandler = roamHandler
+
+	d.loopbackTCP, err = transport.NewTCPServer(transport.TCPConfig{
+		Addr:     "127.0.0.1:0",
+		StateDir: stateDir,
+		Handler:  roamHandler,
+		Logger:   logger,
+	})
+	if err != nil {
+		_ = d.quic.Close()
+		return nil, fmt.Errorf("loopback tcp: %w", err)
+	}
+
 	if strings.HasPrefix(cfg.TCPAddr, "tailnet:") {
 		// Tailscale sentinel: try to resolve now; defer to poller if
 		// Tailscale isn't running yet.
@@ -399,6 +415,13 @@ func (d *Daemon) Addr() string { return d.quic.Addr().String() }
 // was empty). Surfaced via meshtermd doctor JSON so iOS clients
 // in embedded-Tailscale mode can discover the port via the same
 // SSH-bootstrap mechanism that learns the QUIC port.
+func (d *Daemon) LoopbackTCPAddr() string {
+	if d.loopbackTCP == nil {
+		return ""
+	}
+	return d.loopbackTCP.Addr().String()
+}
+
 func (d *Daemon) TCPAddr() string {
 	d.tcpMu.Lock()
 	defer d.tcpMu.Unlock()
@@ -451,6 +474,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 
+	if d.loopbackTCP != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := d.loopbackTCP.Serve(ctx); err != nil {
+				errCh <- fmt.Errorf("loopback tcp serve: %w", err)
+				cancel()
+			}
+		}()
+	}
+
 	d.tcpMu.Lock()
 	if d.tcp != nil {
 		wg.Add(1)
@@ -484,6 +518,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	<-ctx.Done()
 	_ = d.ipc.Close()
 	_ = d.quic.Close()
+	if d.loopbackTCP != nil {
+		_ = d.loopbackTCP.Close()
+	}
 	d.tcpMu.Lock()
 	if d.tcp != nil {
 		_ = d.tcp.Close()
@@ -644,14 +681,20 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	}
 	d.tcpMu.Unlock()
 
+	var loopbackPort uint16
+	if d.loopbackTCP != nil {
+		loopbackPort = uint16(d.loopbackTCP.Addr().Port)
+	}
+
 	return ipc.AllocateResponse{
-		Ok:          true,
-		SessionID:   sess.ID().String(),
-		AttachToken: tok.String(),
-		Port:        uint16(d.quic.Addr().Port),
-		TCPPort:     tcpPort,
-		CertFP:      d.certFP.String(),
-		Name:        sess.Name(),
+		Ok:              true,
+		SessionID:       sess.ID().String(),
+		AttachToken:     tok.String(),
+		Port:            uint16(d.quic.Addr().Port),
+		TCPPort:         tcpPort,
+		LoopbackTCPPort: loopbackPort,
+		CertFP:          d.certFP.String(),
+		Name:            sess.Name(),
 	}
 }
 

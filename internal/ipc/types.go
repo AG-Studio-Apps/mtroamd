@@ -115,8 +115,9 @@ type AllocateResponse struct {
 	// Omitted (0) when the TCP listener is disabled — clients with
 	// embedded mode enabled then surface "host needs daemon update"
 	// to the user.
-	TCPPort     uint16 `cbor:"tcp_port,omitempty"`
-	CertFP      string `cbor:"cert_fp,omitempty"` // 64 hex chars, SHA-256 of cert DER
+	TCPPort         uint16 `cbor:"tcp_port,omitempty"`
+	LoopbackTCPPort uint16 `cbor:"loopback_tcp_port,omitempty"`
+	CertFP          string `cbor:"cert_fp,omitempty"` // 64 hex chars, SHA-256 of cert DER
 	// Name is the resolved user-visible session label. Echoed back
 	// so the client knows what the daemon synthesised when the
 	// request didn't supply one (see ipc/types.go AllocateRequest.Name).

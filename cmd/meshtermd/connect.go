@@ -198,19 +198,20 @@ func runConnect(args []string) int {
 // EOF from SSH channel teardown, or daemon disconnects), the
 // bridge tears down and the process exits.
 func runStdioMode(resp *ipc.AllocateResponse) int {
-	if resp.TCPPort == 0 {
-		fmt.Fprintln(os.Stderr, "meshtermd connect --stdio: daemon has no TCP listener (needs --roam-tcp-addr)")
+	port := resp.LoopbackTCPPort
+	if port == 0 {
+		port = resp.TCPPort
+	}
+	if port == 0 {
+		fmt.Fprintln(os.Stderr, "meshtermd connect --stdio: daemon has no TCP listener available")
 		return connectExitGenericError
 	}
 
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
-	// Flush stdout so the handshake lines reach the SSH channel
-	// before we switch to binary framing. os.Stdout is unbuffered
-	// in Go, but explicit sync is belt-and-braces.
 	os.Stdout.Sync()
 
-	addr := fmt.Sprintf("127.0.0.1:%d", resp.TCPPort)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "meshtermd connect --stdio: dial %s: %v\n", addr, err)
