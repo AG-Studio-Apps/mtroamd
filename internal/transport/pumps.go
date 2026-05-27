@@ -193,17 +193,11 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 			"sid", sess.ID().String(),
 			"grace_ms", m.GraceMillis,
 			"custom_prompt", m.SavePrompt != "")
-		// Run the sequencer in its own goroutine — it takes seconds
-		// to tens of seconds and we must NOT block readPump (which
-		// services keystrokes + future control frames).
-		// Detached context: a client disconnect mid-recovery should
-		// NOT abort the save/restart — the user typically wants the
-		// work preserved regardless of network state, and the
-		// post-recovery session is intact for the next attach. The
-		// per-stage RecoverProgress frames are best-effort; failures
-		// to write them (e.g. peer gone) are logged but don't abort
-		// the sequencer.
-		go runRecover(context.Background(), sess, m, write)
+		ctx := sess.TryStartRecover()
+		go func() {
+			defer sess.ClearRecover()
+			runRecover(ctx, sess, m, write)
+		}()
 		return nil
 	case protocol.TypeGoodbye:
 		return io.EOF // signal graceful close to readPump

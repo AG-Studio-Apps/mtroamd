@@ -176,7 +176,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 - The daemon logs to stderr by default; production deployments redirect via systemd's journal.
 - **No session output content is ever logged.** Only:
   - Connection events (open, close, error)
-  - Attach events (session ID, peer IP — last two octets masked for IPv4)
+  - Attach events (session ID, peer address)
   - Resize events (rows/cols only)
   - GC events (session ID, age at reap)
 - An optional `--debug-frames` flag (off by default, requires `MESHTERMD_DEBUG=1`) logs frame headers (type, length, seq) but not payloads.

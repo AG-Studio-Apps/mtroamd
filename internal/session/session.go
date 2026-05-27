@@ -286,7 +286,32 @@ type Session struct {
 	// thread-safe.
 	ptyByteObserver func([]byte)
 
+	// recoverCancel cancels the in-flight recovery goroutine. Non-nil
+	// while a recovery is running. Protected by mu.
+	recoverCancel context.CancelFunc
+
 	closed bool
+}
+
+// TryStartRecover returns a context for a new recovery sequence,
+// cancelling any in-flight recovery first. The caller must call
+// ClearRecover when the sequence finishes.
+func (s *Session) TryStartRecover() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.recoverCancel != nil {
+		s.recoverCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.recoverCancel = cancel
+	return ctx
+}
+
+// ClearRecover marks the recovery slot as free.
+func (s *Session) ClearRecover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recoverCancel = nil
 }
 
 // NewSession constructs a Session. The caller is expected to start

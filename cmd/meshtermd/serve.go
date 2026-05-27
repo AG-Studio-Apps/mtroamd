@@ -52,12 +52,14 @@ func runServe(args []string) int {
 			"runs regardless.")
 	tcpAddr := fs.String("roam-tcp-addr", "",
 		"OPTIONAL plain-TCP Roam listener address. Empty (default) keeps the daemon QUIC-only. "+
-			"Accepts a fully-specified host:port OR the sentinel \"tailnet:<port>\" which resolves at startup "+
-			"to a local Tailscale interface IP and binds there — the safe default for the iOS embedded-Tailscale "+
-			"path (the TCP transport runs unencrypted, trusting WireGuard for confidentiality, so it MUST NOT "+
-			"be exposed on non-tailnet interfaces). If \"tailnet:\" is used and no Tailscale interface is found, "+
-			"the daemon exits with an explicit error rather than silently binding to 0.0.0.0. Operators with a "+
-			"reason to bypass that posture (TLS-terminating proxy in front, etc.) can pass an explicit address.")
+			"Accepts a fully-specified host:port OR the sentinel \"tailnet:<port>\" which polls for a local "+
+			"Tailscale interface IP and binds there once available — the safe default for the iOS embedded-"+
+			"Tailscale path (the TCP transport runs unencrypted, trusting WireGuard for confidentiality, so "+
+			"it MUST NOT be exposed on non-tailnet interfaces). If \"tailnet:\" is used and no Tailscale "+
+			"interface is found at startup, the daemon starts QUIC-only and polls every 30s until Tailscale "+
+			"appears. If Tailscale is later stopped, the TCP listener is torn down and polling resumes. "+
+			"Operators with a reason to bypass that posture (TLS-terminating proxy in front, etc.) can pass "+
+			"an explicit address.")
 	verbose := fs.Bool("v", false, "verbose logging (slog DEBUG level)")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: meshtermd serve [flags]\n\n")

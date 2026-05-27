@@ -42,6 +42,16 @@ var (
 // themselves are not instant.
 const defaultGrace = 30 * time.Second
 
+// maxGrace caps GraceMillis from the client. 2 minutes is more than
+// enough for any save-restart cycle; uncapped values would let a
+// stolen token hold goroutines + timers indefinitely.
+const maxGrace = 2 * time.Minute
+
+// maxSavePromptLen caps the SavePrompt field. The default prompt is
+// ~350 chars; 4 KiB is generous for custom prompts and prevents a
+// malicious client from injecting unbounded content into the PTY.
+const maxSavePromptLen = 4096
+
 // shellSettleDelay is the rough heuristic for "/exit has returned us
 // to a shell prompt" before we inject the restart command. We don't
 // have a clean signal for shell-prompt-ready — pattern-matching PS1
@@ -169,9 +179,15 @@ func runRecover(
 	if prompt == "" {
 		prompt = defaultSavePrompt
 	}
+	if len(prompt) > maxSavePromptLen {
+		prompt = prompt[:maxSavePromptLen]
+	}
 	grace := time.Duration(req.GraceMillis) * time.Millisecond
 	if grace <= 0 {
 		grace = defaultGrace
+	}
+	if grace > maxGrace {
+		grace = maxGrace
 	}
 
 	sid := sess.ID().String()
