@@ -594,3 +594,48 @@ func TestIdleForGrows(t *testing.T) {
 		t.Errorf("IdleFor after Touch = %v, want < 20ms", got)
 	}
 }
+
+// TestClearRecoverStaleGenerationDoesNotFreeSuccessor reproduces the
+// v1.4.2 Codex audit follow-up race: a superseded recovery finishing
+// must not clear the slot owned by its successor, or a later recovery
+// can't cancel that successor. Sequence: start A, start B (cancels A),
+// clear A (must be a no-op), start C (must still cancel B).
+func TestClearRecoverStaleGenerationDoesNotFreeSuccessor(t *testing.T) {
+	s := mustNewSession(t)
+
+	ctxA, genA := s.TryStartRecover()
+	ctxB, genB := s.TryStartRecover()
+
+	// Starting B must cancel A.
+	select {
+	case <-ctxA.Done():
+	default:
+		t.Fatal("starting recovery B did not cancel recovery A")
+	}
+
+	// A finishes and clears with its (now stale) generation. Because B
+	// owns the slot, this must be a no-op.
+	s.ClearRecover(genA)
+
+	ctxC, genC := s.TryStartRecover()
+
+	// Starting C must cancel B — which only happens if A's stale clear
+	// left B's cancel func in the slot.
+	select {
+	case <-ctxB.Done():
+	default:
+		t.Fatal("stale ClearRecover(A) freed the slot; starting C did not cancel B")
+	}
+
+	if genB == genA || genC == genB {
+		t.Fatalf("generations should be monotonic and distinct: A=%d B=%d C=%d", genA, genB, genC)
+	}
+
+	// Sanity: C's context is live until C clears it.
+	select {
+	case <-ctxC.Done():
+		t.Fatal("recovery C context cancelled unexpectedly")
+	default:
+	}
+	s.ClearRecover(genC)
+}

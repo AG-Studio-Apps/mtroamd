@@ -287,16 +287,21 @@ type Session struct {
 	ptyByteObserver func([]byte)
 
 	// recoverCancel cancels the in-flight recovery goroutine. Non-nil
-	// while a recovery is running. Protected by mu.
+	// while a recovery is running. Protected by mu. recoverGen
+	// identifies the recovery that currently owns the slot so a
+	// finishing goroutine only frees it when it still owns it — see
+	// ClearRecover.
 	recoverCancel context.CancelFunc
+	recoverGen    uint64
 
 	closed bool
 }
 
-// TryStartRecover returns a context for a new recovery sequence,
-// cancelling any in-flight recovery first. The caller must call
+// TryStartRecover returns a context for a new recovery sequence plus
+// the generation token that identifies it, cancelling any in-flight
+// recovery first. The caller must pass the returned generation to
 // ClearRecover when the sequence finishes.
-func (s *Session) TryStartRecover() context.Context {
+func (s *Session) TryStartRecover() (context.Context, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.recoverCancel != nil {
@@ -304,13 +309,25 @@ func (s *Session) TryStartRecover() context.Context {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.recoverCancel = cancel
-	return ctx
+	s.recoverGen++
+	return ctx, s.recoverGen
 }
 
-// ClearRecover marks the recovery slot as free.
-func (s *Session) ClearRecover() {
+// ClearRecover frees the recovery slot, but only if gen still
+// identifies the active recovery. A recovery that was already
+// superseded (cancelled by a newer TryStartRecover) must NOT clear
+// the slot its successor now owns: otherwise a later recovery would
+// see an empty slot and fail to cancel that successor, reopening the
+// overlapping-recovery behaviour the slot exists to prevent. The
+// generation check makes the clear identity-aware. (Function values
+// aren't comparable in Go, so we key on a generation counter rather
+// than the cancel func itself.)
+func (s *Session) ClearRecover(gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.recoverGen != gen {
+		return
+	}
 	s.recoverCancel = nil
 }
 

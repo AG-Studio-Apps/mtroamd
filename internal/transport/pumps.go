@@ -193,9 +193,9 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 			"sid", sess.ID().String(),
 			"grace_ms", m.GraceMillis,
 			"custom_prompt", m.SavePrompt != "")
-		ctx := sess.TryStartRecover()
+		ctx, gen := sess.TryStartRecover()
 		go func() {
-			defer sess.ClearRecover()
+			defer sess.ClearRecover(gen)
 			runRecover(ctx, sess, m, write)
 		}()
 		return nil
