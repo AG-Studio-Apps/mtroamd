@@ -31,9 +31,27 @@ func killOrphanDaemon(ctx context.Context) error {
 	if signaledFromPidFile() {
 		return nil
 	}
+	// pgrep + signal, EXCLUDING our own pid. The `meshtermd uninstall`
+	// process's comm is also `meshtermd`, so a plain `pkill -x meshtermd`
+	// SIGTERMs this very process — which (when uninstall runs over a
+	// non-interactive SSH exec with no XDG_RUNTIME_DIR, so the pid-file
+	// fast path misses) aborts the uninstall mid-run and strands files.
+	// Enumerate matches and skip self.
 	uid := strconv.Itoa(os.Getuid())
-	cmd := exec.CommandContext(ctx, "pkill", "-u", uid, "-x", "meshtermd")
-	_ = cmd.Run() // exit 1 = no matches; collapse to nil
+	self := os.Getpid()
+	out, err := exec.CommandContext(ctx, "pgrep", "-u", uid, "-x", "meshtermd").Output()
+	if err != nil {
+		return nil // exit 1 = no matches; collapse to nil
+	}
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		if proc, err := os.FindProcess(pid); err == nil {
+			_ = proc.Signal(syscall.SIGTERM)
+		}
+	}
 	return nil
 }
 

@@ -73,12 +73,11 @@ func runUninstall(args []string) int {
 	stragglers := 0
 
 	// 1. Remove the binary FIRST. On systemd --user hosts the supervisor
-	//    teardown below runs `systemctl --user disable --now`, which can
-	//    tear down the user session and kill THIS process when uninstall
-	//    is invoked over a non-interactive SSH exec — before the later
-	//    steps run, stranding the binary (the client then sees the daemon
-	//    "still installed"). Deleting it up front guarantees the artifact
-	//    the client verifies is gone regardless. Unlinking a running
+	//    teardown below can kill THIS process when uninstall is invoked
+	//    over a non-interactive SSH exec — before the later steps run,
+	//    stranding the binary (the client then sees the daemon "still
+	//    installed"). Deleting it up front guarantees the artifact the
+	//    client verifies is gone regardless. Unlinking a running
 	//    executable is safe: our process keeps its inode open until exit;
 	//    the directory entry is gone immediately.
 	if fileExists(binPath) {
@@ -92,13 +91,7 @@ func runUninstall(args []string) int {
 		fmt.Printf("▸ No binary at %s (already removed?)\n", binPath)
 	}
 
-	// Catch a free-running daemon that wasn't under any supervisor
-	// (e.g. user manually ran `meshtermd serve &`). pkill returns 1 if
-	// no matches — fine.
-	_ = killOrphanDaemon(ctx)
-
-	// 2. Stop + remove the supervisor record. Done AFTER the binary is
-	//    gone so a session-killing `disable --now` can't strand it.
+	// 2. Stop + remove the supervisor record.
 	mgr := svcmgr.Detect(ctx)
 	fmt.Printf("▸ Stopping daemon via %s\n", mgr.Name())
 	if err := mgr.Stop(ctx); err != nil {
@@ -108,6 +101,12 @@ func runUninstall(args []string) int {
 	if err := mgr.Remove(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: remove: %v\n", err)
 	}
+
+	// Catch a free-running daemon the supervisor didn't own (e.g. user
+	// ran `meshtermd serve &`). Runs AFTER the supervisor stop, and
+	// killOrphanDaemon now excludes our own pid so it can't SIGTERM this
+	// uninstall process.
+	_ = killOrphanDaemon(ctx)
 
 	// 3. Purge state dir if requested.
 	if *purge {
