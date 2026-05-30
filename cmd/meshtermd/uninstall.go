@@ -72,25 +72,15 @@ func runUninstall(args []string) int {
 
 	stragglers := 0
 
-	// 1. Stop + remove supervisor record.
-	mgr := svcmgr.Detect(ctx)
-	fmt.Printf("▸ Stopping daemon via %s\n", mgr.Name())
-	if err := mgr.Stop(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: stop: %v\n", err)
-	}
-	fmt.Printf("▸ Removing supervisor record\n")
-	if err := mgr.Remove(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: remove: %v\n", err)
-	}
-
-	// Also catch a free-running daemon that wasn't under any
-	// supervisor (e.g. user manually ran `meshtermd serve &`).
-	// pkill returns 1 if no matches — fine.
-	_ = killOrphanDaemon(ctx)
-
-	// 2. Remove the binary itself. On Linux/macOS POSIX, unlinking
-	//    a running executable is safe: our process keeps its inode
-	//    open until exit, the directory entry is gone immediately.
+	// 1. Remove the binary FIRST. On systemd --user hosts the supervisor
+	//    teardown below runs `systemctl --user disable --now`, which can
+	//    tear down the user session and kill THIS process when uninstall
+	//    is invoked over a non-interactive SSH exec — before the later
+	//    steps run, stranding the binary (the client then sees the daemon
+	//    "still installed"). Deleting it up front guarantees the artifact
+	//    the client verifies is gone regardless. Unlinking a running
+	//    executable is safe: our process keeps its inode open until exit;
+	//    the directory entry is gone immediately.
 	if fileExists(binPath) {
 		if err := os.Remove(binPath); err != nil {
 			fmt.Fprintf(os.Stderr, "  ✘ remove binary %s: %v\n", binPath, err)
@@ -100,6 +90,23 @@ func runUninstall(args []string) int {
 		}
 	} else {
 		fmt.Printf("▸ No binary at %s (already removed?)\n", binPath)
+	}
+
+	// Catch a free-running daemon that wasn't under any supervisor
+	// (e.g. user manually ran `meshtermd serve &`). pkill returns 1 if
+	// no matches — fine.
+	_ = killOrphanDaemon(ctx)
+
+	// 2. Stop + remove the supervisor record. Done AFTER the binary is
+	//    gone so a session-killing `disable --now` can't strand it.
+	mgr := svcmgr.Detect(ctx)
+	fmt.Printf("▸ Stopping daemon via %s\n", mgr.Name())
+	if err := mgr.Stop(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: stop: %v\n", err)
+	}
+	fmt.Printf("▸ Removing supervisor record\n")
+	if err := mgr.Remove(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: remove: %v\n", err)
 	}
 
 	// 3. Purge state dir if requested.
