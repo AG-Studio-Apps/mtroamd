@@ -1,0 +1,31 @@
+# reprepro distributions for the meshtermd apt repo (served from gh-pages at
+# https://ag-studio-apps.github.io/meshtermd). Two suites share one repo + one
+# signing key:
+#
+#   stable — production. Only main-ancestor, clean-semver tags publish here.
+#            By the branch model (main only advances on an App Store release),
+#            this always matches the live iOS app's pinned daemon version.
+#   dev    — DEVELOPMENT. develop / -rc / ~dev builds. Public but opt-in and
+#            loudly flagged; may break your system. Pairs with TestFlight.
+#
+# SignWith: yes → sign with the default secret key in the keyring (CI imports
+# exactly one: the APT_GPG_KEY secret), so no fingerprint is hardcoded here.
+# This file is the canonical template; CI copies it into the gh-pages worktree.
+
+Origin: meshtermd
+Label: meshtermd
+Codename: stable
+Suite: stable
+Components: main
+Architectures: amd64 arm64 armhf
+Description: meshtermd apt repository (stable — production, matches the App Store app)
+SignWith: yes
+
+Origin: meshtermd
+Label: meshtermd
+Codename: dev
+Suite: dev
+Components: main
+Architectures: amd64 arm64 armhf
+Description: meshtermd apt repository (DEVELOPMENT — unstable, may break your system)
+SignWith: yes
