@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>meshtermd · package repository</title>
+<title>mtroamd · package repository</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -48,10 +48,10 @@
 <body>
 <div class="wrap">
 <header>
-  <h1><span class="mono">meshtermd</span> <span class="tag">· packages</span></h1>
+  <h1><span class="mono">mtroamd</span> <span class="tag">· packages</span></h1>
   <p class="lead">Server-side daemon for the
-    <a href="https://github.com/AG-Studio-Apps/meshtermd">meshTerm</a> iOS app —
-    persistent terminal sessions over QUIC, plus the <code class="inline">mtctl</code> CLI.
+    <a href="https://github.com/AG-Studio-Apps/mtroamd">meshTerm</a> iOS app —
+    persistent terminal sessions over QUIC, plus the <code class="inline">mtroam</code> CLI.
     Signed <code class="inline">apt</code> + <code class="inline">dnf</code> repos for
     <code class="inline">amd64/x86_64</code>, <code class="inline">arm64/aarch64</code>
     (<code class="inline">armhf</code> on apt).</p>
@@ -63,75 +63,75 @@
 <p class="note">Production channel — tracks the App Store app's pinned version. Live when
   meshTerm 2.0 ships; until then this reports no package.</p>
 <div class="codeblock"><button class="copy">Copy</button>
-<pre>curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
-  | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
+<pre>curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
 
-echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://ag-studio-apps.github.io/meshtermd stable main" \
-  | sudo tee /etc/apt/sources.list.d/meshtermd.list
+echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd stable main" \
+  | sudo tee /etc/apt/sources.list.d/mtroamd.list
 
-sudo apt update && sudo apt install meshtermd
-systemctl --user enable --now meshtermd   # as your login user</pre></div>
+sudo apt update && sudo apt install mtroamd
+systemctl --user enable --now mtroamd   # as your login user</pre></div>
 
 <h3>Development<span class="badge live">live</span></h3>
 <div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release
   (<code class="inline">-rc</code>) builds for testing; pairs with TestFlight, not the App Store app.</div>
 <div class="codeblock"><button class="copy">Copy</button>
-<pre>curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
-  | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
+<pre>curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
 
-echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://ag-studio-apps.github.io/meshtermd dev main" \
-  | sudo tee /etc/apt/sources.list.d/meshtermd-dev.list
+echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd dev main" \
+  | sudo tee /etc/apt/sources.list.d/mtroamd-dev.list
 
-sudo apt update && sudo apt install meshtermd
-systemctl --user enable --now meshtermd   # as your login user</pre></div>
+sudo apt update && sudo apt install mtroamd
+systemctl --user enable --now mtroamd   # as your login user</pre></div>
 
 <h2>Fedora (dnf)</h2>
 
 <h3>Stable<span class="badge soon">from v2.0</span></h3>
 <p class="note">Live when meshTerm 2.0 ships; until then this reports no package.</p>
 <div class="codeblock"><button class="copy">Copy</button>
-<pre>sudo tee /etc/yum.repos.d/meshtermd.repo <<'EOF'
-[meshtermd]
-name=meshtermd
-baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/stable/$basearch
+<pre>sudo tee /etc/yum.repos.d/mtroamd.repo <<'EOF'
+[mtroamd]
+name=mtroamd
+baseurl=https://ag-studio-apps.github.io/mtroamd/rpm/stable/$basearch
 enabled=1
 gpgcheck=1
-gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
-sudo dnf install meshtermd
-systemctl --user enable --now meshtermd   # as your login user</pre></div>
+sudo dnf install mtroamd
+systemctl --user enable --now mtroamd   # as your login user</pre></div>
 
 <h3>Development<span class="badge live">live</span></h3>
 <div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight.</div>
 <div class="codeblock"><button class="copy">Copy</button>
-<pre>sudo tee /etc/yum.repos.d/meshtermd-dev.repo <<'EOF'
-[meshtermd-dev]
-name=meshtermd (development — unstable)
-baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/dev/$basearch
+<pre>sudo tee /etc/yum.repos.d/mtroamd-dev.repo <<'EOF'
+[mtroamd-dev]
+name=mtroamd (development — unstable)
+baseurl=https://ag-studio-apps.github.io/mtroamd/rpm/dev/$basearch
 enabled=1
 gpgcheck=1
-gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
-sudo dnf install meshtermd
-systemctl --user enable --now meshtermd   # as your login user</pre></div>
+sudo dnf install mtroamd
+systemctl --user enable --now mtroamd   # as your login user</pre></div>
 
 <h2>Uninstall</h2>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre># Debian / Ubuntu
-sudo apt remove meshtermd     # stops + removes the daemon, keeps your sessions + cert
-sudo apt purge  meshtermd     # also wipes ~/.local/share/meshtermd (full clean removal)
+sudo apt remove mtroamd     # stops + removes the daemon, keeps your sessions + cert
+sudo apt purge  mtroamd     # also wipes ~/.local/share/mtroamd (full clean removal)
 
 # Fedora
-sudo dnf remove meshtermd     # stops + removes the daemon, keeps your sessions + cert</pre></div>
+sudo dnf remove mtroamd     # stops + removes the daemon, keeps your sessions + cert</pre></div>
 
 <footer>
   Packages are GPG-signed (ed25519). Key fingerprint
   <code class="inline">61725E39 A1A4EEF3 28BE3694 507DBA72 F03C45C2</code> —
-  <a href="meshtermd-archive-keyring.gpg">keyring (.gpg)</a> ·
-  <a href="meshtermd-archive-keyring.asc">armored (.asc)</a>.
-  Source &amp; docs: <a href="https://github.com/AG-Studio-Apps/meshtermd">github.com/AG-Studio-Apps/meshtermd</a>.
+  <a href="mtroamd-archive-keyring.gpg">keyring (.gpg)</a> ·
+  <a href="mtroamd-archive-keyring.asc">armored (.asc)</a>.
+  Source &amp; docs: <a href="https://github.com/AG-Studio-Apps/mtroamd">github.com/AG-Studio-Apps/mtroamd</a>.
 </footer>
 </div>
 
