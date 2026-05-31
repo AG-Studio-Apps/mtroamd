@@ -58,8 +58,8 @@ func runConnect(args []string) int {
 		"opt this session OUT of cross-restart persistence. Use on hosts where --persistence-default is on "+
 			"but a specific session is sensitive (e.g. one-off commands you don't want lingering on disk).")
 	stdio := fs.Bool("stdio", false,
-		"keep the process running and speak the MTRoam wire protocol over stdin/stdout. "+
-			"The iOS client uses this to tunnel MTRoam through the SSH exec channel — no separate "+
+		"keep the process running and speak the mtRoam wire protocol over stdin/stdout. "+
+			"The iOS client uses this to tunnel mtRoam through the SSH exec channel — no separate "+
 			"QUIC/TCP connection or firewall hole needed.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd connect [flags]\n\n")
@@ -151,13 +151,13 @@ func runConnect(args []string) int {
 	// MTRM_TCP line carrying the TCP port. iOS clients in embedded-
 	// Tailscale routing mode parse this to learn where to dial via
 	// their in-process tsnet — they can't run Apple's QUIC over the
-	// TailscaleKit userspace fd, so a TCP variant of the MTRoam
+	// TailscaleKit userspace fd, so a TCP variant of the mtRoam
 	// transport handles that path. Older clients (no embedded
 	// mode) ignore the line.
 	//
 	// Format intentionally minimal: just version + port. The
 	// session_id / cert_fp / attach_token from MTRM_QUIC apply
-	// to either transport — MTRoam framing is identical on both,
+	// to either transport — mtRoam framing is identical on both,
 	// and the attach-token authenticates the client to the
 	// daemon at the protocol layer regardless of how the bytes
 	// got there. WireGuard provides the wire-level encryption
@@ -182,8 +182,8 @@ func runConnect(args []string) int {
 	return connectExitOK
 }
 
-// runStdioMode keeps the process running, speaking the MTRoam wire
-// protocol over stdin/stdout. The iOS client tunnels MTRoam through
+// runStdioMode keeps the process running, speaking the mtRoam wire
+// protocol over stdin/stdout. The iOS client tunnels mtRoam through
 // the SSH exec channel this way — no separate QUIC/TCP connection
 // or firewall hole needed.
 //

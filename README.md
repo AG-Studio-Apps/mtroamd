@@ -25,11 +25,11 @@ Pre-1.0. The wire protocol is documented but not frozen; we may break it before 
 
 The daemon is the source of truth; the clients are interchangeable. That's the line wezterm's multiplexer can't easily cross — it requires their emulator on both ends.
 
-† **meshTerm iOS status**: the QUIC-speaking meshTerm client is currently in TestFlight as the v2.0 release; the App Store version (v1.x) is the pre-MTRoam SSH client. The two ship in lockstep — when v2.0 hits the App Store, mtroamd cuts its first coordinated public release (see Install below).
+† **meshTerm iOS status**: the QUIC-speaking meshTerm client is currently in TestFlight as the v2.0 release; the App Store version (v1.x) is the pre-mtRoam SSH client. The two ship in lockstep — when v2.0 hits the App Store, mtroamd cuts its first coordinated public release (see Install below).
 
 ## What it does
 
-- Listens for QUIC connections from any client that speaks the MTRoam protocol (ALPN `meshterm/0`, single bidi stream with tagged framing).
+- Listens for QUIC connections from any client that speaks the mtRoam protocol (ALPN `meshterm/0`, single bidi stream with tagged framing).
 - Owns a registry of terminal sessions: PTY + child shell + monotonic output ring buffer (4 MiB per session).
 - Sessions persist across client disconnects; reattach replays buffered output from the client's last ack sequence.
 - One exclusive + N readonly attachers per session. Multi-attach is for "watch a colleague" / "open the same session from a second device."

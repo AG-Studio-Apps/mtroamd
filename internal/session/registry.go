@@ -688,7 +688,7 @@ func (s *Session) idleTimeoutForGC() time.Duration {
 }
 
 // hasAttachedClientsForGC reports whether the session currently has
-// any attached clients (MTRoam or otherwise). The GC sweep uses this to
+// any attached clients (mtRoam or otherwise). The GC sweep uses this to
 // avoid reaping a session that's actively attached but happens to be
 // silent (e.g. a shell sitting at the prompt with no output for the
 // idle window). Without this check, an iOS user idle on a long-lived

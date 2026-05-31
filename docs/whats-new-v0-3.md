@@ -10,7 +10,7 @@ now includes `mtroam-*` binaries for the same seven platforms as
 Install: download → verify signature → drop in `~/.local/bin/mtroam`.
 Full guide in `docs/mtroam.md`.
 
-This unblocks attaching to a remote MTRoam session from your laptop's
+This unblocks attaching to a remote mtRoam session from your laptop's
 terminal — same persistent-shell experience the iOS app gives you,
 but on a real keyboard.
 
@@ -39,4 +39,4 @@ one implementation. No user-visible behaviour change.
   this release.
 - iOS app version unchanged. The next iOS build will start dropping
   `mtroam` alongside `mtroamd` on auto-installed hosts, so anyone
-  who SSHes into a MTRoam host has `mtroam` ready to go.
+  who SSHes into a mtRoam host has `mtroam` ready to go.

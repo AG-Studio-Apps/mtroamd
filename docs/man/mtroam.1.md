@@ -13,7 +13,7 @@ mtroam - manage and attach to remote mtroamd terminal sessions
 # DESCRIPTION
 
 **mtroam** is the laptop / desktop client for **mtroamd**(8). It speaks
-the same MTRoam protocol the iOS meshTerm app speaks, but renders the
+the same mtRoam protocol the iOS meshTerm app speaks, but renders the
 remote session in your local terminal instead of an on-device view.
 
 Use **mtroam** when you want persistent shell sessions across SSH drops,

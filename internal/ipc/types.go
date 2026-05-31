@@ -108,7 +108,7 @@ type AllocateResponse struct {
 	SessionID   string `cbor:"sid,omitempty"`     // 32 hex chars
 	AttachToken string `cbor:"tok,omitempty"`     // 32 hex chars, single-use, 30s TTL
 	Port        uint16 `cbor:"port,omitempty"`    // QUIC UDP port
-	// TCPPort is the plain-TCP MTRoam listener's bound port, populated
+	// TCPPort is the plain-TCP mtRoam listener's bound port, populated
 	// when the daemon was started with --mtroam-tcp-addr. Surfaced on
 	// the bootstrap line as MTRM_TCP so the iOS client can dial the
 	// daemon over its in-process tsnet (embedded-Tailscale mode).
@@ -243,7 +243,7 @@ type StatusResponse struct {
 	StartedAtNs         int64  `cbor:"sat,omitempty" json:"started_at_ns"`
 	UptimeNs            int64  `cbor:"upt,omitempty" json:"uptime_ns"`
 	QUICAddr            string `cbor:"qa,omitempty" json:"quic_addr"`
-	// MTRoamTCPAddr is the plain-TCP MTRoam listener's bound address,
+	// MTRoamTCPAddr is the plain-TCP mtRoam listener's bound address,
 	// surfaced when the daemon is started with --mtroam-tcp-addr.
 	// Empty when the TCP listener is disabled (the default —
 	// daemon ships QUIC-only). iOS clients in embedded-Tailscale

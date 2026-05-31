@@ -50,7 +50,7 @@ type DaemonHealth struct {
 	Version      string `json:"version,omitempty"`
 	UptimeNs     int64  `json:"uptime_ns,omitempty"`
 	QUICAddr     string `json:"quic_addr,omitempty"`
-	// MTRoamTCPAddr is the optional plain-TCP MTRoam listener address.
+	// MTRoamTCPAddr is the optional plain-TCP mtRoam listener address.
 	// Present when the daemon was started with --mtroam-tcp-addr;
 	// omitted otherwise. iOS clients in embedded-Tailscale mode
 	// parse this to learn where to dial via tsnet.
@@ -290,7 +290,7 @@ func printDoctorReport(out *os.File, r DoctorReport) {
 		fmt.Fprintf(out, "  Uptime:          %s\n", time.Duration(r.Daemon.UptimeNs))
 		fmt.Fprintf(out, "  QUIC addr:       %s\n", r.Daemon.QUICAddr)
 		if r.Daemon.MTRoamTCPAddr != "" {
-			fmt.Fprintf(out, "  MTRoam TCP addr:   %s\n", r.Daemon.MTRoamTCPAddr)
+			fmt.Fprintf(out, "  mtRoam TCP addr:   %s\n", r.Daemon.MTRoamTCPAddr)
 		}
 		fmt.Fprintf(out, "  Cert FP:         %s\n", r.Daemon.CertFP)
 		fmt.Fprintf(out, "  Sessions:        %d / %d\n", r.Daemon.SessionCount, r.Daemon.MaxSessions)

@@ -1,13 +1,13 @@
 # mtroam — the laptop CLI for mtroamd
 
 `mtroam` is the desktop/laptop companion to `mtroamd`. It speaks the
-same MTRoam protocol the iOS meshTerm app speaks, but renders the remote
+same mtRoam protocol the iOS meshTerm app speaks, but renders the remote
 session in your local terminal instead of an on-device view.
 
 Use it when you want:
 
 - Persistent shell sessions across SSH drops, sleeps, and network
-  changes — the same value MTRoam gives iOS users
+  changes — the same value mtRoam gives iOS users
 - The same sessions reachable from iOS *and* the laptop, so you can
   start a build on your phone in the morning and reattach from the
   laptop in the afternoon (or vice versa)
@@ -148,7 +148,7 @@ unreachable, etc.).
 
 **"mtroam attach: bootstrap: command not found: mtroamd"** — the
 daemon isn't installed on the remote host. Use the meshTerm iOS app's
-"Set Up MTRoam on this Host" flow to install it, then try again.
+"Set Up mtRoam on this Host" flow to install it, then try again.
 
 **"mtroam attach: tls: certificate signed by unknown authority"** — the
 daemon's TLS cert fingerprint doesn't match what the bootstrap line

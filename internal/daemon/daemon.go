@@ -48,10 +48,10 @@ type Config struct {
 	// release does this for testing).
 	QUICAddr string
 
-	// TCPAddr is the optional bind address for the plain-TCP MTRoam
+	// TCPAddr is the optional bind address for the plain-TCP mtRoam
 	// listener. Empty (default) disables the listener — daemon
 	// ships QUIC-only, behaving exactly as before. When non-empty,
-	// the daemon serves the MTRoam protocol over TCP IN ADDITION to
+	// the daemon serves the mtRoam protocol over TCP IN ADDITION to
 	// QUIC, on the supplied address. Designed for use inside a
 	// Tailscale tailnet where WireGuard provides transport
 	// security; see transport.TCPServer doc comment for the
@@ -410,7 +410,7 @@ func New(cfg Config) (*Daemon, error) {
 // chosen port.
 func (d *Daemon) Addr() string { return d.quic.Addr().String() }
 
-// TCPAddr returns the optional MTRoam-over-TCP listener's bound
+// TCPAddr returns the optional mtRoam-over-TCP listener's bound
 // address, or "" when the TCP listener is disabled (Config.TCPAddr
 // was empty). Surfaced via mtroamd doctor JSON so iOS clients
 // in embedded-Tailscale mode can discover the port via the same
@@ -670,7 +670,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		return ipc.AllocateResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
 	}
 
-	// Surface the optional MTRoam-over-TCP port to the iOS client.
+	// Surface the optional mtRoam-over-TCP port to the iOS client.
 	// 0 when --mtroam-tcp-addr wasn't supplied at startup; clients
 	// in embedded-Tailscale mode then know to surface "host needs
 	// daemon update" rather than try a dial that won't succeed.
@@ -1035,9 +1035,9 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// session.PTY and slots in everywhere a *pty.Handle used to.
 	//
 	// MESHTERM_ROAM=1 lets user shells short-circuit auto-tmux blocks
-	// in their rc files (we don't want MTRoam shells to nest inside the
+	// in their rc files (we don't want mtRoam shells to nest inside the
 	// user's regular tmux session — see the recommended guard form
-	// in the sidecarExtraEnv comment). The MTRoam shell already
+	// in the sidecarExtraEnv comment). The mtRoam shell already
 	// persists via mtroamd's own session machinery, so skipping
 	// tmux is a no-op from the user's persistence perspective.
 	ptyHandle, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{

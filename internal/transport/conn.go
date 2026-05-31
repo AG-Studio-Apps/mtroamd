@@ -13,20 +13,20 @@ import (
 
 // Conn is the transport-abstracted connection that ProtocolHandler
 // operates on. It bundles a single bidirectional byte stream with the
-// connection-level operations the MTRoam protocol needs. Both QUIC
+// connection-level operations the mtRoam protocol needs. Both QUIC
 // (single-stream-per-conn) and plain TCP have adapters; the protocol
 // layer above this interface doesn't know which transport is in use.
 //
 // The stream IS the connection at this level — there's exactly one
 // bidi byte channel per Conn. QUIC's multi-stream feature is
 // deliberately not used (see ProtocolHandler's doc comment); the
-// whole MTRoam protocol multiplexes over one stream via tagged-frame
+// whole mtRoam protocol multiplexes over one stream via tagged-frame
 // envelopes. That single-stream design is what lets TCP slot in:
 // plain TCP IS one byte stream, so a TCP net.Conn satisfies the same
 // shape directly.
 //
 // Why an interface here, instead of teaching ProtocolHandler about
-// both transports inline: the MTRoam wire format (control / stdin /
+// both transports inline: the mtRoam wire format (control / stdin /
 // stdout tagged frames) is already transport-agnostic — the framing
 // helpers in internal/protocol take plain io.Reader / io.Writer.
 // QUIC-specific behaviour (RTT stats, application-error-coded
@@ -52,7 +52,7 @@ type Conn interface {
 	// carrying the typed code so the client can map it back to a
 	// protocol error class. On plain TCP the code is ignored and
 	// the conn is closed immediately — typed errors over TCP are
-	// signalled inline via the MTRoam Goodbye / AttachAck.Err frame
+	// signalled inline via the mtRoam Goodbye / AttachAck.Err frame
 	// fields, which the framing layer writes BEFORE we get here.
 	CloseWithError(code uint64, msg string) error
 
@@ -62,7 +62,7 @@ type Conn interface {
 	// doesn't expose its TCP_INFO consistently across platforms.
 	// Wedge detection's RTT-baseline computation skips the QUIC
 	// path on TCP and falls back to a wall-clock RTT derived from
-	// MTRoam-level Ping / Pong frames.
+	// mtRoam-level Ping / Pong frames.
 	SmoothedRTT() (time.Duration, bool)
 
 	// CancelRead / CancelWrite abandon one half of the bidirectional
@@ -123,7 +123,7 @@ func (q *quicAdapter) CancelWrite(code uint64) {
 // a kernel-bypassing userspace TCP fd, not a UDP one — that's why we
 // can't run Apple's QUIC over it). WireGuard provides transport
 // security end-to-end inside the tailnet, so wire-level TLS isn't
-// needed; the MTRoam attach-token flow still authenticates the client
+// needed; the mtRoam attach-token flow still authenticates the client
 // to the daemon at the protocol layer.
 func NewTCPAdapter(conn net.Conn) Conn {
 	return &tcpAdapter{conn: conn}
@@ -143,7 +143,7 @@ func (t *tcpAdapter) SetReadDeadline(deadline time.Time) error {
 
 func (t *tcpAdapter) RemoteAddr() net.Addr { return t.conn.RemoteAddr() }
 
-// CloseWithError on TCP drops the code + msg. The MTRoam framing layer
+// CloseWithError on TCP drops the code + msg. The mtRoam framing layer
 // writes a typed Goodbye / AttachAck.Err frame on the wire BEFORE the
 // connection is closed, so the client still receives the structured
 // error class. The (code, msg) arguments here only mattered as

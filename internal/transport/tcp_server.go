@@ -37,7 +37,7 @@ const defaultPreAuthReadDeadline = 5 * time.Second
 //   between the iOS app's in-process tsnet node and the daemon's
 //   tsnet-routable address. Wire-level TLS would be redundant — the
 //   security model relies on WireGuard's same-or-stronger guarantees.
-//   The MTRoam attach-token flow continues to authenticate the client
+//   The mtRoam attach-token flow continues to authenticate the client
 //   to the daemon at the protocol layer (single-use, expiring token
 //   bootstrapped via SSH), so a compromised tsnet node can't replay
 //   into a different session.
@@ -215,7 +215,7 @@ func (s *TCPServer) Serve(ctx context.Context) error {
 		default:
 			// At capacity: refuse with a bare close. The peer
 			// observes a connection reset; clients retry. No
-			// typed protocol error here — the MTRoam protocol's
+			// typed protocol error here — the mtRoam protocol's
 			// auth handshake hasn't started yet.
 			s.logger.WarnContext(ctx, "tcp: dropping connection (max inflight reached)",
 				"remote", conn.RemoteAddr().String())

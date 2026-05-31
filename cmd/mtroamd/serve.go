@@ -51,7 +51,7 @@ func runServe(args []string) int {
 			"frequent disk I/O; longer = more scrollback lost on crash. The final snapshot on graceful shutdown "+
 			"runs regardless.")
 	tcpAddr := fs.String("mtroam-tcp-addr", "",
-		"OPTIONAL plain-TCP MTRoam listener address. Empty (default) keeps the daemon QUIC-only. "+
+		"OPTIONAL plain-TCP mtRoam listener address. Empty (default) keeps the daemon QUIC-only. "+
 			"Accepts a fully-specified host:port OR the sentinel \"tailnet:<port>\" which polls for a local "+
 			"Tailscale interface IP and binds there once available — the safe default for the iOS embedded-"+
 			"Tailscale path (the TCP transport runs unencrypted, trusting WireGuard for confidentiality, so "+

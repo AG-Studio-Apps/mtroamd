@@ -31,7 +31,7 @@ type UserUnitOptions struct {
 	// the default-path lookup in `cmd/mtroamd/connect.go`.
 	SocketPath string
 
-	// TCPAddr is the optional MTRoam-over-TCP listener bind address
+	// TCPAddr is the optional mtRoam-over-TCP listener bind address
 	// (used by iOS clients in embedded-Tailscale routing mode).
 	// Defaults to "tailnet:49920" — the daemon resolves the local
 	// tailnet IP at startup and binds there. The unencrypted TCP

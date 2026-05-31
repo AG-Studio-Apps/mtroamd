@@ -38,7 +38,7 @@ const DefaultQUICPort uint16 = 49820
 // genuine conflict.
 const FallbackPortSpan uint16 = 99
 
-// DefaultTCPPort is the preferred TCP port for the MTRoam-over-TCP
+// DefaultTCPPort is the preferred TCP port for the mtRoam-over-TCP
 // listener (used by iOS embedded-Tailscale clients). Sits above the
 // QUIC fallback range (DefaultQUICPort + FallbackPortSpan) so the
 // two can never collide. The TCP listener uses the same
@@ -204,7 +204,7 @@ func New(cfg Config) (*Server, error) {
 		//      MTU (PPPoE, IPv6 transition, etc.). 1200 is the QUIC v1
 		//      spec floor and works on every path the protocol supports.
 		// Trade-off: a few extra packets per connection vs. the default
-		// 1280. Worth it for portability — MTRoam's whole value prop is
+		// 1280. Worth it for portability — mtRoam's whole value prop is
 		// "works over flaky / tunnelled networks". PMTUD is still on so
 		// quic-go can grow the packet size if the path supports it.
 		InitialPacketSize: 1200,

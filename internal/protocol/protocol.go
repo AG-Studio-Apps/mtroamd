@@ -1,4 +1,4 @@
-// Package protocol implements the wire format for meshTerm's MTRoam
+// Package protocol implements the wire format for meshTerm's mtRoam
 // protocol over QUIC. See docs/mtroam-protocol.md.
 //
 // Three things live here:
@@ -483,7 +483,7 @@ func PeekType(body []byte) (string, error) {
 	return d.T, nil
 }
 
-// Frame type discriminators for the single-stream MTRoam protocol.
+// Frame type discriminators for the single-stream mtRoam protocol.
 // Every frame on the bidi stream is wrapped in a tagged envelope:
 //
 //	[u8 type][u32 BE length][body]

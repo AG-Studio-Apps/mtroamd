@@ -4,7 +4,7 @@
 // commands — list, kill, rename, new, session-info, status, restart,
 // update, uninstall), or opens a QUIC attach via attach.go's bootstrap
 // (the `attach` subcommand: SSH bootstrap → QUIC handshake → raw-mode
-// terminal pumps speaking the same MTRoam protocol the iOS MTRoamTransport
+// terminal pumps speaking the same mtRoam protocol the iOS MTRoamTransport
 // speaks).
 //
 // Authentication: standard SSH. Your `~/.ssh/config`, ssh-agent, and

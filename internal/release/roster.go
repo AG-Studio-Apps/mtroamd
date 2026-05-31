@@ -1,7 +1,7 @@
 package release
 
 // Trusted minisign public-key roster for self-update verification.
-// Mirrors `Sources/meshTerm/MTRoam/MTRoamInstallConstants.swift` in the
+// Mirrors `Sources/meshTerm/mtRoam/MTRoamInstallConstants.swift` in the
 // iOS app; both must contain the same keys so a release verified by
 // one verifies in the other.
 //

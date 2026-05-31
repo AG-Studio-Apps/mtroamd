@@ -1,4 +1,4 @@
-// Command mtroamd is the server-side helper for meshTerm's MTRoam mode.
+// Command mtroamd is the server-side helper for meshTerm's mtRoam mode.
 //
 // Five subcommands:
 //

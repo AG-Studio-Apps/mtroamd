@@ -32,7 +32,7 @@ func drainBriefly(s Conn, d time.Duration) {
 	_, _ = io.Copy(io.Discard, s)
 }
 
-// ProtocolHandler is the real Handler that drives the MTRoam protocol
+// ProtocolHandler is the real Handler that drives the mtRoam protocol
 // per docs/mtroam-protocol.md. One ProtocolHandler is shared across
 // all accepted connections — it holds no per-connection state, only
 // the session.Registry it dispatches into.
@@ -83,7 +83,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// Default close: 0 + empty (graceful). Pumps may overwrite if
 	// they hit a protocol violation. On QUIC this becomes the
 	// CONNECTION_CLOSE typed code; on TCP it's discarded — the
-	// MTRoam framing layer already wrote a typed Goodbye / AttachAck
+	// mtRoam framing layer already wrote a typed Goodbye / AttachAck
 	// frame on the wire before we land here.
 	closeErr := uint64(0)
 	closeMsg := ""

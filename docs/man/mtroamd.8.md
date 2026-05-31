@@ -16,7 +16,7 @@ mtroamd - persistent terminal session daemon over QUIC
 network drops, device sleep, and client reconnects. Sessions live as
 long as the daemon does; any number of clients (the iOS app
 **meshTerm**, the **mtroam**(1) laptop CLI, or anything else that
-implements the documented MTRoam protocol) can attach, detach, and
+implements the documented mtRoam protocol) can attach, detach, and
 re-attach without losing scrollback or shell state.
 
 A persistent shell on the host is reachable from multiple devices: a

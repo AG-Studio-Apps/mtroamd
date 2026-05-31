@@ -3,7 +3,7 @@
 // and atomically swapping the running binary in place.
 //
 // The minisign verifier here is functionally identical to the Swift
-// implementation in the iOS app (Sources/meshTerm/MTRoam/MinisignVerifier.swift):
+// implementation in the iOS app (Sources/meshTerm/mtRoam/MinisignVerifier.swift):
 // same trusted-key roster, same algorithm dispatch (Ed / ED), same
 // global-signature construction. Keeping the two in lockstep means a
 // release that verifies in iOS will also verify here, and vice versa.

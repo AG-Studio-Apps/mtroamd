@@ -162,7 +162,7 @@ jobs:
             echo
             echo "### Binaries"
             echo
-            echo "- \`mtroamd-*\` — the daemon. Runs on the host serving MTRoam sessions."
+            echo "- \`mtroamd-*\` — the daemon. Runs on the host serving mtRoam sessions."
             echo "- \`mtroam-*\` — the laptop CLI. Attaches to remote daemons over SSH+QUIC."
             echo
             echo "Verify with the published \`SHA256SUMS\` and (if available) its \`.minisig\`."

@@ -45,7 +45,7 @@ The protocol's security perimeter is the **iOS client → daemon** channel. Insi
 | Session ID | 16 bytes from CSPRNG | Go `crypto/rand` |
 | SSH bootstrap channel | SSHv2 with the user's chosen cipher suite | iOS: NIOSSH (Apple-maintained). Host: OpenSSH (or similar). |
 
-There is no application-layer cryptography in `mtroamd` or the iOS client's MTRoam path. We do not invoke AES, ChaCha20, HMAC, or any AEAD construction directly. All authenticated encryption is TLS 1.3 inside QUIC.
+There is no application-layer cryptography in `mtroamd` or the iOS client's mtRoam path. We do not invoke AES, ChaCha20, HMAC, or any AEAD construction directly. All authenticated encryption is TLS 1.3 inside QUIC.
 
 ## Threat actors and defenses
 
@@ -70,7 +70,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's MTRo
 | | |
 |---|---|
 | Capability | Intercepts SSH, replaces the `MTRM_QUIC` line with a different fingerprint |
-| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user — MTRoam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
+| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user — mtRoam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
 
 ### D. Replay of captured bootstrap line
 
@@ -100,7 +100,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's MTRo
 |---|---|
 | Capability | An attacker has shell as the user `mtroamd` runs as |
 | Outcome | Full read of session output buffers, ability to inject input, ability to read the daemon's TLS private key. |
-| Defense | None inside our perimeter. The same threat exists for `tmux`, `screen`, `sshd` on that host. MTRoam doesn't make this worse. |
+| Defense | None inside our perimeter. The same threat exists for `tmux`, `screen`, `sshd` on that host. mtRoam doesn't make this worse. |
 
 ### H. Compromised iOS device
 
@@ -108,7 +108,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's MTRo
 |---|---|
 | Capability | Attacker has access to the unlocked iOS device |
 | Outcome | Same as today's meshTerm: SSH credentials in Keychain, all sessions accessible. |
-| Defense | Outside MTRoam's threat model — same as the existing app. |
+| Defense | Outside mtRoam's threat model — same as the existing app. |
 
 ### I. Traffic analysis (typing inference)
 
@@ -188,7 +188,7 @@ The release process pins the Go version, flags `-trimpath -ldflags="-buildid="`,
 ## Known limitations
 
 1. **Traffic analysis** — see threat I above. Not addressed in v0.
-2. **No defence against a compromised host.** Same as `tmux`, `screen`, `sshd`. MTRoam is not a sandboxing tool.
+2. **No defence against a compromised host.** Same as `tmux`, `screen`, `sshd`. mtRoam is not a sandboxing tool.
 3. **Cert pinning is per-host, not per-user.** All users on a host share the daemon's cert. If multiple users connect to the same host and one is compromised, the cert fingerprint is shared.
 4. **No multi-factor for the bootstrap.** SSH's auth methods are the only gate. If you require additional factors, layer them at the SSH level (PAM, hardware tokens).
 5. **No explicit defence-in-depth for the attach token.** A 30-second TTL + single-use semantics + transport over an SSH-encrypted channel is the entire protection. We deliberately do not require an additional handshake step over QUIC because the SSH bootstrap is already authenticated.

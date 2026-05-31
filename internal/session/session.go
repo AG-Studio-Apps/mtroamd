@@ -980,7 +980,7 @@ type PTYKiller interface {
 }
 
 // Kill is the immediate-teardown sibling of Close. For sidecar-
-// backed PTYs (the v0.6+ MTRoam sessions) it sends die_now so the
+// backed PTYs (the v0.6+ mtRoam sessions) it sends die_now so the
 // child shell is SIGHUP'd within ~250 ms. For in-process PTYs it
 // falls back to Close (which already SIGHUPs synchronously).
 //
