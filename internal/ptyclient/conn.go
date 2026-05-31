@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 )
 
 // ErrSidecarGone is returned by Conn.Read when the sidecar's socket
@@ -201,7 +201,7 @@ func (c *Conn) TermiosState() (echo, canon, ok bool) {
 
 // Close shuts the socket; the sidecar sees EOF and enters its grace
 // timer (default 30 s) waiting for a daemon reconnect. Idempotent.
-// Use Kill() for `mtctl kill` semantics — that path sends die_now
+// Use Kill() for `mtroam kill` semantics — that path sends die_now
 // before closing.
 func (c *Conn) Close() error {
 	c.closeOnce.Do(func() {

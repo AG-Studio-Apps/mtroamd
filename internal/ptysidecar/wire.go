@@ -4,7 +4,7 @@
 // subprocess and forwards bytes to/from the daemon over a per-session
 // Unix-domain socket. The sidecar survives daemon restarts so live
 // processes (claude, vim, top, builds) keep running across
-// `systemctl restart meshtermd`.
+// `systemctl restart mtroamd`.
 //
 // The architecture is documented in docs/sidecar.md and the design is
 // summarised at the top of sidecar.go. This file defines the wire

@@ -2,10 +2,10 @@
 set -u
 echo "=== Test nohup install sequence ==="
 
-BINPATH="$HOME/.local/bin/meshtermd"
-STATEDIR="$HOME/.local/share/meshtermd"
-SOCKET="$STATEDIR/meshtermd.sock"
-LOGFILE="$STATEDIR/meshtermd.log"
+BINPATH="$HOME/.local/bin/mtroamd"
+STATEDIR="$HOME/.local/share/mtroamd"
+SOCKET="$STATEDIR/mtroamd.sock"
+LOGFILE="$STATEDIR/mtroamd.log"
 SCRIPT="$STATEDIR/start.sh"
 QUIC="0.0.0.0:49820"
 TCP="127.0.0.1:49920"
@@ -16,8 +16,8 @@ ls -la "$STATEDIR" 2>/dev/null || echo "   (state dir removed)"
 
 echo ""
 echo "2. Kill stale"
-pkill -u "$(id -u)" -f 'meshtermd serve' 2>/dev/null; sleep 1
-pkill -9 -u "$(id -u)" -f 'meshtermd serve' 2>/dev/null; sleep 1
+pkill -u "$(id -u)" -f 'mtroamd serve' 2>/dev/null; sleep 1
+pkill -9 -u "$(id -u)" -f 'mtroamd serve' 2>/dev/null; sleep 1
 echo "   done"
 
 echo ""
@@ -30,7 +30,7 @@ echo ""
 echo "4. Write start script"
 cat > "$SCRIPT" << 'EOF'
 #!/bin/sh
-BINPATH_PH serve --addr QUIC_PH --roam-tcp-addr TCP_PH --socket SOCKET_PH
+BINPATH_PH serve --addr QUIC_PH --mtroam-tcp-addr TCP_PH --socket SOCKET_PH
 EOF
 # Replace placeholders
 sed -i "s|BINPATH_PH|nohup $BINPATH|" "$SCRIPT"
@@ -49,7 +49,7 @@ sleep 3
 echo ""
 echo "6. Check results"
 echo "   Processes:"
-ps -u "$(id -u)" -o pid,args 2>/dev/null | grep meshtermd | grep -v grep || echo "   (none)"
+ps -u "$(id -u)" -o pid,args 2>/dev/null | grep mtroamd | grep -v grep || echo "   (none)"
 echo "   Status:"
 "$BINPATH" status --socket "$SOCKET" 2>&1
 echo "   Log:"

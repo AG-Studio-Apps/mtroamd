@@ -21,9 +21,9 @@ const (
 	// Overridable in tests via NewFetcher.
 	defaultGithubAPIBase = "https://api.github.com"
 	// ReleaseBase is where the actual asset bytes live.
-	defaultReleaseBase = "https://github.com/AG-Studio-Apps/meshtermd/releases/download"
+	defaultReleaseBase = "https://github.com/AG-Studio-Apps/mtroamd/releases/download"
 	// Owner/repo for the GitHub Releases API URL.
-	releaseRepoPath = "AG-Studio-Apps/meshtermd"
+	releaseRepoPath = "AG-Studio-Apps/mtroamd"
 )
 
 // Fetcher resolves and downloads release artifacts from GitHub.
@@ -59,7 +59,7 @@ func WithHTTPClient(c *http.Client) FetcherOption {
 }
 
 // WithAPIBase overrides the GitHub API host. The path stays
-// "/repos/AG-Studio-Apps/meshtermd/releases/...".
+// "/repos/AG-Studio-Apps/mtroamd/releases/...".
 func WithAPIBase(base string) FetcherOption {
 	return func(f *Fetcher) { f.apiBase = strings.TrimRight(base, "/") }
 }
@@ -85,7 +85,7 @@ func (f *Fetcher) LatestTag(ctx context.Context) (string, time.Time, error) {
 	// us so abuse can be traced back without rate-limiting all of
 	// GitHub's anonymous traffic.
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "meshtermd-self-update/1")
+	req.Header.Set("User-Agent", "mtroamd-self-update/1")
 	resp, err := f.http.Do(req)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("github api: %w", err)
@@ -115,7 +115,7 @@ func (f *Fetcher) LatestTag(ctx context.Context) (string, time.Time, error) {
 
 // AssetURL constructs the download URL for one asset of a release.
 // Filename should be one of the platform asset names (e.g.
-// "meshtermd-linux-amd64").
+// "mtroamd-linux-amd64").
 //
 // Both `tag` and `filename` are URL-path-escaped. Callers in the
 // update path validate `tag` against ValidateTag upstream, so the
@@ -136,7 +136,7 @@ func (f *Fetcher) FetchSmall(ctx context.Context, url string) ([]byte, error) {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Cache-Control", "no-store")
-	req.Header.Set("User-Agent", "meshtermd-self-update/1")
+	req.Header.Set("User-Agent", "mtroamd-self-update/1")
 	resp, err := f.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", url, err)
@@ -167,7 +167,7 @@ func (f *Fetcher) FetchBinary(ctx context.Context, url, destDir string) (string,
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Cache-Control", "no-store")
-	req.Header.Set("User-Agent", "meshtermd-self-update/1")
+	req.Header.Set("User-Agent", "mtroamd-self-update/1")
 	resp, err := f.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch %s: %w", url, err)
@@ -176,11 +176,11 @@ func (f *Fetcher) FetchBinary(ctx context.Context, url, destDir string) (string,
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("fetch %s: HTTP %d", url, resp.StatusCode)
 	}
-	// 100 MiB ceiling — far above any plausible meshtermd binary
+	// 100 MiB ceiling — far above any plausible mtroamd binary
 	// size but a guard against runaway responses.
 	const maxBinary = 100 << 20
 
-	f1, err := os.CreateTemp(destDir, "meshtermd-update-*")
+	f1, err := os.CreateTemp(destDir, "mtroamd-update-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp: %w", err)
 	}
@@ -210,7 +210,7 @@ func (f *Fetcher) FetchBinary(ctx context.Context, url, destDir string) (string,
 }
 
 // AssetFilename returns the release-asset filename for the current
-// host's GOOS/GOARCH combination (e.g. "meshtermd-linux-amd64").
+// host's GOOS/GOARCH combination (e.g. "mtroamd-linux-amd64").
 // Returns an error for platforms we don't ship binaries for.
 func AssetFilename() (string, error) {
 	osPart := runtime.GOOS
@@ -219,21 +219,21 @@ func AssetFilename() (string, error) {
 	case "linux":
 		switch archPart {
 		case "amd64", "arm64":
-			return fmt.Sprintf("meshtermd-%s-%s", osPart, archPart), nil
+			return fmt.Sprintf("mtroamd-%s-%s", osPart, archPart), nil
 		case "arm":
 			// We only ship armv7 (GOARCH=arm + GOARM=7). Lower
 			// ARM variants aren't supported.
-			return "meshtermd-linux-armv7", nil
+			return "mtroamd-linux-armv7", nil
 		}
 	case "darwin":
 		switch archPart {
 		case "amd64", "arm64":
-			return fmt.Sprintf("meshtermd-%s-%s", osPart, archPart), nil
+			return fmt.Sprintf("mtroamd-%s-%s", osPart, archPart), nil
 		}
 	case "freebsd":
 		switch archPart {
 		case "amd64", "arm64":
-			return fmt.Sprintf("meshtermd-%s-%s", osPart, archPart), nil
+			return fmt.Sprintf("mtroamd-%s-%s", osPart, archPart), nil
 		}
 	}
 	return "", fmt.Errorf("no release asset for %s/%s", osPart, archPart)
@@ -286,13 +286,13 @@ func condStr(cond bool, ifTrue, ifFalse string) string {
 func JoinBin() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".", "meshtermd")
+		return filepath.Join(".", "mtroamd")
 	}
-	return filepath.Join(home, ".local", "bin", "meshtermd")
+	return filepath.Join(home, ".local", "bin", "mtroamd")
 }
 
 // RunningBinaryPath returns the absolute, symlink-resolved path of the
-// currently executing meshtermd binary. Falls back to JoinBin() if the
+// currently executing mtroamd binary. Falls back to JoinBin() if the
 // OS can't report it (never observed in practice).
 func RunningBinaryPath() string {
 	exe, err := os.Executable()
@@ -308,7 +308,7 @@ func RunningBinaryPath() string {
 // IsPackageManaged reports whether the running binary lives OUTSIDE the
 // user's conventional ~/.local/bin install dir — i.e. it was placed by a
 // system package manager (apt/dpkg, AUR, Homebrew) rather than the iOS app
-// or `meshtermd update`. The in-app self-update + uninstall paths refuse to
+// or `mtroamd update`. The in-app self-update + uninstall paths refuse to
 // act on such installs: the package manager owns the binary's lifecycle, and
 // writing to (or rm-ing) a root-owned /usr/bin path would either fail with
 // EPERM or silently drop a shadow copy in ~/.local/bin that diverges from
@@ -318,7 +318,7 @@ func IsPackageManaged() bool {
 	if err != nil {
 		// Can't resolve the user's install dir — fail open (assume
 		// self-managed) so we never wrongly block update/uninstall for a
-		// normal ~/.local/bin install. (JoinBin's "./meshtermd" fallback
+		// normal ~/.local/bin install. (JoinBin's "./mtroamd" fallback
 		// would otherwise mis-compare and report package-managed.)
 		return false
 	}
@@ -335,10 +335,10 @@ func IsPackageManaged() bool {
 
 // PackageManagedHint is the refusal message shown when an in-app lifecycle
 // command is run against a package-managed install. aptCmd is the suggested
-// package-manager command for this action (e.g. "sudo apt upgrade meshtermd").
+// package-manager command for this action (e.g. "sudo apt upgrade mtroamd").
 func PackageManagedHint(aptCmd string) string {
 	return fmt.Sprintf(
-		"meshtermd was installed by a package manager (running from %s); "+
+		"mtroamd was installed by a package manager (running from %s); "+
 			"manage it with your package manager — e.g. `%s`",
 		RunningBinaryPath(), aptCmd)
 }

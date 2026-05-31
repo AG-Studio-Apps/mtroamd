@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // defaultSavePrompt is the natural-language instruction the daemon

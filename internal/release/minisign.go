@@ -1,9 +1,9 @@
-// Package release implements meshtermd's self-update path: fetching
+// Package release implements mtroamd's self-update path: fetching
 // signed binaries from GitHub Releases, verifying their integrity,
 // and atomically swapping the running binary in place.
 //
 // The minisign verifier here is functionally identical to the Swift
-// implementation in the iOS app (Sources/meshTerm/Roam/MinisignVerifier.swift):
+// implementation in the iOS app (Sources/meshTerm/MTRoam/MinisignVerifier.swift):
 // same trusted-key roster, same algorithm dispatch (Ed / ED), same
 // global-signature construction. Keeping the two in lockstep means a
 // release that verifies in iOS will also verify here, and vice versa.
@@ -69,7 +69,7 @@ type VerifyResult struct {
 	// used" as a soft warning.
 	KeyIndex int
 	// TrustedComment is the text the signer attached, e.g.
-	// "meshtermd v0.1.1" — useful for audit logs.
+	// "mtroamd v0.1.1" — useful for audit logs.
 	TrustedComment string
 }
 

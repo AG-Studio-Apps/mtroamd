@@ -13,7 +13,7 @@ import (
 func TestALPNMatchesSpec(t *testing.T) {
 	t.Parallel()
 	if ALPN != "meshterm/0" {
-		t.Errorf("ALPN drifted: %q. Wire-format change requires bumping ALPN epoch and updating docs/roam-protocol.md.", ALPN)
+		t.Errorf("ALPN drifted: %q. Wire-format change requires bumping ALPN epoch and updating docs/mtroam-protocol.md.", ALPN)
 	}
 }
 
@@ -255,7 +255,7 @@ func TestErrorCodeConstants(t *testing.T) {
 		int(ErrStreamWrongOrder) != 1005 ||
 		int(ErrOversizedDatagram) != 1006 ||
 		int(ErrInternal) != 2000 {
-		t.Errorf("error code drifted from spec; constants must match docs/roam-protocol.md § 13: %v", checks)
+		t.Errorf("error code drifted from spec; constants must match docs/mtroam-protocol.md § 13: %v", checks)
 	}
 }
 

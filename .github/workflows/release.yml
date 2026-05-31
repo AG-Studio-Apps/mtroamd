@@ -31,8 +31,8 @@ jobs:
       # --- Debian packaging (nfpm) -------------------------------------------
       # Builds one .deb per arch from the binaries above. Kept entirely
       # separate from SHA256SUMS so the iOS verify path is byte-for-byte
-      # unchanged; the .deb naming (meshtermd_<ver>_<arch>.deb, underscores)
-      # also can't be matched by the `meshtermd-*` checksum glob below.
+      # unchanged; the .deb naming (mtroamd_<ver>_<arch>.deb, underscores)
+      # also can't be matched by the `mtroamd-*` checksum glob below.
       - name: Set up nfpm
         run: |
           sudo apt-get install -y gettext-base   # envsubst (nfpm doesn't expand env in contents globs)
@@ -45,13 +45,13 @@ jobs:
         run: |
           # nfpm's semver schema converts a -rc/-dev prerelease tag into a
           # ~ deb version (sorts below the matching stable release).
-          export MESHTERMD_VERSION="${TAG#v}"
+          export MTROAMD_VERSION="${TAG#v}"
           # The systemd --user unit is a static render — generate once with the
           # amd64 binary and reuse it for every arch's deb.
-          ./dist/meshtermd-linux-amd64 unit print --bin=/usr/bin/meshtermd > dist/meshtermd.service
+          ./dist/mtroamd-linux-amd64 unit print --bin=/usr/bin/mtroamd > dist/mtroamd.service
           for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
             set -- $triple
-            export MESHTERMD_GOARCH="$1" MESHTERMD_PKG_ARCH="$2"
+            export MTROAMD_GOARCH="$1" MTROAMD_PKG_ARCH="$2"
             envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.deb.$2.yaml"
             nfpm package -f "dist/nfpm.deb.$2.yaml" -p deb -t dist/
           done
@@ -64,10 +64,10 @@ jobs:
           # Same nfpm config + binaries as the .deb step; rpm-native arch names
           # + scriptlets (via overrides.rpm in nfpm.yaml). Fedora dropped 32-bit
           # ARM, so x86_64 + aarch64 only.
-          export MESHTERMD_VERSION="${TAG#v}"
+          export MTROAMD_VERSION="${TAG#v}"
           for pair in "amd64 x86_64" "arm64 aarch64"; do
             set -- $pair
-            export MESHTERMD_GOARCH="$1" MESHTERMD_PKG_ARCH="$2"
+            export MTROAMD_GOARCH="$1" MTROAMD_PKG_ARCH="$2"
             envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.rpm.$2.yaml"
             nfpm package -f "dist/nfpm.rpm.$2.yaml" -p rpm -t dist/
           done
@@ -76,12 +76,12 @@ jobs:
       - name: Generate SHA256SUMS
         working-directory: dist
         run: |
-          # Hash both meshtermd-* (the daemon) and mtctl-* (the laptop
+          # Hash both mtroamd-* (the daemon) and mtroam-* (the laptop
           # CLI). The single signed SHA256SUMS covers everything, so
-          # iOS's verify path picks up mtctl integrity for free once
+          # iOS's verify path picks up mtroam integrity for free once
           # it learns the new asset filenames. The .deb files are
           # intentionally NOT included here (see SHA256SUMS-deb).
-          sha256sum meshtermd-* mtctl-* > SHA256SUMS
+          sha256sum mtroamd-* mtroam-* > SHA256SUMS
           cat SHA256SUMS
 
       - name: Generate SHA256SUMS-deb
@@ -118,14 +118,14 @@ jobs:
           # the password.
           echo "$MINISIGN_PASSWORD" | minisign -S \
             -s /tmp/minisign.key \
-            -t "meshtermd ${GITHUB_REF_NAME}" \
+            -t "mtroamd ${GITHUB_REF_NAME}" \
             -m SHA256SUMS
           # Sign the Debian-package checksums too (separate file → the
           # iOS-trusted SHA256SUMS.minisig is unaffected).
           if [ -f SHA256SUMS-deb ]; then
             echo "$MINISIGN_PASSWORD" | minisign -S \
               -s /tmp/minisign.key \
-              -t "meshtermd ${GITHUB_REF_NAME} (deb)" \
+              -t "mtroamd ${GITHUB_REF_NAME} (deb)" \
               -m SHA256SUMS-deb
           fi
           rm /tmp/minisign.key
@@ -155,15 +155,15 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           {
-            echo "## meshtermd ${tag}"
+            echo "## mtroamd ${tag}"
             echo
             echo "Server-side daemon and laptop CLI for the meshTerm iOS app."
-            echo "See https://github.com/AG-Studio-Apps/meshtermd for the wire spec and security notes."
+            echo "See https://github.com/AG-Studio-Apps/mtroamd for the wire spec and security notes."
             echo
             echo "### Binaries"
             echo
-            echo "- \`meshtermd-*\` — the daemon. Runs on the host serving Roam sessions."
-            echo "- \`mtctl-*\` — the laptop CLI. Attaches to remote daemons over SSH+QUIC."
+            echo "- \`mtroamd-*\` — the daemon. Runs on the host serving MTRoam sessions."
+            echo "- \`mtroam-*\` — the laptop CLI. Attaches to remote daemons over SSH+QUIC."
             echo
             echo "Verify with the published \`SHA256SUMS\` and (if available) its \`.minisig\`."
             echo "The minisign public key is in \`docs/release-public-key.txt\` of this repo."
@@ -184,22 +184,22 @@ jobs:
           # refuses) — keeps the dev channel out of the production update path.
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
-            dist/meshtermd-*
-            dist/mtctl-*
+            dist/mtroamd-*
+            dist/mtroam-*
             dist/*.deb
             dist/*.rpm
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
             dist/SHA256SUMS-deb
             dist/SHA256SUMS-deb.minisig
-            dist/man/meshtermd.8
-            dist/man/mtctl.1
-            dist/completions/mtctl.bash
-            dist/completions/mtctl.zsh
-            dist/completions/mtctl.fish
-            dist/completions/meshtermd.bash
-            dist/completions/meshtermd.zsh
-            dist/completions/meshtermd.fish
+            dist/man/mtroamd.8
+            dist/man/mtroam.1
+            dist/completions/mtroam.bash
+            dist/completions/mtroam.zsh
+            dist/completions/mtroam.fish
+            dist/completions/mtroamd.bash
+            dist/completions/mtroamd.zsh
+            dist/completions/mtroamd.fish
           fail_on_unmatched_files: false  # minisig + deb sigs are optional
 
   apt-repo:
@@ -352,7 +352,7 @@ jobs:
           done
           for d in rpmrepo/rpm/"$SUITE"/*/; do createrepo_c "$d"; done
           # ASCII-armored key for dnf's gpgkey=, plus keep Jekyll off.
-          cp docs/apt-signing-key.asc rpmrepo/meshtermd-archive-keyring.asc
+          cp docs/apt-signing-key.asc rpmrepo/mtroamd-archive-keyring.asc
           touch rpmrepo/.nojekyll
 
           cd rpmrepo

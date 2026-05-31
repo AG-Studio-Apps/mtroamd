@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 )
 
 // pipePair returns a Conn under test plus the "sidecar" end of a

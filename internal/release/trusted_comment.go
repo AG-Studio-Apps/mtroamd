@@ -7,11 +7,11 @@ import (
 
 // trustedCommentPrefix is the literal first token the release workflow
 // writes into every signed SHA256SUMS' trusted comment via
-// `minisign -t "meshtermd <tag>"` (see .github/workflows/release.yml).
+// `minisign -t "mtroamd <tag>"` (see .github/workflows/release.yml).
 // Pinning it here lets `EnforceTrustedComment` reject any comment that
 // doesn't conform — including a same-key signature whose comment names
 // a different repo or no tag at all.
-const trustedCommentPrefix = "meshtermd "
+const trustedCommentPrefix = "mtroamd "
 
 // EnforceTrustedComment fails when the minisign trusted comment from a
 // verified SHA256SUMS.minisig does not name the same tag the caller
@@ -23,8 +23,8 @@ const trustedCommentPrefix = "meshtermd "
 // version comparison sees a newer target, and the update path
 // installs an older (potentially vulnerable) binary.
 //
-// The signing pipeline always sets trusted comment to "meshtermd <tag>"
-// (.github/workflows/release.yml :: minisign -t "meshtermd
+// The signing pipeline always sets trusted comment to "mtroamd <tag>"
+// (.github/workflows/release.yml :: minisign -t "mtroamd
 // $GITHUB_REF_NAME"). We canonicalise both sides via strings.TrimSpace
 // before comparison to absorb any trailing whitespace that crept in.
 //

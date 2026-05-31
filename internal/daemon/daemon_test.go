@@ -21,10 +21,10 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/quic-go/quic-go"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/cert"
-	"github.com/AG-Studio-Apps/meshtermd/internal/ipc"
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/cert"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // shortTempDir is t.TempDir()'s short cousin: t.TempDir encodes the
@@ -113,7 +113,7 @@ func startDaemon(t *testing.T) (*Daemon, *ipc.Client, func()) {
 	if err := os.Chmod(tmp, 0o700); err != nil {
 		t.Fatalf("chmod tempdir: %v", err)
 	}
-	socket := filepath.Join(tmp, "meshtermd.sock")
+	socket := filepath.Join(tmp, "mtroamd.sock")
 
 	d, err := New(Config{
 		QUICAddr:      "127.0.0.1:0",
@@ -159,7 +159,7 @@ func startDaemon(t *testing.T) (*Daemon, *ipc.Client, func()) {
 	}
 	// 5 s IPC timeout. Spawning a sidecar in tests means forking the
 	// (large) test binary and dialing its unix socket with backoff —
-	// the 1 s budget used by mtctl in production isn't safe under
+	// the 1 s budget used by mtroam in production isn't safe under
 	// `go test` on cold caches.
 	return d, ipc.NewClient(socket, 5*time.Second), cleanup
 }
@@ -181,7 +181,7 @@ func TestDaemonPersistenceRoundTrip(t *testing.T) {
 	if err := os.Chmod(tmp, 0o700); err != nil {
 		t.Fatalf("chmod tempdir: %v", err)
 	}
-	socket := filepath.Join(tmp, "meshtermd.sock")
+	socket := filepath.Join(tmp, "mtroamd.sock")
 
 	d1, err := New(Config{
 		QUICAddr:                 "127.0.0.1:0",
@@ -304,7 +304,7 @@ func waitForSocket(t *testing.T, path string) {
 }
 
 // TestDaemonSessionBufferBytesConfigFlowsThrough verifies that
-// Config.SessionBufferBytes from `meshtermd serve --session-buffer-bytes N`
+// Config.SessionBufferBytes from `mtroamd serve --session-buffer-bytes N`
 // actually reaches the per-session RingBuffer that spawnSession creates.
 // Without this, the flag would silently default to 4 MiB and operators
 // wouldn't see their `--session-buffer-bytes 16777216` take effect.
@@ -320,7 +320,7 @@ func TestDaemonSessionBufferBytesConfigFlowsThrough(t *testing.T) {
 	if err := os.Chmod(tmp, 0o700); err != nil {
 		t.Fatalf("chmod tempdir: %v", err)
 	}
-	socket := filepath.Join(tmp, "meshtermd.sock")
+	socket := filepath.Join(tmp, "mtroamd.sock")
 
 	const want = 8 * 1024 * 1024 // 8 MiB; non-default so a regression to the 4 MiB const fails this test.
 

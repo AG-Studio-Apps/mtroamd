@@ -195,8 +195,8 @@ func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 }
 
 // ErrDaemonNotRunning indicates the unix socket couldn't be reached.
-// `meshtermd connect` translates this into exit code 2 per
-// docs/roam-protocol.md § 4.4.
+// `mtroamd connect` translates this into exit code 2 per
+// docs/mtroam-protocol.md § 4.4.
 var ErrDaemonNotRunning = errors.New("ipc: daemon not running")
 
 func classifyDialErr(err error) error {

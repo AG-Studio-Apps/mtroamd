@@ -613,11 +613,11 @@ func TestWedgeWatcher_SuppressUntil_BlocksSilentDeadline(t *testing.T) {
 }
 
 func TestWedgeWatcher_CaptureBytes_IncludedOnFireWhenEnvSet(t *testing.T) {
-	// MESHTERMD_WEDGE_CAPTURE_BYTES=1 → JSONL record carries a
+	// MTROAMD_WEDGE_CAPTURE_BYTES=1 → JSONL record carries a
 	// base64-encoded slice of post-resize bytes. Used for detection-
 	// refinement collection. Default (env unset) leaves the field
 	// empty so the JSONL stays de-identified.
-	t.Setenv("MESHTERMD_WEDGE_CAPTURE_BYTES", "1")
+	t.Setenv("MTROAMD_WEDGE_CAPTURE_BYTES", "1")
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "wedge-events.jsonl")
 	w := newWedgeWatcher()
@@ -645,7 +645,7 @@ func TestWedgeWatcher_CaptureBytes_IncludedOnFireWhenEnvSet(t *testing.T) {
 
 func TestWedgeWatcher_CaptureBytes_OmittedByDefault(t *testing.T) {
 	// Default deployment (env unset) emits no bytes.
-	t.Setenv("MESHTERMD_WEDGE_CAPTURE_BYTES", "")
+	t.Setenv("MTROAMD_WEDGE_CAPTURE_BYTES", "")
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "wedge-events.jsonl")
 	w := newWedgeWatcher()

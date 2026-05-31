@@ -8,7 +8,7 @@ import (
 // DefaultRingBytes is the default capacity of the per-sidecar drop-
 // oldest output ring. 256 KiB covers ~30 seconds of typical shell
 // chatter or several minutes of idle prompt; bumped via the daemon's
-// --sidecar-ring-bytes (env MESHTERMD_SIDECAR_RING_BYTES) for output-
+// --sidecar-ring-bytes (env MTROAMD_SIDECAR_RING_BYTES) for output-
 // heavy sessions.
 const DefaultRingBytes = 256 * 1024
 

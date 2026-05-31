@@ -1,5 +1,5 @@
-# reprepro distributions for the meshtermd apt repo (served from gh-pages at
-# https://ag-studio-apps.github.io/meshtermd). Two suites share one repo + one
+# reprepro distributions for the mtroamd apt repo (served from gh-pages at
+# https://ag-studio-apps.github.io/mtroamd). Two suites share one repo + one
 # signing key:
 #
 #   stable — production. Only main-ancestor, clean-semver tags publish here.
@@ -12,20 +12,20 @@
 # exactly one: the APT_GPG_KEY secret), so no fingerprint is hardcoded here.
 # This file is the canonical template; CI copies it into the gh-pages worktree.
 
-Origin: meshtermd
-Label: meshtermd
+Origin: mtroamd
+Label: mtroamd
 Codename: stable
 Suite: stable
 Components: main
 Architectures: amd64 arm64 armhf
-Description: meshtermd apt repository (stable — production, matches the App Store app)
+Description: mtroamd apt repository (stable — production, matches the App Store app)
 SignWith: yes
 
-Origin: meshtermd
-Label: meshtermd
+Origin: mtroamd
+Label: mtroamd
 Codename: dev
 Suite: dev
 Components: main
 Architectures: amd64 arm64 armhf
-Description: meshtermd apt repository (DEVELOPMENT — unstable, may break your system)
+Description: mtroamd apt repository (DEVELOPMENT — unstable, may break your system)
 SignWith: yes

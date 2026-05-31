@@ -18,10 +18,10 @@ import (
 // Off by default because the captured bytes can include rendered
 // terminal content — application UI, chat messages, command output —
 // and the JSONL is otherwise de-identified-by-construction. Set
-// `MESHTERMD_WEDGE_CAPTURE_BYTES=1` in the daemon's env to enable for
+// `MTROAMD_WEDGE_CAPTURE_BYTES=1` in the daemon's env to enable for
 // detection-refinement data collection. Sample the JSONL contents
 // before sharing externally if the env var is on.
-const wedgeCaptureBytesEnvVar = "MESHTERMD_WEDGE_CAPTURE_BYTES"
+const wedgeCaptureBytesEnvVar = "MTROAMD_WEDGE_CAPTURE_BYTES"
 
 // wedgeCaptureBufferCap caps the rolling buffer of post-resize bytes
 // the watcher retains for inclusion in a JSONL record on a fire.
@@ -139,7 +139,7 @@ type wedgeWatcher struct {
 	// time.Now().Before(suppressUntil).
 	suppressUntil time.Time
 
-	// captureBytes mirrors the MESHTERMD_WEDGE_CAPTURE_BYTES env at
+	// captureBytes mirrors the MTROAMD_WEDGE_CAPTURE_BYTES env at
 	// construction time so the hot ObserveBytes path doesn't pay the
 	// cost of an os.Getenv every chunk. When true, captureBuffer
 	// accumulates post-ArmResize bytes (capped at wedgeCaptureBufferCap)
@@ -600,7 +600,7 @@ func (w *wedgeWatcher) emit(rec wedgeEvent, logPath string) {
 			// daemon-private artefact (cert key, scrollback.bin,
 			// meta.cbor, sidecar.sock, ipc socket, pidfile) which
 			// all live at 0o600 inside the 0o700 state dir. The
-			// JSONL is read only by `meshtermd wedge-report` running
+			// JSONL is read only by `mtroamd wedge-report` running
 			// as the daemon uid; nothing else should ever open it.
 			// Existing files keep their pre-existing mode (this only
 			// affects first-write).
@@ -675,7 +675,7 @@ type wedgeEvent struct {
 
 	// RecentOutputB64 is the base64-encoded post-resize byte stream
 	// captured up to the moment of firing, when the watcher was
-	// constructed with MESHTERMD_WEDGE_CAPTURE_BYTES=1. Used for
+	// constructed with MTROAMD_WEDGE_CAPTURE_BYTES=1. Used for
 	// detection-refinement analysis — a real wedge looks like a
 	// single ~N-row CUD burst, scrollback replay looks like rapid
 	// runs of CUDs interleaved with cell content, healthy multi-

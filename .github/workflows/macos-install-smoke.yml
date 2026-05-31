@@ -3,13 +3,13 @@
 # recurring guard — workflow_dispatch only.
 #
 # Validates:
-#   - meshtermd-darwin-arm64 download + minisign signature check + sha256 hash
-#   - Binary installs into ~/.local/bin and executes (`meshtermd version`)
-#   - LaunchAgent plist generated correctly via `meshtermd unit print`
+#   - mtroamd-darwin-arm64 download + minisign signature check + sha256 hash
+#   - Binary installs into ~/.local/bin and executes (`mtroamd version`)
+#   - LaunchAgent plist generated correctly via `mtroamd unit print`
 #   - launchctl bootstrap works in CI (may not — GH runners lack a full
 #     GUI session; we report rather than fail on this step)
-#   - Manual `meshtermd serve` fallback path works
-#   - `meshtermd status` and `mtctl list` round-trip via the IPC socket
+#   - Manual `mtroamd serve` fallback path works
+#   - `mtroamd status` and `mtroam list` round-trip via the IPC socket
 #
 # Does NOT test the iOS-driven install flow — that requires a real
 # OpenSSH endpoint meshTerm can reach. tmate's custom bastion was a
@@ -33,7 +33,7 @@ jobs:
       - name: Install minisign
         run: brew install minisign
 
-      - name: Stage 1 — probe (mirrors RoamInstaller .probing)
+      - name: Stage 1 — probe (mirrors MTRoamInstaller .probing)
         run: |
           echo "OS:        $(uname -s)"
           echo "Arch:      $(uname -m)"
@@ -47,8 +47,8 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -eux
-          ASSET=meshtermd-darwin-arm64
-          BASE="https://github.com/AG-Studio-Apps/meshtermd/releases/download/$TAG"
+          ASSET=mtroamd-darwin-arm64
+          BASE="https://github.com/AG-Studio-Apps/mtroamd/releases/download/$TAG"
           curl -fL "$BASE/SHA256SUMS"          -o /tmp/SHA256SUMS
           curl -fL "$BASE/SHA256SUMS.minisig"  -o /tmp/SHA256SUMS.minisig
           curl -fL "$BASE/$ASSET"              -o "/tmp/$ASSET"
@@ -57,25 +57,25 @@ jobs:
       - name: Stage 3 — verify minisign signature + sha256 hash
         run: |
           set -eux
-          curl -fsSL https://raw.githubusercontent.com/AG-Studio-Apps/meshtermd/main/docs/release-public-key.txt -o /tmp/meshtermd-pub.txt
-          minisign -V -p /tmp/meshtermd-pub.txt -m /tmp/SHA256SUMS
-          (cd /tmp && shasum -a 256 -c SHA256SUMS --ignore-missing 2>&1 | grep meshtermd-darwin-arm64 | grep -v FAILED)
+          curl -fsSL https://raw.githubusercontent.com/AG-Studio-Apps/mtroamd/main/docs/release-public-key.txt -o /tmp/mtroamd-pub.txt
+          minisign -V -p /tmp/mtroamd-pub.txt -m /tmp/SHA256SUMS
+          (cd /tmp && shasum -a 256 -c SHA256SUMS --ignore-missing 2>&1 | grep mtroamd-darwin-arm64 | grep -v FAILED)
 
       - name: Stage 4 — install binary into ~/.local/bin
         run: |
           set -eux
           mkdir -p ~/.local/bin
-          mv /tmp/meshtermd-darwin-arm64 ~/.local/bin/meshtermd
-          chmod 755 ~/.local/bin/meshtermd
+          mv /tmp/mtroamd-darwin-arm64 ~/.local/bin/mtroamd
+          chmod 755 ~/.local/bin/mtroamd
           # GitHub-hosted runners don't apply the quarantine xattr to
           # things downloaded via curl, but strip it defensively in case
           # the runner image changes that. Real users via the iOS flow
           # do the same step (or right-click → Open).
-          xattr -d com.apple.quarantine ~/.local/bin/meshtermd 2>/dev/null || true
-          ~/.local/bin/meshtermd version
+          xattr -d com.apple.quarantine ~/.local/bin/mtroamd 2>/dev/null || true
+          ~/.local/bin/mtroamd version
 
       - name: Stage 5 — generate + install LaunchAgent
-        # `meshtermd unit print` is the canonical plist source. We
+        # `mtroamd unit print` is the canonical plist source. We
         # always succeed on the file write; we only "soft-fail" on the
         # launchctl bootstrap step because macos-14 GH runners do not
         # have a full GUI session, which is what `gui/<uid>` bootstrap
@@ -85,15 +85,15 @@ jobs:
         run: |
           set -eu
           mkdir -p ~/Library/LaunchAgents
-          PLIST=~/Library/LaunchAgents/com.agstudio.meshtermd.plist
-          ~/.local/bin/meshtermd unit print > "$PLIST"
+          PLIST=~/Library/LaunchAgents/com.agstudio.mtroamd.plist
+          ~/.local/bin/mtroamd unit print > "$PLIST"
           echo "--- generated plist ---"
           cat "$PLIST"
           echo "--- attempting launchctl bootstrap (expected to fail in CI) ---"
           if launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>&1; then
             echo "launchctl-bootstrap: SUCCESS"
             sleep 2
-            launchctl print "gui/$(id -u)/com.agstudio.meshtermd" 2>&1 | head -15 || true
+            launchctl print "gui/$(id -u)/com.agstudio.mtroamd" 2>&1 | head -15 || true
           else
             echo "launchctl-bootstrap: EXPECTED FAILURE in CI (no GUI session)"
           fi
@@ -102,35 +102,35 @@ jobs:
         # If launchctl bootstrap didn't take, spawn the daemon directly
         # so we can verify the binary + IPC layer work. Real users on
         # macOS get launchd handling; this fallback exists in
-        # RoamInstaller.swift too for restricted hosts.
+        # MTRoamInstaller.swift too for restricted hosts.
         run: |
           set -eu
-          LOG_PATH="$HOME/.local/share/meshtermd/meshtermd.log"
-          if ! ~/.local/bin/meshtermd status >/dev/null 2>&1; then
+          LOG_PATH="$HOME/.local/share/mtroamd/mtroamd.log"
+          if ! ~/.local/bin/mtroamd status >/dev/null 2>&1; then
             echo "launchd path not active — spawning manually"
             mkdir -p "$(dirname "$LOG_PATH")"
             chmod 700 "$(dirname "$LOG_PATH")"
-            nohup ~/.local/bin/meshtermd serve --addr=127.0.0.1:0 >>"$LOG_PATH" 2>&1 &
+            nohup ~/.local/bin/mtroamd serve --addr=127.0.0.1:0 >>"$LOG_PATH" 2>&1 &
             sleep 3
           fi
-          echo "--- meshtermd version ---"
-          ~/.local/bin/meshtermd version
-          echo "--- meshtermd status ---"
-          if ! ~/.local/bin/meshtermd status; then
-            echo "--- meshtermd serve log ---"
+          echo "--- mtroamd version ---"
+          ~/.local/bin/mtroamd version
+          echo "--- mtroamd status ---"
+          if ! ~/.local/bin/mtroamd status; then
+            echo "--- mtroamd serve log ---"
             cat "$LOG_PATH" || true
             exit 1
           fi
-          echo "--- meshtermd list --json ---"
-          ~/.local/bin/meshtermd list --json
+          echo "--- mtroamd list --json ---"
+          ~/.local/bin/mtroamd list --json
 
       - name: Tear down
         if: always()
         run: |
           # Best-effort cleanup so a re-run starts clean if we ever
           # cache state between runs (not currently, but defensive).
-          launchctl bootout "gui/$(id -u)/com.agstudio.meshtermd" 2>/dev/null || true
-          pkill -f 'meshtermd serve' 2>/dev/null || true
-          rm -f ~/Library/LaunchAgents/com.agstudio.meshtermd.plist
-          rm -f ~/.local/bin/meshtermd
-          rm -rf ~/.local/share/meshtermd
+          launchctl bootout "gui/$(id -u)/com.agstudio.mtroamd" 2>/dev/null || true
+          pkill -f 'mtroamd serve' 2>/dev/null || true
+          rm -f ~/Library/LaunchAgents/com.agstudio.mtroamd.plist
+          rm -f ~/.local/bin/mtroamd
+          rm -rf ~/.local/share/mtroamd

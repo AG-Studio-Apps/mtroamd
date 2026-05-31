@@ -1,0 +1,98 @@
+package main
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// killOrphanDaemon SIGTERMs any `mtroamd serve` owned by the
+// current uid that isn't tracked by the active svcmgr. Catches the
+// case where someone ran `mtroamd serve &` manually or where a
+// previous install fell back to nohup and the supervisor handover
+// left a free-running process.
+//
+// Strategy in priority order:
+//  1. PID file at $dir/mtroamd.pid (written by `serve`). Exact
+//     match, no collateral damage. Most common path on a
+//     normally-installed host.
+//  2. `pkill -u <uid> -x mtroamd` — exact basename match.
+//     Catches a daemon started by a binary at a different path
+//     than what we know about (e.g. /tmp/meshterm). Still tight
+//     enough that a user's vim doesn't get hit.
+//
+// We deliberately do NOT use `pkill -f 'mtroamd serve'` — that
+// substring-matches against the full command line and catches text
+// editors, shells with that string in their argv, etc.
+func killOrphanDaemon(ctx context.Context) error {
+	if signaledFromPidFile() {
+		return nil
+	}
+	// pgrep + signal, EXCLUDING our own pid. The `mtroamd uninstall`
+	// process's comm is also `mtroamd`, so a plain `pkill -x mtroamd`
+	// SIGTERMs this very process — which (when uninstall runs over a
+	// non-interactive SSH exec with no XDG_RUNTIME_DIR, so the pid-file
+	// fast path misses) aborts the uninstall mid-run and strands files.
+	// Enumerate matches and skip self.
+	uid := strconv.Itoa(os.Getuid())
+	self := os.Getpid()
+	out, err := exec.CommandContext(ctx, "pgrep", "-u", uid, "-x", "mtroamd").Output()
+	if err != nil {
+		return nil // exit 1 = no matches; collapse to nil
+	}
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid <= 0 || pid == self {
+			continue
+		}
+		if proc, err := os.FindProcess(pid); err == nil {
+			_ = proc.Signal(syscall.SIGTERM)
+		}
+	}
+	return nil
+}
+
+// signaledFromPidFile reads the conventional pid file and SIGTERMs
+// the process it points at. Returns true if a SIGTERM was actually
+// sent (caller can skip the fallback). Best-effort: malformed files,
+// stale pids, permission errors all return false.
+func signaledFromPidFile() bool {
+	// Try both candidate locations; the daemon picks one based on
+	// whether XDG_RUNTIME_DIR was set when it started.
+	candidates := []string{}
+	if rd := os.Getenv("XDG_RUNTIME_DIR"); rd != "" {
+		candidates = append(candidates, rd+"/mtroamd.pid")
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, home+"/.local/share/mtroamd/mtroamd.pid")
+	}
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			continue
+		}
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			// Process gone already, or not ours; remove the
+			// stale file so the next run doesn't trip on it.
+			_ = os.Remove(path)
+			continue
+		}
+		// Best-effort cleanup of the pidfile — the daemon's own
+		// `defer os.Remove(pidPath)` will do this on graceful
+		// shutdown, but on a kill -9 it might be left behind.
+		_ = os.Remove(path)
+		return true
+	}
+	return false
+}

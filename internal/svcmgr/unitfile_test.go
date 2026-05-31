@@ -18,13 +18,13 @@ import (
 // would surface the drift.
 func TestRenderUserUnitGolden(t *testing.T) {
 	const want = `[Unit]
-Description=meshtermd — meshTerm roaming daemon
-Documentation=https://github.com/AG-Studio-Apps/meshtermd
+Description=mtroamd — meshTerm roaming daemon
+Documentation=https://github.com/AG-Studio-Apps/mtroamd
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/meshtermd serve --addr 0.0.0.0:49820 --roam-tcp-addr tailnet:49920 --socket %h/.local/share/meshtermd/meshtermd.sock
+ExecStart=%h/.local/bin/mtroamd serve --addr 0.0.0.0:49820 --mtroam-tcp-addr tailnet:49920 --socket %h/.local/share/mtroamd/mtroamd.sock
 Restart=on-failure
 RestartSec=5
 # KillMode=process so ` + "`systemctl restart`" + ` only SIGTERMs the main
@@ -52,23 +52,23 @@ func TestRenderUserUnitContainsKillModeProcess(t *testing.T) {
 
 func TestRenderUserUnitHonoursOverrides(t *testing.T) {
 	got := RenderUserUnit(&UserUnitOptions{
-		BinPath:    "/opt/meshtermd/bin/meshtermd",
+		BinPath:    "/opt/mtroamd/bin/mtroamd",
 		Addr:       "100.64.0.1:51820",
-		SocketPath: "/run/meshtermd/meshtermd.sock",
+		SocketPath: "/run/mtroamd/mtroamd.sock",
 		TCPAddr:    "100.64.0.1:51821",
 	})
-	wantExec := "ExecStart=/opt/meshtermd/bin/meshtermd serve --addr 100.64.0.1:51820 --roam-tcp-addr 100.64.0.1:51821 --socket /run/meshtermd/meshtermd.sock"
+	wantExec := "ExecStart=/opt/mtroamd/bin/mtroamd serve --addr 100.64.0.1:51820 --mtroam-tcp-addr 100.64.0.1:51821 --socket /run/mtroamd/mtroamd.sock"
 	if !strings.Contains(got, wantExec) {
 		t.Errorf("override ExecStart line missing; got:\n%s", got)
 	}
 }
 
 // TestRenderUserUnitTCPOptOut verifies the sentinel "-" suppresses
-// the --roam-tcp-addr flag entirely. Used by operators who want
+// the --mtroam-tcp-addr flag entirely. Used by operators who want
 // QUIC-only on hosts where the TCP port can't be reserved.
 func TestRenderUserUnitTCPOptOut(t *testing.T) {
 	got := RenderUserUnit(&UserUnitOptions{TCPAddr: "-"})
-	if strings.Contains(got, "--roam-tcp-addr") {
-		t.Errorf("TCPAddr=\"-\" should suppress the --roam-tcp-addr flag; got:\n%s", got)
+	if strings.Contains(got, "--mtroam-tcp-addr") {
+		t.Errorf("TCPAddr=\"-\" should suppress the --mtroam-tcp-addr flag; got:\n%s", got)
 	}
 }

@@ -64,7 +64,7 @@ func TestWritePortStateBestEffort(t *testing.T) {
 }
 
 func TestWritePortStateCreatesDir(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "nested", "dirs", "meshtermd")
+	dir := filepath.Join(t.TempDir(), "nested", "dirs", "mtroamd")
 	writePortState(dir, 49830)
 	// Should have created the dir tree and written the file.
 	if got := readPortState(dir); got != 49830 {

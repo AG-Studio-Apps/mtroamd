@@ -6,8 +6,8 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // frameWriter sends one tagged frame on the protocol's single bidi

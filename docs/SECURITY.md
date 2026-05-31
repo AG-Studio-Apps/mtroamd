@@ -12,7 +12,7 @@ If we are slow to respond and the issue is being actively exploited, you may dis
 
 ## Trust model
 
-`meshtermd` runs as the user's UNIX account on a host the user already owns and SSH's into. It does not elevate privileges, does not bind to privileged ports, does not run as root, and does not require any setuid bits. Its threat model is the same as `sshd`'s threat model for that user account: anyone who can already get a shell as the user can read/write the same data `meshtermd` can.
+`mtroamd` runs as the user's UNIX account on a host the user already owns and SSH's into. It does not elevate privileges, does not bind to privileged ports, does not run as root, and does not require any setuid bits. Its threat model is the same as `sshd`'s threat model for that user account: anyone who can already get a shell as the user can read/write the same data `mtroamd` can.
 
 The protocol's security perimeter is the **iOS client → daemon** channel. Inside the host, the daemon is just another user process.
 
@@ -20,17 +20,17 @@ The protocol's security perimeter is the **iOS client → daemon** channel. Insi
 
 - **The user's SSH host key chain.** Bootstrap happens over an existing SSH session. If the user's known_hosts trusts the host, we inherit that trust. If SSH is being MITM'd at bootstrap time, every secret SSH carries is already compromised — this protocol cannot improve on that.
 
-  ⚠️ **First-use caveat (TOFU).** `mtctl` sets `StrictHostKeyChecking=accept-new` for usability — a host fingerprint that isn't in the user's `~/.ssh/known_hosts` is auto-trusted on first connection. If a network MITM is positioned at the moment of that very first SSH dial, they can supply their own host key, return a fake `MTRM_QUIC` bootstrap line, and surface a cert fingerprint that the QUIC client then pins. Subsequent connections are protected (the spoofed key gets stored in known_hosts and any later real host triggers a verification failure), but the window exists. Users on hostile first-use networks should populate `known_hosts` out-of-band (e.g. `ssh-keyscan` from a trusted location, or copy from a known-good machine) before running `mtctl` for the first time. Codex audit 2026-05-19 LOW.
+  ⚠️ **First-use caveat (TOFU).** `mtroam` sets `StrictHostKeyChecking=accept-new` for usability — a host fingerprint that isn't in the user's `~/.ssh/known_hosts` is auto-trusted on first connection. If a network MITM is positioned at the moment of that very first SSH dial, they can supply their own host key, return a fake `MTRM_QUIC` bootstrap line, and surface a cert fingerprint that the QUIC client then pins. Subsequent connections are protected (the spoofed key gets stored in known_hosts and any later real host triggers a verification failure), but the window exists. Users on hostile first-use networks should populate `known_hosts` out-of-band (e.g. `ssh-keyscan` from a trusted location, or copy from a known-good machine) before running `mtroam` for the first time. Codex audit 2026-05-19 LOW.
 - **Apple's `Security.framework` (TLS 1.3 implementation).** Used by `Network.framework` for all QUIC TLS operations on the iOS client.
 - **Go's `crypto/tls` (TLS 1.3 implementation).** Used by `quic-go` on the daemon.
 - **Apple's `CryptoKit` (SHA-256, P-256).** Used by the iOS client for fingerprint computation.
 - **Go's `crypto` standard library (ECDSA P-256, SHA-256, `crypto/rand`).** Used by the daemon for cert generation, fingerprint computation, and token generation.
-- **The user's local filesystem.** Cert + key persist at `~/.local/share/meshtermd/{cert,key}.pem` with mode 0600.
+- **The user's local filesystem.** Cert + key persist at `~/.local/share/mtroamd/{cert,key}.pem` with mode 0600.
 
 ## What we do NOT trust
 
 - The network between the iOS client and the daemon, after bootstrap. Mitigated by TLS 1.3 with cert pinning.
-- Other processes on the host that are not the user's UID. They cannot read `~/.local/share/meshtermd/key.pem` without privilege escalation, which is out of our threat model.
+- Other processes on the host that are not the user's UID. They cannot read `~/.local/share/mtroamd/key.pem` without privilege escalation, which is out of our threat model.
 - The bootstrap line in transit through a non-SSH path. The protocol mandates SSH bootstrap; emitting `MTRM_QUIC ...` to any other transport is undefined behaviour.
 
 ## Cryptographic primitives — none of which we wrote
@@ -45,7 +45,7 @@ The protocol's security perimeter is the **iOS client → daemon** channel. Insi
 | Session ID | 16 bytes from CSPRNG | Go `crypto/rand` |
 | SSH bootstrap channel | SSHv2 with the user's chosen cipher suite | iOS: NIOSSH (Apple-maintained). Host: OpenSSH (or similar). |
 
-There is no application-layer cryptography in `meshtermd` or the iOS client's Roam path. We do not invoke AES, ChaCha20, HMAC, or any AEAD construction directly. All authenticated encryption is TLS 1.3 inside QUIC.
+There is no application-layer cryptography in `mtroamd` or the iOS client's MTRoam path. We do not invoke AES, ChaCha20, HMAC, or any AEAD construction directly. All authenticated encryption is TLS 1.3 inside QUIC.
 
 ## Threat actors and defenses
 
@@ -70,7 +70,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 | | |
 |---|---|
 | Capability | Intercepts SSH, replaces the `MTRM_QUIC` line with a different fingerprint |
-| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user — Roam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
+| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user — MTRoam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
 
 ### D. Replay of captured bootstrap line
 
@@ -84,9 +84,9 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 | | |
 |---|---|
 | Capability | An attacker learns a victim's `session_id` |
-| Defense | Useless alone. Attaching requires (1) SSH access to the host as the same user, (2) a fresh `meshtermd connect` invocation that produces a new attach token. The session ID itself confers no authority. |
+| Defense | Useless alone. Attaching requires (1) SSH access to the host as the same user, (2) a fresh `mtroamd connect` invocation that produces a new attach token. The session ID itself confers no authority. |
 
-### F. Compromised `meshtermd` binary in transit
+### F. Compromised `mtroamd` binary in transit
 
 | | |
 |---|---|
@@ -98,9 +98,9 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 
 | | |
 |---|---|
-| Capability | An attacker has shell as the user `meshtermd` runs as |
+| Capability | An attacker has shell as the user `mtroamd` runs as |
 | Outcome | Full read of session output buffers, ability to inject input, ability to read the daemon's TLS private key. |
-| Defense | None inside our perimeter. The same threat exists for `tmux`, `screen`, `sshd` on that host. Roam doesn't make this worse. |
+| Defense | None inside our perimeter. The same threat exists for `tmux`, `screen`, `sshd` on that host. MTRoam doesn't make this worse. |
 
 ### H. Compromised iOS device
 
@@ -108,7 +108,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 |---|---|
 | Capability | Attacker has access to the unlocked iOS device |
 | Outcome | Same as today's meshTerm: SSH credentials in Keychain, all sessions accessible. |
-| Defense | Outside Roam's threat model — same as the existing app. |
+| Defense | Outside MTRoam's threat model — same as the existing app. |
 
 ### I. Traffic analysis (typing inference)
 
@@ -124,7 +124,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 | | |
 |---|---|
 | Concern | A user audits our binary and asks "does this thing exfiltrate my data" |
-| Defense | Only data flowing through the active terminal session reaches the QUIC connection. The daemon does not read files outside `~/.local/share/meshtermd/` (its own state) and the PTY of its child process. The source is auditable; the binary build is reproducible (Go build flags pinned). |
+| Defense | Only data flowing through the active terminal session reaches the QUIC connection. The daemon does not read files outside `~/.local/share/mtroamd/` (its own state) and the PTY of its child process. The source is auditable; the binary build is reproducible (Go build flags pinned). |
 
 ### K. IPC surface — read access (information disclosure)
 
@@ -139,8 +139,8 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 | | |
 |---|---|
 | Concern | `KillSession` terminates a session's PTY + closes its ring buffer + invalidates its attach. `RenameSession` mutates a user-visible label. Both are reachable from the IPC socket without an additional permission check. |
-| Defense | Same filesystem-permission posture as J. The daemon does not require a confirmation token or capability check for destructive ops beyond "you can talk to the socket." Acceptable because the socket is uid-scoped and the user can already trivially `pkill meshtermd` to achieve the same destruction. |
-| Residual | A confused-deputy attack via a script that the user runs would be able to invoke `kill`/`rename`. The same script could `rm -rf ~/.local/share/meshtermd/` for greater damage, so this is not the weakest link. |
+| Defense | Same filesystem-permission posture as J. The daemon does not require a confirmation token or capability check for destructive ops beyond "you can talk to the socket." Acceptable because the socket is uid-scoped and the user can already trivially `pkill mtroamd` to achieve the same destruction. |
+| Residual | A confused-deputy attack via a script that the user runs would be able to invoke `kill`/`rename`. The same script could `rm -rf ~/.local/share/mtroamd/` for greater damage, so this is not the weakest link. |
 
 ### M. Session-name collisions as a denial vector
 
@@ -152,7 +152,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 
 ## Cert lifecycle
 
-- Generated on first daemon startup, stored at `~/.local/share/meshtermd/{cert,key}.pem` with mode 0600.
+- Generated on first daemon startup, stored at `~/.local/share/mtroamd/{cert,key}.pem` with mode 0600.
 - ECDSA P-256 with SHA-256 (cert sigalg `ecdsa_secp256r1_sha256`, TLS code 0x0403). No CN/SAN required — the cert is identified by fingerprint, not name. Ed25519 was the original choice and is cryptographically equivalent, but iOS Network.framework's QUIC ClientHello does not list `ed25519` (0x0807) in its `signature_algorithms` extension, so an Ed25519 server cert is rejected with `CRYPTO_ERROR 0x128` before the client's verify block runs. P-256 sidesteps this without weakening the security posture.
 - Validity: 365 days. On daemon startup, if the on-disk cert is within 30 days of expiry (or already expired), `LoadOrGenerate` regenerates a fresh cert+key in place. The new fingerprint travels through the SSH bootstrap on the next attach, so iOS clients re-pin transparently.
 - The fingerprint is the SHA-256 of the DER-encoded certificate.
@@ -160,7 +160,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
 
 ## Attach token semantics
 
-- 16 bytes, generated by `crypto/rand` per `meshtermd connect` invocation.
+- 16 bytes, generated by `crypto/rand` per `mtroamd connect` invocation.
 - Stored in-memory in the `serve` process, indexed by session ID.
 - TTL: 30 seconds from emission. After 30 s with no QUIC attach, the token is purged.
 - Single-use. On successful attach the token is invalidated.
@@ -179,7 +179,7 @@ There is no application-layer cryptography in `meshtermd` or the iOS client's Ro
   - Attach events (session ID, peer address)
   - Resize events (rows/cols only)
   - GC events (session ID, age at reap)
-- An optional `--debug-frames` flag (off by default, requires `MESHTERMD_DEBUG=1`) logs frame headers (type, length, seq) but not payloads.
+- An optional `--debug-frames` flag (off by default, requires `MTROAMD_DEBUG=1`) logs frame headers (type, length, seq) but not payloads.
 
 ## Reproducible builds
 
@@ -188,7 +188,7 @@ The release process pins the Go version, flags `-trimpath -ldflags="-buildid="`,
 ## Known limitations
 
 1. **Traffic analysis** — see threat I above. Not addressed in v0.
-2. **No defence against a compromised host.** Same as `tmux`, `screen`, `sshd`. Roam is not a sandboxing tool.
+2. **No defence against a compromised host.** Same as `tmux`, `screen`, `sshd`. MTRoam is not a sandboxing tool.
 3. **Cert pinning is per-host, not per-user.** All users on a host share the daemon's cert. If multiple users connect to the same host and one is compromised, the cert fingerprint is shared.
 4. **No multi-factor for the bootstrap.** SSH's auth methods are the only gate. If you require additional factors, layer them at the SSH level (PAM, hardware tokens).
 5. **No explicit defence-in-depth for the attach token.** A 30-second TTL + single-use semantics + transport over an SSH-encrypted channel is the entire protection. We deliberately do not require an additional handshake step over QUIC because the SSH bootstrap is already authenticated.
@@ -205,7 +205,7 @@ This is the checklist we run before each release. Contributors are encouraged to
 - [ ] No `os.Exec` or shell-out paths take user-controlled strings without escaping
 - [ ] PTY child inherits clean environment (specific allowlist, not full `os.Environ()`)
 - [ ] No timing-sensitive comparisons of secrets; use `crypto/subtle.ConstantTimeCompare`
-- [ ] `~/.local/share/meshtermd/key.pem` written with 0600 mode atomically
+- [ ] `~/.local/share/mtroamd/key.pem` written with 0600 mode atomically
 - [ ] `/proc/<pid>/environ`, `/proc/<pid>/cmdline` do not contain secrets
 - [ ] IPC socket bound at mode 0600 with `verifyParentDir` covering the containing dir
 - [ ] `Status` response does not leak fields that aren't already user-derivable (cert FP and QUIC addr are fine — they appear in the bootstrap line anyway)

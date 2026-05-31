@@ -6,7 +6,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // IPC frames are framed with `protocol.WriteFrame` / `ReadFrame`,

@@ -1,5 +1,5 @@
-// Package protocol implements the wire format for meshTerm's Roam
-// protocol over QUIC. See docs/roam-protocol.md.
+// Package protocol implements the wire format for meshTerm's MTRoam
+// protocol over QUIC. See docs/mtroam-protocol.md.
 //
 // Three things live here:
 //
@@ -14,7 +14,7 @@
 // in this package too, since it's a wire-level concern; the QUIC
 // transport package reaches in for it.
 //
-// All structures use the field-name tags from docs/roam-protocol.md
+// All structures use the field-name tags from docs/mtroam-protocol.md
 // so the on-wire CBOR keys match the spec verbatim.
 package protocol
 
@@ -56,7 +56,7 @@ var StrictDecMode cbor.DecMode = func() cbor.DecMode {
 
 // ALPN is the application-layer protocol negotiation token sent on
 // the QUIC handshake. v0 uses "meshterm/0" (development); promotion to
-// v1 increments the suffix per docs/roam-protocol.md § 5.2.
+// v1 increments the suffix per docs/mtroam-protocol.md § 5.2.
 const ALPN = "meshterm/0"
 
 // MaxControlFrameBytes is the cap on a single control-stream frame's
@@ -74,7 +74,7 @@ const MaxOutputFramePayload = 16 * 1024
 // without QUIC datagram fragmentation.
 const MaxDatagramBytes = 1200
 
-// Wire-level error codes per docs/roam-protocol.md § 13. Each is the
+// Wire-level error codes per docs/mtroam-protocol.md § 13. Each is the
 // QUIC application error code that should be sent when terminating a
 // connection due to that condition.
 const (
@@ -184,7 +184,7 @@ const (
 	// receives output, stdin/resize frames dropped — but the daemon
 	// does NOT surface passive attachers in `SessionInfo.AttachedModes`
 	// or `AttachAck.Peers`. Other clients see the session as if no
-	// passive watcher were present. Use case: `mtctl tail <session>`
+	// passive watcher were present. Use case: `mtroam tail <session>`
 	// for observing a build's output without claiming an attach slot
 	// that other tools would render to the user. Hard-capped at 8
 	// concurrent passive attachers per session.
@@ -211,7 +211,7 @@ type Attach struct {
 	Cols      uint16 `cbor:"cols"`
 	// Mode is the requested attach role: "exclusive" (default) or
 	// "readonly". Empty/missing → "exclusive" for backward compat
-	// with v0 clients (iOS pre-multi-attach, mtctl pre-Tier 3.5).
+	// with v0 clients (iOS pre-multi-attach, mtroam pre-Tier 3.5).
 	// Unknown values are treated as "exclusive" — same compat
 	// posture; the server doesn't fail closed on a future mode it
 	// doesn't recognise.
@@ -432,7 +432,7 @@ type RecoverProgress struct {
 // the control stream, carrying the current smoothed-RTT estimate from
 // quic-go. Clients use it to drive `--predict=adaptive` decisions
 // (whether to underline unconfirmed predictions) and to surface
-// connection latency in info commands like mtctl attach's `~?`.
+// connection latency in info commands like mtroam attach's `~?`.
 //
 // v0.7.0+; older clients hit `default: continue` in their control-
 // frame dispatch and ignore it.
@@ -483,12 +483,12 @@ func PeekType(body []byte) (string, error) {
 	return d.T, nil
 }
 
-// Frame type discriminators for the single-stream Roam protocol.
+// Frame type discriminators for the single-stream MTRoam protocol.
 // Every frame on the bidi stream is wrapped in a tagged envelope:
 //
 //	[u8 type][u32 BE length][body]
 //
-// Stays in sync with iOS `RoamProtocol.FrameType` — both sides MUST
+// Stays in sync with iOS `MTRoamProtocol.FrameType` — both sides MUST
 // agree.
 const (
 	FrameTypeControl uint8 = 0 // body = CBOR-encoded control message

@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// systemdUser drives a `systemctl --user`-managed meshtermd. Its
+// systemdUser drives a `systemctl --user`-managed mtroamd. Its
 // Stop/Start/Restart all set XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS
 // explicitly so they work when invoked from a non-pam_systemd SSH
 // session (the common case for our installer-spawned shells).
 type systemdUser struct{}
 
-const systemdUnitName = "meshtermd"
+const systemdUnitName = "mtroamd"
 
 func (s *systemdUser) Name() string { return "systemd-user" }
 
@@ -106,7 +106,7 @@ func (s *systemdUser) cmd(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 func (s *systemdUser) unitPath() string {
-	return homePath(".config", "systemd", "user", "meshtermd.service")
+	return homePath(".config", "systemd", "user", "mtroamd.service")
 }
 
 // UnitPath exposes the unit-file location for the doctor command.
@@ -114,7 +114,7 @@ func (s *systemdUser) UnitPath() string { return s.unitPath() }
 
 // SystemctlUser runs `systemctl --user <args>` with the env that makes the
 // user bus reachable from a non-pam_systemd session (matching the env used
-// by Stop/Start/Restart). Exposed for `meshtermd migrate`, which rewrites
+// by Stop/Start/Restart). Exposed for `mtroamd migrate`, which rewrites
 // the unit then reloads/restarts/queries outside the Manager interface.
 // Returns combined stdout+stderr for diagnostics.
 func SystemctlUser(ctx context.Context, args ...string) ([]byte, error) {
@@ -123,8 +123,8 @@ func SystemctlUser(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 // UserUnitPath returns the canonical systemd --user unit path
-// (~/.config/systemd/user/meshtermd.service), independent of whether the
-// manager is currently Available. Used by `meshtermd migrate` to read/rewrite
+// (~/.config/systemd/user/mtroamd.service), independent of whether the
+// manager is currently Available. Used by `mtroamd migrate` to read/rewrite
 // the unit even when the bus is momentarily unreachable.
 func UserUnitPath() string {
 	return (&systemdUser{}).unitPath()

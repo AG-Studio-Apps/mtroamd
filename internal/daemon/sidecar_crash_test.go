@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ipc"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // TestDaemonRestartPreservesScrollbackViaSidecar exercises the
@@ -50,7 +50,7 @@ func TestDaemonRestartPreservesScrollbackViaSidecar(t *testing.T) {
 	if err := os.Chmod(tmp, 0o700); err != nil {
 		t.Fatalf("chmod tempdir: %v", err)
 	}
-	socket := filepath.Join(tmp, "meshtermd.sock")
+	socket := filepath.Join(tmp, "mtroamd.sock")
 
 	// d1: short flush interval so the on-disk lcs stays close to the
 	// in-memory watermark, minimising the gap window simulated by

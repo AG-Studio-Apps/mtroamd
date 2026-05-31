@@ -6,7 +6,7 @@ package build
 import "fmt"
 
 // Version is the semantic version of this build (e.g. "v0.1.0"). Set via
-// -ldflags="-X github.com/AG-Studio-Apps/meshtermd/internal/build.Version=…".
+// -ldflags="-X github.com/AG-Studio-Apps/mtroamd/internal/build.Version=…".
 var Version = "v0.0.0-dev"
 
 // Commit is the short git SHA of the source this binary was built from.

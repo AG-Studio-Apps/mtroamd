@@ -14,8 +14,8 @@ import (
 
 	"github.com/quic-go/quic-go"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/cert"
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/cert"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // freshCert generates a one-shot self-signed cert in a temp dir.

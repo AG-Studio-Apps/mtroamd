@@ -63,13 +63,13 @@ type Registry struct {
 	// sessions opt into disk persistence. Resolved through
 	// ResolvePersist against the client's tri-state request:
 	// nil → use this default; explicit true/false → honour the
-	// client. Default true (matches the SSHHost.persistRoamSessions
+	// client. Default true (matches the SSHHost.persistMTRoamSessions
 	// default-on on iOS). Set by the daemon via SetPersistenceDefault.
 	persistenceDefault bool
 }
 
 // pendingAttach is the registry-side state for a single in-flight
-// attach. The SSH-side `meshtermd connect` invocation reserves one;
+// attach. The SSH-side `mtroamd connect` invocation reserves one;
 // the QUIC-side handler consumes it.
 type pendingAttach struct {
 	sessionID SessionID
@@ -94,7 +94,7 @@ const DefaultIdleTimeout = 30 * 24 * time.Hour
 // the client requests an unbounded "Never" timeout AND the operator
 // hasn't set a ceiling. The Sweep skips any session whose idleTimeout
 // is negative — those live until the daemon dies (SIGTERM, reboot,
-// `meshtermd update` restart, or crash).
+// `mtroamd update` restart, or crash).
 //
 // Wire-side: iOS represents "Never" as IdleTimeoutNanos < 0
 // (typically -1_000_000_000, from `--idle-timeout -1s`). The daemon
@@ -106,7 +106,7 @@ const NoIdleTimeout = time.Duration(-1)
 const DefaultGCInterval = time.Minute
 
 // DefaultMaxSessions caps concurrent sessions per daemon. Tunable via
-// `meshtermd serve --max-sessions`. The value here is intentionally
+// `mtroamd serve --max-sessions`. The value here is intentionally
 // modest — a typical user has a handful of terminals open at once;
 // hundreds suggests something pathological.
 const DefaultMaxSessions = 100
@@ -123,7 +123,7 @@ const AttachTokenLen = 16
 const AttachTokenTTL = 30 * time.Second
 
 // AttachToken is the single-use bearer token that authorises a QUIC
-// attach. Issued by IssueAttachToken when an SSH-side `meshtermd
+// attach. Issued by IssueAttachToken when an SSH-side `mtroamd
 // connect` invocation reserves an attach; consumed by
 // ConsumeAttachToken on the QUIC side.
 type AttachToken [AttachTokenLen]byte
@@ -170,7 +170,7 @@ var ErrUnknownSession = errors.New("unknown session id")
 
 // ErrDuplicateName is returned by Add when a session's non-empty Name
 // collides with an existing session in the registry. Reserved for
-// the `meshtermd connect --name foo` create-if-missing flow's
+// the `mtroamd connect --name foo` create-if-missing flow's
 // failure case (i.e., when the caller wanted a fresh session but
 // the name is taken).
 var ErrDuplicateName = errors.New("session name already in use")
@@ -200,9 +200,9 @@ func NewRegistry(maxSessions int, idleTimeout, gcInterval, maxIdleTimeout time.D
 		sessions:           make(map[SessionID]*Session),
 		byName:             make(map[string]*Session),
 		tokens:             make(map[AttachToken]pendingAttach),
-		// Persistence default-on matches the iOS SSHHost.persistRoamSessions
+		// Persistence default-on matches the iOS SSHHost.persistMTRoamSessions
 		// default-on. Daemons running on shared / multi-user hosts can
-		// flip this via `meshtermd serve --persistence-default off`
+		// flip this via `mtroamd serve --persistence-default off`
 		// (which calls SetPersistenceDefault(false) at startup).
 		persistenceDefault: true,
 	}
@@ -418,7 +418,7 @@ func (r *Registry) Remove(id SessionID) {
 	}
 	r.mu.Unlock()
 	if s != nil {
-		// Remove is the explicit-kill path (mtctl kill, daemon-side
+		// Remove is the explicit-kill path (mtroam kill, daemon-side
 		// API). Use Kill so sidecar-backed PTYs send die_now for
 		// immediate child-shell teardown rather than entering the
 		// 30s reconnect-grace window. Drop the on-disk persistence
@@ -688,7 +688,7 @@ func (s *Session) idleTimeoutForGC() time.Duration {
 }
 
 // hasAttachedClientsForGC reports whether the session currently has
-// any attached clients (Roam or otherwise). The GC sweep uses this to
+// any attached clients (MTRoam or otherwise). The GC sweep uses this to
 // avoid reaping a session that's actively attached but happens to be
 // silent (e.g. a shell sitting at the prompt with no output for the
 // idle window). Without this check, an iOS user idle on a long-lived

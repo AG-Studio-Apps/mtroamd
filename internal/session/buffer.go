@@ -1,9 +1,9 @@
-// Package session owns the per-session state for meshtermd: the output
+// Package session owns the per-session state for mtroamd: the output
 // ring buffer, the Session value, and the concurrent registry.
 //
 // The ring buffer is the load-bearing piece for replay-on-reattach.
 // When a client disconnects (network drop, app background, foreground
-// roam), the daemon keeps writing PTY output into the buffer. On
+// mtroam), the daemon keeps writing PTY output into the buffer. On
 // reattach, the client passes its last-acked sequence number and the
 // buffer replays from there. If the disconnect was long enough that
 // the buffer overflowed, replay starts from the buffer's tail and the

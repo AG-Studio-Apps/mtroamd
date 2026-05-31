@@ -9,12 +9,12 @@ import (
 	"strings"
 )
 
-// launchd drives a launchctl-managed meshtermd on macOS. Mirrors the
+// launchd drives a launchctl-managed mtroamd on macOS. Mirrors the
 // systemdUser semantics: idempotent Stop, exec-via-supervisor Start,
 // bootout-then-remove for Remove.
 type launchd struct{}
 
-const launchdLabel = "com.agstudio.meshtermd"
+const launchdLabel = "com.agstudio.mtroamd"
 
 func (l *launchd) Name() string { return "launchd" }
 

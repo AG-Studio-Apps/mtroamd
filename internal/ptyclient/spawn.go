@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/pty"
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/pty"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 )
 
 // SpawnConfig is the input to SpawnNew. The daemon fills this in and
 // hands it to ptyclient — the sidecar process itself takes its
 // equivalent inputs via command-line flags wired in
-// cmd/meshtermd/sidecar.go.
+// cmd/mtroamd/sidecar.go.
 type SpawnConfig struct {
 	// SessionID is hex (32 chars); used to compute the per-session
 	// state dir under StateDir/sessions/.
@@ -42,7 +42,7 @@ type SpawnConfig struct {
 	ExtraEnv []string
 
 	// StateDir is the daemon's persistence root (e.g.
-	// ~/.local/share/meshtermd). Sidecar artefacts live under
+	// ~/.local/share/mtroamd). Sidecar artefacts live under
 	// {StateDir}/sessions/{sessionID}/.
 	StateDir string
 

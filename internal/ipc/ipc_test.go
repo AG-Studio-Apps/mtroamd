@@ -34,7 +34,7 @@ func (h *echoHandler) HandlePing(ctx context.Context, req PingRequest) PingRespo
 }
 
 // HandleListSessions / HandleKillSession exist only to satisfy the
-// Handler interface added when meshtermd grew named multi-sessions.
+// Handler interface added when mtroamd grew named multi-sessions.
 // The IPC-level tests in this package focus on Allocate/Ping framing
 // and lifecycle; daemon-level coverage of List/Kill behaviour lives
 // in internal/daemon/daemon_test.go where there's a real registry.
@@ -61,7 +61,7 @@ func (h *echoHandler) HandleSessionSearch(_ context.Context, _ SessionSearchRequ
 func startServer(t *testing.T, h Handler) (*Server, string) {
 	t.Helper()
 	dir := tempDirWith0700(t)
-	socket := filepath.Join(dir, "meshtermd.sock")
+	socket := filepath.Join(dir, "mtroamd.sock")
 	srv, err := NewServer(socket, h)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -96,7 +96,7 @@ func TestNewServerRejectsNilHandler(t *testing.T) {
 func TestNewServerCreatesSocketWith0600(t *testing.T) {
 	t.Parallel()
 	dir := tempDirWith0700(t)
-	socket := filepath.Join(dir, "meshtermd.sock")
+	socket := filepath.Join(dir, "mtroamd.sock")
 	srv, err := NewServer(socket, &echoHandler{})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestClientReportsDaemonNotRunning(t *testing.T) {
 func TestServeReplacesStaleSocket(t *testing.T) {
 	t.Parallel()
 	dir := tempDirWith0700(t)
-	socket := filepath.Join(dir, "meshtermd.sock")
+	socket := filepath.Join(dir, "mtroamd.sock")
 	// Plant a stale file at the socket path (NOT a real socket).
 	// NewServer should remove it and bind cleanly.
 	if err := writeFile(socket, "stale", 0o644); err != nil {
@@ -229,7 +229,7 @@ func TestServeRejectsOverCapConnections(t *testing.T) {
 		release: make(chan struct{}),
 	}
 	dir := tempDirWith0700(t)
-	socket := filepath.Join(dir, "meshtermd.sock")
+	socket := filepath.Join(dir, "mtroamd.sock")
 	srv, err := NewServer(socket, h, WithMaxConcurrent(1))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

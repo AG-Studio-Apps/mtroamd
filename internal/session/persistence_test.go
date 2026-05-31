@@ -494,7 +494,7 @@ func TestResolvePersistTriState(t *testing.T) {
 	}
 }
 
-// TestRemoveDeletesOnDiskState: explicit Remove (mtctl kill path)
+// TestRemoveDeletesOnDiskState: explicit Remove (mtroam kill path)
 // drops the on-disk session dir so reaped sessions don't leak disk.
 func TestRemoveDeletesOnDiskState(t *testing.T) {
 	t.Parallel()

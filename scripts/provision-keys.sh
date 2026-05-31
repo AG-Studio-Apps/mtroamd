@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# provision-keys.sh — generate the meshtermd release-signing key roster.
+# provision-keys.sh — generate the mtroamd release-signing key roster.
 #
 # What this does (once, on your workstation):
 #   1. Generates a PRIMARY minisign keypair (used by CI for every signed release).
@@ -9,7 +9,7 @@
 #   4. Pushes the encrypted private halves + plaintext public halves to
 #      AG-Studio-Apps/meshterm_keys (private repo, encrypted backup).
 #   5. Sets MINISIGN_KEY and MINISIGN_PASSWORD as Actions secrets on
-#      AG-Studio-Apps/meshtermd so release CI can sign without you.
+#      AG-Studio-Apps/mtroamd so release CI can sign without you.
 #   6. Shreds the unencrypted private files from your workstation.
 #   7. Prints the two PUBLIC keys in the exact base64 form to embed in iOS.
 #
@@ -26,7 +26,7 @@ umask 077
 
 # ---------- config ----------
 KEYS_REPO_DIR="${KEYS_REPO_DIR:-$HOME/appfactory/meshterm_keys}"
-MESHTERMD_REPO="AG-Studio-Apps/meshtermd"
+MTROAMD_REPO="AG-Studio-Apps/mtroamd"
 KEYS_REPO="AG-Studio-Apps/meshterm_keys"
 
 # ---------- helpers ----------
@@ -56,7 +56,7 @@ for f in primary.minipk primary.minisk.age emergency.minipk emergency.minisk.age
 done
 
 # Sanity-check we can talk to both target repos.
-gh repo view "$MESHTERMD_REPO" >/dev/null 2>&1 || die "cannot access $MESHTERMD_REPO via gh"
+gh repo view "$MTROAMD_REPO" >/dev/null 2>&1 || die "cannot access $MTROAMD_REPO via gh"
 gh repo view "$KEYS_REPO"      >/dev/null 2>&1 || die "cannot access $KEYS_REPO via gh"
 
 green "✓ tools, auth, and target repos look good"
@@ -72,10 +72,10 @@ echo "    • emergency.minisk      (private — encrypted then shredded; NOT up
 echo "    • emergency.minipk      (public  — committed to $KEYS_REPO)"
 echo "    • emergency.minisk.age  (private, age-encrypted — committed to $KEYS_REPO)"
 echo ""
-read -rp "Trusted comment for PRIMARY key   [meshtermd primary $TODAY]: " PRIMARY_COMMENT
-PRIMARY_COMMENT="${PRIMARY_COMMENT:-meshtermd primary $TODAY}"
-read -rp "Trusted comment for EMERGENCY key [meshtermd emergency $TODAY]: " EMERGENCY_COMMENT
-EMERGENCY_COMMENT="${EMERGENCY_COMMENT:-meshtermd emergency $TODAY}"
+read -rp "Trusted comment for PRIMARY key   [mtroamd primary $TODAY]: " PRIMARY_COMMENT
+PRIMARY_COMMENT="${PRIMARY_COMMENT:-mtroamd primary $TODAY}"
+read -rp "Trusted comment for EMERGENCY key [mtroamd emergency $TODAY]: " EMERGENCY_COMMENT
+EMERGENCY_COMMENT="${EMERGENCY_COMMENT:-mtroamd emergency $TODAY}"
 
 # ---------- workspace ----------
 WORK_DIR="$(mktemp -d -t mtkeys.XXXXXX)"
@@ -122,16 +122,16 @@ age -p -o emergency.minisk.age emergency.minisk
 
 # ---------- upload primary to GH Actions secrets ----------
 bold ""
-bold "▸ Uploading PRIMARY private key to $MESHTERMD_REPO secret MINISIGN_KEY"
-gh secret set MINISIGN_KEY --repo "$MESHTERMD_REPO" < primary.minisk
+bold "▸ Uploading PRIMARY private key to $MTROAMD_REPO secret MINISIGN_KEY"
+gh secret set MINISIGN_KEY --repo "$MTROAMD_REPO" < primary.minisk
 
 bold ""
-bold "▸ Uploading PRIMARY passphrase to $MESHTERMD_REPO secret MINISIGN_PASSWORD"
+bold "▸ Uploading PRIMARY passphrase to $MTROAMD_REPO secret MINISIGN_PASSWORD"
 echo "  Re-enter the PRIMARY minisign passphrase you just used (won't echo):"
 read -rsp "  PRIMARY passphrase: " PRIMARY_PASS
 echo
 # `gh secret set --body` would put it on the argv; pipe via stdin instead.
-printf '%s' "$PRIMARY_PASS" | gh secret set MINISIGN_PASSWORD --repo "$MESHTERMD_REPO"
+printf '%s' "$PRIMARY_PASS" | gh secret set MINISIGN_PASSWORD --repo "$MTROAMD_REPO"
 unset PRIMARY_PASS
 green "✓ secrets uploaded"
 
@@ -200,7 +200,7 @@ echo "  key id (hex): $EMERGENCY_KEY_ID"
 echo "  base64:       $EMERGENCY_PAYLOAD"
 echo ""
 echo "Encrypted backups committed to: https://github.com/$KEYS_REPO"
-echo "Actions secrets set on:         https://github.com/$MESHTERMD_REPO/settings/secrets/actions"
+echo "Actions secrets set on:         https://github.com/$MTROAMD_REPO/settings/secrets/actions"
 echo ""
 echo "Next:"
 echo "  • Save both minisign passphrases + the age passphrase in your password manager."

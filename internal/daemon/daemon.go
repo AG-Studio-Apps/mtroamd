@@ -1,8 +1,8 @@
-// Package daemon orchestrates the long-running pieces of meshtermd:
+// Package daemon orchestrates the long-running pieces of mtroamd:
 // the session registry, the QUIC listener, and the unix-socket IPC
-// server that `meshtermd connect` talks to.
+// server that `mtroamd connect` talks to.
 //
-// One Daemon per `meshtermd serve` invocation. Run blocks until the
+// One Daemon per `mtroamd serve` invocation. Run blocks until the
 // passed context is cancelled, at which point everything is drained
 // in dependency order: IPC server (no new attaches reservable), QUIC
 // listener (no new connections), then the registry's Shutdown
@@ -24,18 +24,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/build"
-	"github.com/AG-Studio-Apps/meshtermd/internal/cert"
-	"github.com/AG-Studio-Apps/meshtermd/internal/ipc"
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptyclient"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
-	"github.com/AG-Studio-Apps/meshtermd/internal/transport"
+	"github.com/AG-Studio-Apps/mtroamd/internal/build"
+	"github.com/AG-Studio-Apps/mtroamd/internal/cert"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptyclient"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/transport"
 )
 
 // WedgeReportFilename is the basename of the JSONL file where the
 // per-session wedge watcher appends de-identified records. Lives
 // alongside the daemon's other persistence state under stateDir.
-// Stable so `meshtermd wedge-report` can find it without flags.
+// Stable so `mtroamd wedge-report` can find it without flags.
 const WedgeReportFilename = "wedge-events.jsonl"
 
 // Config is the daemon's runtime configuration. Defaults are
@@ -48,21 +48,21 @@ type Config struct {
 	// release does this for testing).
 	QUICAddr string
 
-	// TCPAddr is the optional bind address for the plain-TCP Roam
+	// TCPAddr is the optional bind address for the plain-TCP MTRoam
 	// listener. Empty (default) disables the listener — daemon
 	// ships QUIC-only, behaving exactly as before. When non-empty,
-	// the daemon serves the Roam protocol over TCP IN ADDITION to
+	// the daemon serves the MTRoam protocol over TCP IN ADDITION to
 	// QUIC, on the supplied address. Designed for use inside a
 	// Tailscale tailnet where WireGuard provides transport
 	// security; see transport.TCPServer doc comment for the
 	// when-to-use rationale.
 	//
-	// Wired from --roam-tcp-port at the CLI. iOS clients in
+	// Wired from --mtroam-tcp-port at the CLI. iOS clients in
 	// embedded-Tailscale mode dial this listener; system /
 	// direct mode clients use the QUIC listener.
 	TCPAddr string
 
-	// IPCSocketPath is the unix socket `meshtermd connect` dials.
+	// IPCSocketPath is the unix socket `mtroamd connect` dials.
 	// Required.
 	IPCSocketPath string
 
@@ -82,7 +82,7 @@ type Config struct {
 	// MaxIdleTimeout is the ceiling on per-session timeouts a client
 	// may request. Zero means no ceiling — appropriate for the
 	// personal-server deployment where one user trusts the daemon
-	// they're running. Operators of multi-user / shared meshtermd
+	// they're running. Operators of multi-user / shared mtroamd
 	// hosts should set this to bound resource cost from a runaway
 	// client requesting a 30-day timeout on every session.
 	MaxIdleTimeout time.Duration
@@ -100,7 +100,7 @@ type Config struct {
 	// (AllocateRequest.Persist == nil). True (the default-on
 	// posture) matches user-mental-model "of course my work
 	// survives." Operators of shared / multi-user hosts can flip
-	// this to false via `meshtermd serve --persistence-default off`
+	// this to false via `mtroamd serve --persistence-default off`
 	// for privacy-by-default; individual sessions still opt back in
 	// with explicit `--persist`.
 	//
@@ -154,15 +154,15 @@ type Daemon struct {
 	// for the --stdio bridge. Separate from the tailnet TCP listener
 	// so SSH tunnel mode works regardless of Tailscale state.
 	loopbackTCP *transport.TCPServer
-	// roamHandler is cached from New() so the poller can create a
+	// mtroamHandler is cached from New() so the poller can create a
 	// TCPServer with the same handler after startup.
-	roamHandler *transport.ProtocolHandler
+	mtroamHandler *transport.ProtocolHandler
 	ipc         *ipc.Server
 	// stateDir is the persistence root resolved at New(). Reused by
 	// spawnSession when starting the per-session flusher.
 	stateDir string
 	// daemonBinary is os.Executable() cached at New(). Re-exec'd as
-	// `meshtermd pty-sidecar` for each session's PTY-owning helper.
+	// `mtroamd pty-sidecar` for each session's PTY-owning helper.
 	daemonBinary string
 	// startedAt is set once in New so HandleStatus can compute
 	// uptime without keeping a separate state machine.
@@ -232,7 +232,7 @@ func New(cfg Config) (*Daemon, error) {
 	}
 
 	// Persistence wiring. State dir lives next to the cert dir
-	// (cert.DefaultDir), so a single ~/.local/share/meshtermd holds
+	// (cert.DefaultDir), so a single ~/.local/share/mtroamd holds
 	// everything that survives daemon restart: cert, key, IPC socket,
 	// and now per-session subdirs under sessions/.
 	stateDir := cfg.CertDir
@@ -286,7 +286,7 @@ func New(cfg Config) (*Daemon, error) {
 		}
 	}
 
-	// Cache os.Executable() once — we re-exec it as `meshtermd
+	// Cache os.Executable() once — we re-exec it as `mtroamd
 	// pty-sidecar` for every session's PTY-owning helper process.
 	daemonBinary, exeErr := os.Executable()
 	if exeErr != nil {
@@ -311,7 +311,7 @@ func New(cfg Config) (*Daemon, error) {
 	// session lifecycle, same attach-token plumbing — only the
 	// transport differs (QUIC over kernel UDP vs TCP, the latter
 	// reached via tsnet's userspace stack on the iOS side).
-	roamHandler := &transport.ProtocolHandler{
+	mtroamHandler := &transport.ProtocolHandler{
 		Registry: reg,
 		Logger:   logger,
 		// PTYSpawner gives protocol_handler a way to lazy-spawn
@@ -340,19 +340,19 @@ func New(cfg Config) (*Daemon, error) {
 	d.quic, err = transport.New(transport.Config{
 		Addr:     cfg.QUICAddr,
 		Cert:     tlsCert,
-		Handler:  roamHandler,
+		Handler:  mtroamHandler,
 		StateDir: stateDir,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
 	}
 
-	d.roamHandler = roamHandler
+	d.mtroamHandler = mtroamHandler
 
 	d.loopbackTCP, err = transport.NewTCPServer(transport.TCPConfig{
 		Addr:     "127.0.0.1:0",
 		StateDir: stateDir,
-		Handler:  roamHandler,
+		Handler:  mtroamHandler,
 		Logger:   logger,
 	})
 	if err != nil {
@@ -369,12 +369,12 @@ func New(cfg Config) (*Daemon, error) {
 				"sentinel", cfg.TCPAddr, "err", resolveErr)
 			d.deferredTCPSentinel = cfg.TCPAddr
 		} else {
-			logger.Info("roam-tcp bound to tailnet interface",
+			logger.Info("mtroam-tcp bound to tailnet interface",
 				"sentinel", cfg.TCPAddr, "resolved", resolved, "ip", ip)
 			d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
 				Addr:     resolved,
 				StateDir: stateDir,
-				Handler:  roamHandler,
+				Handler:  mtroamHandler,
 				Logger:   logger,
 			})
 			if err != nil {
@@ -387,7 +387,7 @@ func New(cfg Config) (*Daemon, error) {
 		d.tcp, err = transport.NewTCPServer(transport.TCPConfig{
 			Addr:     cfg.TCPAddr,
 			StateDir: stateDir,
-			Handler:  roamHandler,
+			Handler:  mtroamHandler,
 			Logger:   logger,
 		})
 		if err != nil {
@@ -410,9 +410,9 @@ func New(cfg Config) (*Daemon, error) {
 // chosen port.
 func (d *Daemon) Addr() string { return d.quic.Addr().String() }
 
-// TCPAddr returns the optional Roam-over-TCP listener's bound
+// TCPAddr returns the optional MTRoam-over-TCP listener's bound
 // address, or "" when the TCP listener is disabled (Config.TCPAddr
-// was empty). Surfaced via meshtermd doctor JSON so iOS clients
+// was empty). Surfaced via mtroamd doctor JSON so iOS clients
 // in embedded-Tailscale mode can discover the port via the same
 // SSH-bootstrap mechanism that learns the QUIC port.
 func (d *Daemon) LoopbackTCPAddr() string {
@@ -447,7 +447,7 @@ func (d *Daemon) IPCSocketPath() string { return d.ipc.Path() }
 // return → registry.Run's deferred Shutdown closes all sessions →
 // QUIC listener and IPC socket are closed.
 func (d *Daemon) Run(ctx context.Context) error {
-	d.logger.InfoContext(ctx, "meshtermd starting",
+	d.logger.InfoContext(ctx, "mtroamd starting",
 		"quic_addr", d.Addr(),
 		"ipc_socket", d.IPCSocketPath(),
 		"cert_fp", d.certFP.String(),
@@ -590,7 +590,7 @@ func (d *Daemon) tailnetTCPPoller(ctx context.Context, wg *sync.WaitGroup, errCh
 			srv, srvErr := transport.NewTCPServer(transport.TCPConfig{
 				Addr:     addr,
 				StateDir: d.stateDir,
-				Handler:  d.roamHandler,
+				Handler:  d.mtroamHandler,
 				Logger:   d.logger,
 			})
 			if srvErr != nil {
@@ -670,8 +670,8 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		return ipc.AllocateResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
 	}
 
-	// Surface the optional Roam-over-TCP port to the iOS client.
-	// 0 when --roam-tcp-addr wasn't supplied at startup; clients
+	// Surface the optional MTRoam-over-TCP port to the iOS client.
+	// 0 when --mtroam-tcp-addr wasn't supplied at startup; clients
 	// in embedded-Tailscale mode then know to surface "host needs
 	// daemon update" rather than try a dial that won't succeed.
 	var tcpPort uint16
@@ -741,7 +741,7 @@ func (d *Daemon) HandleListSessions(ctx context.Context, _ ipc.ListSessionsReque
 }
 
 // HandleStatus returns the daemon's operational snapshot. Pure
-// read — no side effects. Used by `meshtermd status`, by Phase 5's
+// read — no side effects. Used by `mtroamd status`, by Phase 5's
 // install-flow version probe, and by systemd-unit health checks.
 func (d *Daemon) HandleStatus(ctx context.Context, _ ipc.StatusRequest) ipc.StatusResponse {
 	now := time.Now()
@@ -751,7 +751,7 @@ func (d *Daemon) HandleStatus(ctx context.Context, _ ipc.StatusRequest) ipc.Stat
 		StartedAtNs:      d.startedAt.UnixNano(),
 		UptimeNs:         now.Sub(d.startedAt).Nanoseconds(),
 		QUICAddr:         d.quic.Addr().String(),
-		RoamTCPAddr:      d.TCPAddr(),
+		MTRoamTCPAddr:      d.TCPAddr(),
 		CertFingerprint:  d.certFP.String(),
 		SessionCount:     d.registry.Len(),
 		MaxSessions:      d.registry.Capacity(),
@@ -1035,10 +1035,10 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// session.PTY and slots in everywhere a *pty.Handle used to.
 	//
 	// MESHTERM_ROAM=1 lets user shells short-circuit auto-tmux blocks
-	// in their rc files (we don't want Roam shells to nest inside the
+	// in their rc files (we don't want MTRoam shells to nest inside the
 	// user's regular tmux session — see the recommended guard form
-	// in the sidecarExtraEnv comment). The Roam shell already
-	// persists via meshtermd's own session machinery, so skipping
+	// in the sidecarExtraEnv comment). The MTRoam shell already
+	// persists via mtroamd's own session machinery, so skipping
 	// tmux is a no-op from the user's persistence perspective.
 	ptyHandle, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
 		SessionID:    sid.String(),

@@ -1,12 +1,12 @@
 // Command gen-completions emits bash, zsh, or fish shell-completion
-// scripts for meshtermd or mtctl. The single source of truth for what
+// scripts for mtroamd or mtroam. The single source of truth for what
 // subcommands and flags exist is internal/completions/spec.go.
 //
 // Usage:
 //
-//	gen-completions -shell bash -binary mtctl > mtctl.bash
-//	gen-completions -shell zsh  -binary mtctl > _mtctl
-//	gen-completions -shell fish -binary mtctl > mtctl.fish
+//	gen-completions -shell bash -binary mtroam > mtroam.bash
+//	gen-completions -shell zsh  -binary mtroam > _mtroam
+//	gen-completions -shell fish -binary mtroam > mtroam.fish
 //
 // `make completions` invokes this once per (shell, binary) pair and
 // writes the output under dist/completions/.
@@ -18,22 +18,22 @@ import (
 	"os"
 	"strings"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/completions"
+	"github.com/AG-Studio-Apps/mtroamd/internal/completions"
 )
 
 func main() {
 	shell := flag.String("shell", "", "completion shell: bash | zsh | fish")
-	bin := flag.String("binary", "", "binary to generate completions for: mtctl | meshtermd")
+	bin := flag.String("binary", "", "binary to generate completions for: mtroam | mtroamd")
 	flag.Parse()
 
 	var b completions.Binary
 	switch *bin {
-	case "mtctl":
-		b = completions.Mtctl
-	case "meshtermd":
-		b = completions.Meshtermd
+	case "mtroam":
+		b = completions.Mtroam
+	case "mtroamd":
+		b = completions.Mtroamd
 	default:
-		fmt.Fprintf(os.Stderr, "gen-completions: -binary must be 'mtctl' or 'meshtermd' (got %q)\n", *bin)
+		fmt.Fprintf(os.Stderr, "gen-completions: -binary must be 'mtroam' or 'mtroamd' (got %q)\n", *bin)
 		os.Exit(2)
 	}
 

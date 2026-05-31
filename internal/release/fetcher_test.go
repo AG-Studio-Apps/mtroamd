@@ -19,15 +19,15 @@ func TestAssetURLEscapesPathSegments(t *testing.T) {
 	}{
 		{
 			tag:  "v0.3.1",
-			file: "meshtermd-linux-amd64",
-			want: "https://example.test/dl/v0.3.1/meshtermd-linux-amd64",
+			file: "mtroamd-linux-amd64",
+			want: "https://example.test/dl/v0.3.1/mtroamd-linux-amd64",
 		},
 		{
 			// Defence-in-depth: even if a future caller skips
 			// ValidateTag, traversal cannot escape its segment.
 			tag:  "v1.0.0/../../etc/passwd",
-			file: "meshtermd-linux-amd64",
-			want: "https://example.test/dl/v1.0.0%2F..%2F..%2Fetc%2Fpasswd/meshtermd-linux-amd64",
+			file: "mtroamd-linux-amd64",
+			want: "https://example.test/dl/v1.0.0%2F..%2F..%2Fetc%2Fpasswd/mtroamd-linux-amd64",
 		},
 		{
 			tag:  "v0.3.1",
@@ -51,10 +51,10 @@ func TestAssetURLEscapesPathSegments(t *testing.T) {
 
 func TestLookupChecksumStandardFormat(t *testing.T) {
 	body := []byte(`
-057771c44688fbbc076832205f5aa5b26901da58e306dd3f8c3a7f1a9b1c5d72  meshtermd-darwin-amd64
-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  meshtermd-linux-amd64
+057771c44688fbbc076832205f5aa5b26901da58e306dd3f8c3a7f1a9b1c5d72  mtroamd-darwin-amd64
+abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  mtroamd-linux-amd64
 `)
-	got, err := LookupChecksum(body, "meshtermd-linux-amd64")
+	got, err := LookupChecksum(body, "mtroamd-linux-amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,8 +65,8 @@ abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789  meshtermd-linu
 }
 
 func TestLookupChecksumTolerates_DotSlash_Prefix(t *testing.T) {
-	body := []byte("aaa  ./meshtermd-linux-amd64\n")
-	got, err := LookupChecksum(body, "meshtermd-linux-amd64")
+	body := []byte("aaa  ./mtroamd-linux-amd64\n")
+	got, err := LookupChecksum(body, "mtroamd-linux-amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +76,8 @@ func TestLookupChecksumTolerates_DotSlash_Prefix(t *testing.T) {
 }
 
 func TestLookupChecksumMissingFile(t *testing.T) {
-	body := []byte("aaa  meshtermd-darwin-amd64\n")
-	if _, err := LookupChecksum(body, "meshtermd-freebsd-amd64"); err == nil {
+	body := []byte("aaa  mtroamd-darwin-amd64\n")
+	if _, err := LookupChecksum(body, "mtroamd-freebsd-amd64"); err == nil {
 		t.Fatal("expected error for missing entry")
 	}
 }
@@ -88,14 +88,14 @@ func TestAssetFilenameMatchesRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != "meshtermd-linux-amd64" {
+		if got != "mtroamd-linux-amd64" {
 			t.Errorf("got %q", got)
 		}
 	} else if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got != "meshtermd-darwin-arm64" {
+		if got != "mtroamd-darwin-arm64" {
 			t.Errorf("got %q", got)
 		}
 	}

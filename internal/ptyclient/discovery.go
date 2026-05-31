@@ -12,8 +12,8 @@ import (
 
 	"syscall"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // dialDiscoveryTimeout is the per-session dial budget when

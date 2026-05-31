@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // testPTY is a minimal session.PTY implementation that we can push

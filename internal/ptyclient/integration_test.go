@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 )
 
-// buildTestBinary compiles cmd/meshtermd into a temp file once per
+// buildTestBinary compiles cmd/mtroamd into a temp file once per
 // test process and returns its absolute path. The same binary
 // supports the pty-sidecar subcommand we exercise via SpawnNew.
 var (
@@ -28,13 +28,13 @@ var (
 func testBinary(t *testing.T) string {
 	t.Helper()
 	testBinOnce.Do(func() {
-		tmpDir, err := os.MkdirTemp("", "meshtermd-itest-*")
+		tmpDir, err := os.MkdirTemp("", "mtroamd-itest-*")
 		if err != nil {
 			testBinErr = err
 			return
 		}
-		binPath := filepath.Join(tmpDir, "meshtermd")
-		cmd := exec.Command("go", "build", "-o", binPath, "../../cmd/meshtermd")
+		binPath := filepath.Join(tmpDir, "mtroamd")
+		cmd := exec.Command("go", "build", "-o", binPath, "../../cmd/mtroamd")
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			testBinErr = err

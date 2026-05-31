@@ -178,10 +178,10 @@ func TestGeneratedCertHasExpectedShape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// CommonName is set so logs / debugging show "meshtermd" rather
+	// CommonName is set so logs / debugging show "mtroamd" rather
 	// than an empty subject.
-	if parsed.Subject.CommonName != "meshtermd" {
-		t.Errorf("CN = %q, want meshtermd", parsed.Subject.CommonName)
+	if parsed.Subject.CommonName != "mtroamd" {
+		t.Errorf("CN = %q, want mtroamd", parsed.Subject.CommonName)
 	}
 	// ExtKeyUsage must include ServerAuth or Network.framework's QUIC
 	// path will reject the cert outright.
@@ -211,7 +211,7 @@ func TestDefaultDirRespectsXDGDataHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(xdg, "meshtermd")
+	want := filepath.Join(xdg, "mtroamd")
 	if got != want {
 		t.Errorf("DefaultDir = %q, want %q", got, want)
 	}
@@ -227,7 +227,7 @@ func TestDefaultDirFallsBackToHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, ".local", "share", "meshtermd")
+	want := filepath.Join(home, ".local", "share", "mtroamd")
 	if got != want {
 		t.Errorf("DefaultDir = %q, want %q", got, want)
 	}

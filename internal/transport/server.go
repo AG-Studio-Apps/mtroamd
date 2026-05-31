@@ -19,7 +19,7 @@ import (
 
 	"github.com/quic-go/quic-go"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // DefaultQUICPort is the preferred UDP port the daemon binds when
@@ -38,7 +38,7 @@ const DefaultQUICPort uint16 = 49820
 // genuine conflict.
 const FallbackPortSpan uint16 = 99
 
-// DefaultTCPPort is the preferred TCP port for the Roam-over-TCP
+// DefaultTCPPort is the preferred TCP port for the MTRoam-over-TCP
 // listener (used by iOS embedded-Tailscale clients). Sits above the
 // QUIC fallback range (DefaultQUICPort + FallbackPortSpan) so the
 // two can never collide. The TCP listener uses the same
@@ -149,7 +149,7 @@ func New(cfg Config) (*Server, error) {
 		// Disable TLS session tickets. Go's TLS 1.3 implementation does
 		// not invoke VerifyPeerCertificate on a resumed session — the
 		// server's leaf cert isn't presented again. The client side
-		// (cmd/mtctl/attach_quic.go) has no ClientSessionCache today, so
+		// (cmd/mtroam/attach_quic.go) has no ClientSessionCache today, so
 		// resumption is already inhibited; this server-side flag closes
 		// the latent path that a future client-cache addition would
 		// reopen, bypassing fingerprint pinning on resumption.
@@ -204,7 +204,7 @@ func New(cfg Config) (*Server, error) {
 		//      MTU (PPPoE, IPv6 transition, etc.). 1200 is the QUIC v1
 		//      spec floor and works on every path the protocol supports.
 		// Trade-off: a few extra packets per connection vs. the default
-		// 1280. Worth it for portability — Roam's whole value prop is
+		// 1280. Worth it for portability — MTRoam's whole value prop is
 		// "works over flaky / tunnelled networks". PMTUD is still on so
 		// quic-go can grow the packet size if the path supports it.
 		InitialPacketSize: 1200,

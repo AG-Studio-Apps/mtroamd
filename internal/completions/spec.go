@@ -1,5 +1,5 @@
 // Package completions is the single source of truth for the
-// subcommand and flag inventory of `meshtermd` and `mtctl`, used by
+// subcommand and flag inventory of `mtroamd` and `mtroam`, used by
 // the cmd/gen-completions generator to emit bash/zsh/fish completion
 // scripts. Keep this file in lockstep with the actual CLIs — adding a
 // subcommand without updating this spec means it won't be tab-
@@ -9,7 +9,7 @@
 // subcommand. Flag *value* completion (e.g. tab-completing existing
 // session IDs by querying the daemon) is deliberately out for v1 —
 // it requires running the CLI to populate, which is fragile when
-// $MTCTL_HOST is unreachable.
+// $MTROAM_HOST is unreachable.
 package completions
 
 // Flag is a long-form flag name plus its one-line help. Short flags
@@ -35,8 +35,8 @@ type Binary struct {
 	Subcommands []Subcommand
 }
 
-// hostFlag is reused across mtctl subcommands that need an SSH target.
-var hostFlag = Flag{Long: "--host", Help: "SSH target running meshtermd (default: $MTCTL_HOST)"}
+// hostFlag is reused across mtroam subcommands that need an SSH target.
+var hostFlag = Flag{Long: "--host", Help: "SSH target running mtroamd (default: $MTROAM_HOST)"}
 
 // jsonFlag is reused across subcommands that emit a machine output.
 var jsonFlag = Flag{Long: "--json", Help: "emit machine-readable JSON"}
@@ -49,10 +49,10 @@ var updateFlags = []Flag{
 	{Long: "--allow-downgrade", Help: "permit installing a tag older than the running version"},
 }
 
-// Mtctl is the laptop CLI spec. Mirrors cmd/mtctl/main.go's switch
+// Mtroam is the laptop CLI spec. Mirrors cmd/mtroam/main.go's switch
 // table — when adding a subcommand there, add it here.
-var Mtctl = Binary{
-	Name: "mtctl",
+var Mtroam = Binary{
+	Name: "mtroam",
 	Subcommands: []Subcommand{
 		{Name: "version", Help: "print build identifier"},
 		{Name: "list", Help: "enumerate sessions on the remote daemon",
@@ -95,21 +95,21 @@ var Mtctl = Binary{
 		{Name: "restart", Help: "cycle the remote daemon via its supervisor (sessions survive)",
 			Flags: []Flag{hostFlag,
 				{Long: "--timeout", Help: "SSH dial / command timeout (e.g. 45s)"}}},
-		{Name: "uninstall", Help: "remove the mtctl binary",
+		{Name: "uninstall", Help: "remove the mtroam binary",
 			Flags: []Flag{{Long: "--yes", Help: "skip the confirmation prompt"}}},
 		{Name: "help", Help: "print top-level usage"},
 	},
 }
 
-// Meshtermd is the daemon CLI spec. Mirrors cmd/meshtermd/main.go.
-var Meshtermd = Binary{
-	Name: "meshtermd",
+// Mtroamd is the daemon CLI spec. Mirrors cmd/mtroamd/main.go.
+var Mtroamd = Binary{
+	Name: "mtroamd",
 	Subcommands: []Subcommand{
 		{Name: "version", Help: "print build identifier"},
 		{Name: "serve", Help: "run the long-lived daemon",
 			Flags: []Flag{
 				{Long: "--addr", Help: "QUIC listen address (default 127.0.0.1:0)"},
-				{Long: "--socket", Help: "IPC socket path (default: XDG_RUNTIME_DIR/meshtermd.sock)"},
+				{Long: "--socket", Help: "IPC socket path (default: XDG_RUNTIME_DIR/mtroamd.sock)"},
 				{Long: "--max-sessions", Help: "cap on concurrent sessions"},
 				{Long: "--idle-timeout", Help: "default per-session idle timeout (0 = 1h)"},
 				{Long: "--max-idle-timeout", Help: "ceiling for per-session idle timeouts"},
@@ -133,7 +133,7 @@ var Meshtermd = Binary{
 			Flags: []Flag{jsonFlag}},
 		{Name: "session-search", Help: "regex-grep a session's scrollback ring",
 			Flags: []Flag{jsonFlag,
-				{Long: "--socket", Help: "unix socket path (default: $XDG_RUNTIME_DIR/meshtermd.sock)"},
+				{Long: "--socket", Help: "unix socket path (default: $XDG_RUNTIME_DIR/mtroamd.sock)"},
 				{Long: "--timeout", Help: "max time to wait for the daemon to respond"},
 				{Long: "--max", Help: "cap on returned matches (default 100, 0 = daemon default)"},
 				{Long: "--anchored", Help: "wrap the pattern in (?m:…) so ^/$ match physical newlines"}}},
@@ -150,7 +150,7 @@ var Meshtermd = Binary{
 		{Name: "uninstall", Help: "remove the daemon, supervisor unit, and (optionally) state",
 			Flags: []Flag{
 				{Long: "--yes", Help: "skip the confirmation prompt"},
-				{Long: "--purge", Help: "also wipe ~/.local/share/meshtermd/"}}},
+				{Long: "--purge", Help: "also wipe ~/.local/share/mtroamd/"}}},
 		{Name: "help", Help: "print top-level usage"},
 	},
 }
@@ -158,5 +158,5 @@ var Meshtermd = Binary{
 // All returns every shipped binary, used by the generator's batch
 // mode (one invocation, both binaries emitted).
 func All() []Binary {
-	return []Binary{Mtctl, Meshtermd}
+	return []Binary{Mtroam, Mtroamd}
 }

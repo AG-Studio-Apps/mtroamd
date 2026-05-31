@@ -90,7 +90,7 @@ func TestVerifyLegacySignatureFromPrimaryKey(t *testing.T) {
 	primary := newTestSigner(t)
 	emergency := newTestSigner(t)
 	body := []byte("hello, minisign\n")
-	sig := primary.sign(body, "meshtermd v0.1.0", false)
+	sig := primary.sign(body, "mtroamd v0.1.0", false)
 	result, err := MinisignVerify(body, sig, [][]byte{primary.trustedBlob(), emergency.trustedBlob()})
 	if err != nil {
 		t.Fatalf("verify: %v", err)
@@ -98,7 +98,7 @@ func TestVerifyLegacySignatureFromPrimaryKey(t *testing.T) {
 	if result.KeyIndex != 0 {
 		t.Errorf("KeyIndex = %d, want 0", result.KeyIndex)
 	}
-	if result.TrustedComment != "meshtermd v0.1.0" {
+	if result.TrustedComment != "mtroamd v0.1.0" {
 		t.Errorf("TrustedComment = %q", result.TrustedComment)
 	}
 }
@@ -108,7 +108,7 @@ func TestVerifyHashedSignatureFromPrimaryKey(t *testing.T) {
 	primary := newTestSigner(t)
 	emergency := newTestSigner(t)
 	body := []byte("hello prehashed\n")
-	sig := primary.sign(body, "meshtermd v0.1.1", true)
+	sig := primary.sign(body, "mtroamd v0.1.1", true)
 	result, err := MinisignVerify(body, sig, [][]byte{primary.trustedBlob(), emergency.trustedBlob()})
 	if err != nil {
 		t.Fatalf("verify: %v", err)

@@ -12,8 +12,8 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/quic-go/quic-go"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // fakePTY mirrors the in-memory PTY used by the session package's

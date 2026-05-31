@@ -20,7 +20,7 @@ import (
 
 // DefaultGraceSecs is the time the sidecar will wait for the daemon
 // to reconnect after a socket disconnect before SIGHUPing its child
-// and exiting. 30s comfortably covers `systemctl restart meshtermd`
+// and exiting. 30s comfortably covers `systemctl restart mtroamd`
 // (measured ~3s on Pi 4) with 10× headroom.
 const DefaultGraceSecs = 30
 

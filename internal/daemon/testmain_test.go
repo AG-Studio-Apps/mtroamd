@@ -12,14 +12,14 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/ptysidecar"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 )
 
 // TestMain handles the case where the daemon spawns the test binary
 // as its `pty-sidecar` subprocess. In production the daemon binary
-// (`meshtermd`) re-execs itself with `pty-sidecar` args; under `go
+// (`mtroamd`) re-execs itself with `pty-sidecar` args; under `go
 // test`, `os.Executable()` returns the test binary, so we need a
-// shim here that dispatches the same way `cmd/meshtermd` does.
+// shim here that dispatches the same way `cmd/mtroamd` does.
 //
 // Without this shim, the daemon test process forks itself with
 // pty-sidecar args; the testing framework doesn't recognise those,
@@ -31,7 +31,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runPtySidecarForTests is a duplicate of cmd/meshtermd.runPtySidecar
+// runPtySidecarForTests is a duplicate of cmd/mtroamd.runPtySidecar
 // scoped to the test binary. Kept in sync by hand — the flag surface
 // is small and frozen.
 func runPtySidecarForTests(args []string) int {

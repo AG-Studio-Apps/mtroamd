@@ -37,7 +37,7 @@ const defaultPreAuthReadDeadline = 5 * time.Second
 //   between the iOS app's in-process tsnet node and the daemon's
 //   tsnet-routable address. Wire-level TLS would be redundant — the
 //   security model relies on WireGuard's same-or-stronger guarantees.
-//   The Roam attach-token flow continues to authenticate the client
+//   The MTRoam attach-token flow continues to authenticate the client
 //   to the daemon at the protocol layer (single-use, expiring token
 //   bootstrapped via SSH), so a compromised tsnet node can't replay
 //   into a different session.
@@ -48,7 +48,7 @@ const defaultPreAuthReadDeadline = 5 * time.Second
 //
 // Off-by-default lifecycle:
 //   NewTCPServer is only invoked when cfg.TCPAddr is non-empty in the
-//   daemon config. The --roam-tcp-port CLI flag (default "")
+//   daemon config. The --mtroam-tcp-port CLI flag (default "")
 //   threads through to that field. If unset, the daemon ships
 //   today's QUIC-only posture.
 type TCPServer struct {
@@ -171,7 +171,7 @@ func bindTCPWithFallback(addr string, stateDir string) (net.Listener, error) {
 }
 
 // Addr returns the listener's bound local TCP address. Useful for
-// logging and for daemon doctor's roam_tcp_addr field.
+// logging and for daemon doctor's mtroam_tcp_addr field.
 func (s *TCPServer) Addr() *net.TCPAddr {
 	return s.listener.Addr().(*net.TCPAddr)
 }
@@ -215,7 +215,7 @@ func (s *TCPServer) Serve(ctx context.Context) error {
 		default:
 			// At capacity: refuse with a bare close. The peer
 			// observes a connection reset; clients retry. No
-			// typed protocol error here — the Roam protocol's
+			// typed protocol error here — the MTRoam protocol's
 			// auth handshake hasn't started yet.
 			s.logger.WarnContext(ctx, "tcp: dropping connection (max inflight reached)",
 				"remote", conn.RemoteAddr().String())

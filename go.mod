@@ -1,4 +1,4 @@
-module github.com/AG-Studio-Apps/meshtermd
+module github.com/AG-Studio-Apps/mtroamd
 
 go 1.26.3
 

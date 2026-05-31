@@ -49,7 +49,7 @@ const (
 // attachers per session. Resource defence; passive attaches are
 // cheap (one goroutine per stream, no PTY ownership) but unbounded
 // passive multi-attach would burn fds + goroutines on a runaway
-// `mtctl tail` loop.
+// `mtroam tail` loop.
 const MaxPassivePerSession = 8
 
 // String returns the wire form of an AttachMode for logging /
@@ -336,7 +336,7 @@ func (s *Session) ClearRecover(gen uint64) {
 // constructor so test code can inject deterministic behaviour.
 //
 // `name` is the user-visible label addressable via Registry.LookupByName
-// and surfaced in `meshtermd list`. The empty string is allowed —
+// and surfaced in `mtroamd list`. The empty string is allowed —
 // such a session is anonymous (registry doesn't index it by name)
 // but the daemon's spawnSession synthesises a non-empty default
 // (`session-<6hex>`) so client UIs never see blank names. `name` is
@@ -455,7 +455,7 @@ func (s *Session) SetWedgeLogPath(path string) {
 
 // WedgeAltScreenActive returns the alternate-screen state observed by
 // the wedge watcher at the moment of the call. Used by the transport
-// layer to populate AttachAck.AltScreenActive so iOS / mtctl clients
+// layer to populate AttachAck.AltScreenActive so iOS / mtroam clients
 // can prime their local Terminal into alt-buffer mode before replay
 // — without that, a truncated replay window leaves the client emulator
 // stuck on the normal buffer even though the session is semantically
@@ -472,7 +472,7 @@ func (s *Session) WedgeAltScreenActive() bool {
 
 // LastTitle returns the most recent terminal title observed in the
 // PTY byte stream via OSC 0/2 sequences. Used by the transport layer
-// to populate AttachAck.LastTitle so iOS / mtctl clients can prime
+// to populate AttachAck.LastTitle so iOS / mtroam clients can prime
 // their local Terminal with the right window title before replay —
 // without that, the OSC sequence that set the title can be evicted
 // from the 4 MiB ring before a long-session client reattaches, and
@@ -504,8 +504,8 @@ func (s *Session) SetLastTitle(t string) {
 }
 
 // WedgeSnapshot returns the per-session cumulative metrics tracked by
-// the wedge watcher. Used by `meshtermd wedge-report` and
-// `meshtermd session-info` to render a summary alongside the
+// the wedge watcher. Used by `mtroamd wedge-report` and
+// `mtroamd session-info` to render a summary alongside the
 // JSONL contents.
 func (s *Session) WedgeSnapshot() (totalOut, resizes, silent, cursor, verticalWalk uint64) {
 	s.mu.Lock()
@@ -627,7 +627,7 @@ func (s *Session) IdleTimeout() time.Duration {
 
 // SetIdleTimeout updates the per-session GC timeout. Used by the
 // daemon's reattach path: when an iOS client edits its host's
-// Keep-alive setting, the next `meshtermd connect` carries a new
+// Keep-alive setting, the next `mtroamd connect` carries a new
 // --idle-timeout value; without this setter the existing session
 // kept its original value and the GC reaped it at the OLD interval.
 //
@@ -930,7 +930,7 @@ func (s *Session) Closed() bool {
 // just closes the socket — the sidecar enters its grace timer and
 // will be reattached on next daemon startup. Use Kill instead when
 // the caller wants the child shell reaped immediately (e.g. user-
-// invoked `mtctl kill`).
+// invoked `mtroam kill`).
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -980,11 +980,11 @@ type PTYKiller interface {
 }
 
 // Kill is the immediate-teardown sibling of Close. For sidecar-
-// backed PTYs (the v0.6+ Roam sessions) it sends die_now so the
+// backed PTYs (the v0.6+ MTRoam sessions) it sends die_now so the
 // child shell is SIGHUP'd within ~250 ms. For in-process PTYs it
 // falls back to Close (which already SIGHUPs synchronously).
 //
-// Used by registry.Remove so `mtctl kill` doesn't leave the child
+// Used by registry.Remove so `mtroam kill` doesn't leave the child
 // shell running during the sidecar's 30s reconnect-grace window.
 func (s *Session) Kill() error {
 	s.mu.Lock()

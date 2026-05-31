@@ -1,6 +1,6 @@
-// Package ipc is the unix-socket IPC between `meshtermd serve`
+// Package ipc is the unix-socket IPC between `mtroamd serve`
 // (the long-running daemon that owns the session registry) and
-// `meshtermd connect` (the SSH-side helper that runs once per
+// `mtroamd connect` (the SSH-side helper that runs once per
 // bootstrap to allocate or reattach a session).
 //
 // The same uid+gid runs both processes — there's no auth on the
@@ -14,7 +14,7 @@
 // on a stream" throughout the codebase.
 package ipc
 
-// Request is the union of all `meshtermd connect` → `meshtermd serve`
+// Request is the union of all `mtroamd connect` → `mtroamd serve`
 // messages. Discriminated by the `t` tag, like the protocol's
 // control stream.
 const (
@@ -79,7 +79,7 @@ type AllocateRequest struct {
 	// Persist is the tri-state opt-in for cross-restart session
 	// persistence:
 	//   nil   → use the daemon-wide default
-	//          (`meshtermd serve --persistence-default`, default on).
+	//          (`mtroamd serve --persistence-default`, default on).
 	//   *true  → explicitly opt this session in.
 	//   *false → explicitly opt this session out.
 	//
@@ -108,8 +108,8 @@ type AllocateResponse struct {
 	SessionID   string `cbor:"sid,omitempty"`     // 32 hex chars
 	AttachToken string `cbor:"tok,omitempty"`     // 32 hex chars, single-use, 30s TTL
 	Port        uint16 `cbor:"port,omitempty"`    // QUIC UDP port
-	// TCPPort is the plain-TCP Roam listener's bound port, populated
-	// when the daemon was started with --roam-tcp-addr. Surfaced on
+	// TCPPort is the plain-TCP MTRoam listener's bound port, populated
+	// when the daemon was started with --mtroam-tcp-addr. Surfaced on
 	// the bootstrap line as MTRM_TCP so the iOS client can dial the
 	// daemon over its in-process tsnet (embedded-Tailscale mode).
 	// Omitted (0) when the TCP listener is disabled — clients with
@@ -130,7 +130,7 @@ type AllocateResponse struct {
 
 // SessionInfo is one row of the ListSessionsResponse inventory.
 // Used both over CBOR (IPC response shape) and over JSON (the
-// `meshtermd list --json` output that iOS consumes via SSH);
+// `mtroamd list --json` output that iOS consumes via SSH);
 // field tags are short stable strings so CBOR + JSON tooling
 // produce a consistent wire form.
 //
@@ -153,10 +153,10 @@ type SessionInfo struct {
 	Cols           uint16   `cbor:"cols,omitempty" json:"cols,omitempty"`
 
 	// Wedge-watcher cumulative counters. Optional so older daemon
-	// builds (pre-v0.9.4) can round-trip with newer mtctl clients
+	// builds (pre-v0.9.4) can round-trip with newer mtroam clients
 	// without protocol breakage. Populated for every live session;
 	// zero values are valid and indicate "no wedge events for this
-	// session yet". Surfaces in `meshtermd session-info` / `mtctl
+	// session yet". Surfaces in `mtroamd session-info` / `mtroam
 	// session-info` so operators can correlate session size + age
 	// with wedge frequency without grepping the JSONL.
 	WedgeTotalOutBytes      uint64 `cbor:"wto,omitempty" json:"wedge_total_out_bytes,omitempty"`
@@ -186,7 +186,7 @@ type ListSessionsResponse struct {
 // KillSessionRequest reaps a session by ID or name. Sel is the
 // selector — tried as a hex SessionID first, falls back to a name
 // lookup on parse failure. Single-arg form keeps the CLI surface
-// simple (`meshtermd kill <id-or-name>`).
+// simple (`mtroamd kill <id-or-name>`).
 type KillSessionRequest struct {
 	T   string `cbor:"t"`
 	Sel string `cbor:"sel"`
@@ -233,7 +233,7 @@ type StatusRequest struct {
 
 // StatusResponse carries one snapshot of the daemon's
 // configuration + live counters. Field tags are short stable
-// strings; JSON tags match the wire shape `meshtermd status
+// strings; JSON tags match the wire shape `mtroamd status
 // --json` emits for tooling consumers.
 type StatusResponse struct {
 	T  string `cbor:"t" json:"-"`
@@ -243,13 +243,13 @@ type StatusResponse struct {
 	StartedAtNs         int64  `cbor:"sat,omitempty" json:"started_at_ns"`
 	UptimeNs            int64  `cbor:"upt,omitempty" json:"uptime_ns"`
 	QUICAddr            string `cbor:"qa,omitempty" json:"quic_addr"`
-	// RoamTCPAddr is the plain-TCP Roam listener's bound address,
-	// surfaced when the daemon is started with --roam-tcp-addr.
+	// MTRoamTCPAddr is the plain-TCP MTRoam listener's bound address,
+	// surfaced when the daemon is started with --mtroam-tcp-addr.
 	// Empty when the TCP listener is disabled (the default —
 	// daemon ships QUIC-only). iOS clients in embedded-Tailscale
 	// mode use this to dial the daemon via tsnet; system / direct
 	// mode clients ignore it and use QUICAddr.
-	RoamTCPAddr         string `cbor:"rta,omitempty" json:"roam_tcp_addr,omitempty"`
+	MTRoamTCPAddr         string `cbor:"rta,omitempty" json:"mtroam_tcp_addr,omitempty"`
 	CertFingerprint     string `cbor:"fp,omitempty" json:"cert_fingerprint"`
 	SessionCount        int    `cbor:"sc,omitempty" json:"session_count"`
 	MaxSessions         int    `cbor:"ms,omitempty" json:"max_sessions"`
@@ -261,7 +261,7 @@ type StatusResponse struct {
 	Msg string `cbor:"msg,omitempty" json:"msg,omitempty"`
 }
 
-// PingRequest is a liveness check used by `meshtermd connect` to
+// PingRequest is a liveness check used by `mtroamd connect` to
 // verify the daemon is alive before any session work. The daemon
 // echoes a PingResponse with the same nonce.
 type PingRequest struct {
@@ -295,7 +295,7 @@ type SessionSearchRequest struct {
 // for surrounding context if more than the immediate line is wanted.
 // LineNum is 0-based within the retained scrollback (not absolute
 // across session history — the ring can't know lines that have aged
-// out). JSON tags match the wire shape `meshtermd session-search
+// out). JSON tags match the wire shape `mtroamd session-search
 // --json` emits for tooling consumers.
 type SearchMatchInfo struct {
 	StartSeq uint64 `cbor:"ss" json:"start_seq"`

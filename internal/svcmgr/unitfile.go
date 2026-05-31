@@ -10,7 +10,7 @@ import (
 // that just want the canonical file pass &UserUnitOptions{} or nil.
 type UserUnitOptions struct {
 	// BinPath is the absolute path to the daemon binary referenced
-	// from ExecStart. Defaults to "%h/.local/bin/meshtermd" so the
+	// from ExecStart. Defaults to "%h/.local/bin/mtroamd" so the
 	// unit file is portable across users on the same host (systemd
 	// expands %h at unit-load time).
 	BinPath string
@@ -27,11 +27,11 @@ type UserUnitOptions struct {
 	Addr string
 
 	// SocketPath is the IPC socket the daemon binds for `connect`.
-	// Defaults to "%h/.local/share/meshtermd/meshtermd.sock" matching
-	// the default-path lookup in `cmd/meshtermd/connect.go`.
+	// Defaults to "%h/.local/share/mtroamd/mtroamd.sock" matching
+	// the default-path lookup in `cmd/mtroamd/connect.go`.
 	SocketPath string
 
-	// TCPAddr is the optional Roam-over-TCP listener bind address
+	// TCPAddr is the optional MTRoam-over-TCP listener bind address
 	// (used by iOS clients in embedded-Tailscale routing mode).
 	// Defaults to "tailnet:49920" — the daemon resolves the local
 	// tailnet IP at startup and binds there. The unencrypted TCP
@@ -45,14 +45,14 @@ type UserUnitOptions struct {
 	// Operators with a reason to bypass that posture (a TLS-
 	// terminating reverse proxy in front, a non-Tailscale private
 	// network) can pass an explicit "host:port" pair. The sentinel
-	// "-" suppresses the --roam-tcp-addr flag entirely (QUIC-only).
+	// "-" suppresses the --mtroam-tcp-addr flag entirely (QUIC-only).
 	TCPAddr string
 }
 
 // RenderUserUnit returns the canonical `~/.config/systemd/user/
-// meshtermd.service` content. This is THE source of truth for the
+// mtroamd.service` content. This is THE source of truth for the
 // systemd-user unit shipped by the project:
-//   - `meshtermd unit print` writes this to stdout
+//   - `mtroamd unit print` writes this to stdout
 //   - the iOS auto-installer's SystemdUnitTemplate is kept byte-
 //     identical via a snapshot test
 //   - AUR/Homebrew packaging pipes this into the package payload
@@ -67,13 +67,13 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 		o = *opts
 	}
 	if o.BinPath == "" {
-		o.BinPath = "%h/.local/bin/meshtermd"
+		o.BinPath = "%h/.local/bin/mtroamd"
 	}
 	if o.Addr == "" {
 		o.Addr = "0.0.0.0:49820"
 	}
 	if o.SocketPath == "" {
-		o.SocketPath = "%h/.local/share/meshtermd/meshtermd.sock"
+		o.SocketPath = "%h/.local/share/mtroamd/mtroamd.sock"
 	}
 	if o.TCPAddr == "" {
 		o.TCPAddr = "tailnet:49920"
@@ -81,20 +81,20 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 
 	var b strings.Builder
 	fmt.Fprintln(&b, "[Unit]")
-	fmt.Fprintln(&b, "Description=meshtermd — meshTerm roaming daemon")
-	fmt.Fprintln(&b, "Documentation=https://github.com/AG-Studio-Apps/meshtermd")
+	fmt.Fprintln(&b, "Description=mtroamd — meshTerm roaming daemon")
+	fmt.Fprintln(&b, "Documentation=https://github.com/AG-Studio-Apps/mtroamd")
 	fmt.Fprintln(&b, "After=network.target")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "[Service]")
 	fmt.Fprintln(&b, "Type=simple")
-	// Operator opt-out: "-" suppresses the --roam-tcp-addr flag for
+	// Operator opt-out: "-" suppresses the --mtroam-tcp-addr flag for
 	// the rare case someone wants QUIC-only. Everything else emits
 	// both transports so an iOS-side embedded-mode switch needs no
 	// re-install.
 	if o.TCPAddr == "-" {
 		fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --socket %s\n", o.BinPath, o.Addr, o.SocketPath)
 	} else {
-		fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --roam-tcp-addr %s --socket %s\n",
+		fmt.Fprintf(&b, "ExecStart=%s serve --addr %s --mtroam-tcp-addr %s --socket %s\n",
 			o.BinPath, o.Addr, o.TCPAddr, o.SocketPath)
 	}
 	fmt.Fprintln(&b, "Restart=on-failure")

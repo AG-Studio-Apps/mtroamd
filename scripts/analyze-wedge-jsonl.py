@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Analyse the wedge-events.jsonl file produced by meshtermd's per-session
+Analyse the wedge-events.jsonl file produced by mtroamd's per-session
 wedge watcher. Cross-references the user's manual classifications in
 wedge-observations.log (timestamp-tagged true/false-positive entries).
 
-Use during the data-collection phase (`MESHTERMD_WEDGE_CAPTURE_BYTES=1`)
+Use during the data-collection phase (`MTROAMD_WEDGE_CAPTURE_BYTES=1`)
 to:
   * surface the distribution of `ms_since_resize` and `cud_observed`
   * decode the post-resize PTY byte stream and look for the
@@ -30,8 +30,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-DEFAULT_JSONL = Path.home() / ".local/share/meshtermd/wedge-events.jsonl"
-DEFAULT_OBSERVATIONS = Path.home() / ".local/share/meshtermd/wedge-observations.log"
+DEFAULT_JSONL = Path.home() / ".local/share/mtroamd/wedge-events.jsonl"
+DEFAULT_OBSERVATIONS = Path.home() / ".local/share/mtroamd/wedge-observations.log"
 
 # Empirically observed false-positive signature: Claude's full
 # re-initialisation emits mouse-tracking-mode enable + clear-screen +

@@ -1,4 +1,4 @@
-# meshtermd apt — development channel
+# mtroamd apt — development channel
 
 > ⚠️ **DEVELOPMENT CHANNEL — UNSTABLE. MAY BREAK YOUR SYSTEM.**
 > The `dev` suite carries pre-release builds from `develop` (versioned
@@ -10,26 +10,26 @@
 ## Opt in
 
 ```sh
-curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
-  | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
+curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
 
-echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://ag-studio-apps.github.io/meshtermd dev main" \
-  | sudo tee /etc/apt/sources.list.d/meshtermd-dev.list
+echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd dev main" \
+  | sudo tee /etc/apt/sources.list.d/mtroamd-dev.list
 
-sudo apt update && sudo apt install meshtermd
+sudo apt update && sudo apt install mtroamd
 # then, as your login user:
-systemctl --user enable --now meshtermd
+systemctl --user enable --now mtroamd
 ```
 
 Every dev install/upgrade prints a `⚠ DEVELOPMENT build` warning, and
-`meshtermd --version` / `apt policy meshtermd` show the `~rc`/`~dev` suffix.
+`mtroamd --version` / `apt policy mtroamd` show the `~rc`/`~dev` suffix.
 
 ## Uninstall
 
 ```sh
-sudo apt remove meshtermd     # stops + removes the daemon; keeps ~/.local/share/meshtermd (cert, sessions)
-sudo apt purge  meshtermd     # also wipes that state dir — full clean removal (iOS would need to re-pair)
-sudo rm -f /etc/apt/sources.list.d/meshtermd-dev.list   # drop the dev source
+sudo apt remove mtroamd     # stops + removes the daemon; keeps ~/.local/share/mtroamd (cert, sessions)
+sudo apt purge  mtroamd     # also wipes that state dir — full clean removal (iOS would need to re-pair)
+sudo rm -f /etc/apt/sources.list.d/mtroamd-dev.list   # drop the dev source
 ```
 
 `remove`/`purge` stop + disable your `--user` service and remove the unit for
@@ -41,10 +41,10 @@ The dev version sorts *below* the matching stable release, so just drop the dev
 source and upgrade — apt converges you onto stable:
 
 ```sh
-sudo rm /etc/apt/sources.list.d/meshtermd-dev.list
+sudo rm /etc/apt/sources.list.d/mtroamd-dev.list
 # add the stable line from the README, then:
-sudo apt update && sudo apt install --only-upgrade meshtermd
+sudo apt update && sudo apt install --only-upgrade mtroamd
 ```
 
 (If you're on a `~rc` newer than the latest stable, `apt` won't "downgrade"
-automatically — `sudo apt install meshtermd=<stable-version>` to pin back.)
+automatically — `sudo apt install mtroamd=<stable-version>` to pin back.)

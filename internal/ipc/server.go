@@ -76,7 +76,7 @@ func WithMaxConcurrent(n int) ServerOption {
 // the calling uid and has mode ≤ 0700 before binding. A
 // world-writable parent (e.g., a misconfigured XDG_RUNTIME_DIR)
 // would let another local user race-create the socket and
-// intercept `meshtermd connect` IPC.
+// intercept `mtroamd connect` IPC.
 func NewServer(socketPath string, handler Handler, opts ...ServerOption) (*Server, error) {
 	if handler == nil {
 		return nil, errors.New("ipc: NewServer requires a Handler")
@@ -95,7 +95,7 @@ func NewServer(socketPath string, handler Handler, opts ...ServerOption) (*Serve
 	if err := VerifyParentDir(parent); err != nil {
 		return nil, fmt.Errorf("socket parent dir: %w", err)
 	}
-	// Remove stale socket. A live `meshtermd serve` would be
+	// Remove stale socket. A live `mtroamd serve` would be
 	// holding the listener open; bind would fail. If it succeeds,
 	// the previous one is gone. Use Lstat first so we don't follow
 	// a symlink an attacker may have planted at the socket path.
@@ -134,7 +134,7 @@ func NewServer(socketPath string, handler Handler, opts ...ServerOption) (*Serve
 // local attacker pre-creates the socket file or a symlink and races
 // the daemon's bind.
 //
-// Exported for the client-side discovery path (cmd/meshtermd/serve.go's
+// Exported for the client-side discovery path (cmd/mtroamd/serve.go's
 // `discoverClientSocketPath`) so client subcommands mirror the
 // server's bind-time validation — without that mirroring a connect
 // helper would happily dial a same-name socket planted under a

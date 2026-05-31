@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
-	"github.com/AG-Studio-Apps/meshtermd/internal/session"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
 // drainBriefly runs an unbuffered drain on the control stream for
@@ -32,8 +32,8 @@ func drainBriefly(s Conn, d time.Duration) {
 	_, _ = io.Copy(io.Discard, s)
 }
 
-// ProtocolHandler is the real Handler that drives the Roam protocol
-// per docs/roam-protocol.md. One ProtocolHandler is shared across
+// ProtocolHandler is the real Handler that drives the MTRoam protocol
+// per docs/mtroam-protocol.md. One ProtocolHandler is shared across
 // all accepted connections — it holds no per-connection state, only
 // the session.Registry it dispatches into.
 //
@@ -83,7 +83,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// Default close: 0 + empty (graceful). Pumps may overwrite if
 	// they hit a protocol violation. On QUIC this becomes the
 	// CONNECTION_CLOSE typed code; on TCP it's discarded — the
-	// Roam framing layer already wrote a typed Goodbye / AttachAck
+	// MTRoam framing layer already wrote a typed Goodbye / AttachAck
 	// frame on the wire before we land here.
 	closeErr := uint64(0)
 	closeMsg := ""
@@ -593,7 +593,7 @@ func closeMsgFor(code uint64) string {
 
 // computeReplayWindow figures out where on the buffer the replay
 // stream should start, given the client's last-acked seq. Three
-// cases per docs/roam-protocol.md § 7.3 and § 11.5:
+// cases per docs/mtroam-protocol.md § 7.3 and § 11.5:
 //
 //   1. ack >= tail: replay from ack, no truncation
 //   2. ack <  tail: replay from tail, truncated=true (some output lost)

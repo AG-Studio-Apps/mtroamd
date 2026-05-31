@@ -11,7 +11,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
-	"github.com/AG-Studio-Apps/meshtermd/internal/protocol"
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // maxPersistedBufCapacity caps the BufCapacity field in a persisted
@@ -380,7 +380,7 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 // internal/atomicfile package.
 func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".meshtermd-persist-*")
+	tmp, err := os.CreateTemp(dir, ".mtroamd-persist-*")
 	if err != nil {
 		return err
 	}

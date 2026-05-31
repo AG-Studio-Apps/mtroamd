@@ -1,8 +1,8 @@
-# meshtermd
+# mtroamd
 
-**meshtermd** is a persistent terminal daemon over QUIC. It holds shell sessions on a host across network drops, device sleep, and client reconnects — like `mosh` + `tmux` consolidated into one daemon, with real scrollback through disconnects, named multi-session, and any-client handoff between devices.
+**mtroamd** is a persistent terminal daemon over QUIC. It holds shell sessions on a host across network drops, device sleep, and client reconnects — like `mosh` + `tmux` consolidated into one daemon, with real scrollback through disconnects, named multi-session, and any-client handoff between devices.
 
-Ships with [`mtctl`](docs/mtctl.md), a laptop CLI for `attach` / `list` / `new` / `kill` / `rename` / `update`. The iOS app [meshTerm](https://meshterm.app) is one client; mtctl is another; the wire protocol is documented in [`docs/roam-protocol.md`](docs/roam-protocol.md) so others can be written.
+Ships with [`mtroam`](docs/mtroam.md), a laptop CLI for `attach` / `list` / `new` / `kill` / `rename` / `update`. The iOS app [meshTerm](https://meshterm.app) is one client; mtroam is another; the wire protocol is documented in [`docs/mtroam-protocol.md`](docs/mtroam-protocol.md) so others can be written.
 
 Start a build on your phone in the morning, reattach from a laptop in the afternoon. Lose Wi-Fi mid-shell, walk to a café, reconnect — the session is still there with full scrollback.
 
@@ -12,7 +12,7 @@ Pre-1.0. The wire protocol is documented but not frozen; we may break it before 
 
 ## Compared to
 
-|                              | meshtermd       | mosh        | tmux        | wezterm mux | Eternal Terminal |
+|                              | mtroamd       | mosh        | tmux        | wezterm mux | Eternal Terminal |
 |------------------------------|-----------------|-------------|-------------|-------------|------------------|
 | Persistent across drops      | ✅              | ✅          | ✅          | ✅          | ✅               |
 | Real scrollback through drop | ✅              | ❌          | ✅          | ✅          | ✅               |
@@ -25,11 +25,11 @@ Pre-1.0. The wire protocol is documented but not frozen; we may break it before 
 
 The daemon is the source of truth; the clients are interchangeable. That's the line wezterm's multiplexer can't easily cross — it requires their emulator on both ends.
 
-† **meshTerm iOS status**: the QUIC-speaking meshTerm client is currently in TestFlight as the v2.0 release; the App Store version (v1.x) is the pre-Roam SSH client. The two ship in lockstep — when v2.0 hits the App Store, meshtermd cuts its first coordinated public release (see Install below).
+† **meshTerm iOS status**: the QUIC-speaking meshTerm client is currently in TestFlight as the v2.0 release; the App Store version (v1.x) is the pre-MTRoam SSH client. The two ship in lockstep — when v2.0 hits the App Store, mtroamd cuts its first coordinated public release (see Install below).
 
 ## What it does
 
-- Listens for QUIC connections from any client that speaks the Roam protocol (ALPN `meshterm/0`, single bidi stream with tagged framing).
+- Listens for QUIC connections from any client that speaks the MTRoam protocol (ALPN `meshterm/0`, single bidi stream with tagged framing).
 - Owns a registry of terminal sessions: PTY + child shell + monotonic output ring buffer (4 MiB per session).
 - Sessions persist across client disconnects; reattach replays buffered output from the client's last ack sequence.
 - One exclusive + N readonly attachers per session. Multi-attach is for "watch a colleague" / "open the same session from a second device."
@@ -38,13 +38,13 @@ The daemon is the source of truth; the clients are interchangeable. That's the l
 
 ## Install
 
-**Currently live (manual install only):** prebuilt binaries from [GitHub Releases](https://github.com/AG-Studio-Apps/meshtermd/releases/latest) for seven targets — linux amd64/arm64/armv7, darwin amd64/arm64, freebsd amd64/arm64. Releases include the daemon, the `mtctl` CLI, man pages, and shell completions for bash/zsh/fish.
+**Currently live (manual install only):** prebuilt binaries from [GitHub Releases](https://github.com/AG-Studio-Apps/mtroamd/releases/latest) for seven targets — linux amd64/arm64/armv7, darwin amd64/arm64, freebsd amd64/arm64. Releases include the daemon, the `mtroam` CLI, man pages, and shell completions for bash/zsh/fish.
 
 ```sh
 # Pick the right asset for your platform from the latest release.
 # Verify SHA-256 against the signed SHA256SUMS, then install:
-install -m 755 meshtermd-<platform> ~/.local/bin/meshtermd
-install -m 755 mtctl-<platform>     ~/.local/bin/mtctl
+install -m 755 mtroamd-<platform> ~/.local/bin/mtroamd
+install -m 755 mtroam-<platform>     ~/.local/bin/mtroam
 ```
 
 The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/release-public-key.txt`](docs/release-public-key.txt).
@@ -54,71 +54,71 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
 - **Debian / Ubuntu (apt)** — a signed apt repo on the same release line as the App Store app:
 
   ```sh
-  curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
-    | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
-  echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://ag-studio-apps.github.io/meshtermd stable main" \
-    | sudo tee /etc/apt/sources.list.d/meshtermd.list
-  sudo apt update && sudo apt install meshtermd
+  curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
+    | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
+  echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd stable main" \
+    | sudo tee /etc/apt/sources.list.d/mtroamd.list
+  sudo apt update && sudo apt install mtroamd
   # then, as your login user:
-  systemctl --user enable --now meshtermd
+  systemctl --user enable --now mtroamd
   ```
 
-  Or grab a `.deb` straight from a release and `sudo dpkg -i meshtermd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
+  Or grab a `.deb` straight from a release and `sudo dpkg -i mtroamd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
 
-  Uninstall: `sudo apt remove meshtermd` stops + removes the daemon but keeps your sessions/cert (so a reinstall reuses the same identity); `sudo apt purge meshtermd` removes those too for a full clean wipe.
+  Uninstall: `sudo apt remove mtroamd` stops + removes the daemon but keeps your sessions/cert (so a reinstall reuses the same identity); `sudo apt purge mtroamd` removes those too for a full clean wipe.
 - **Fedora (dnf)** — a GPG-signed yum/dnf repo (`x86_64`, `aarch64`):
 
   ```sh
-  sudo tee /etc/yum.repos.d/meshtermd.repo <<'EOF'
-  [meshtermd]
-  name=meshtermd
-  baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/stable/$basearch
+  sudo tee /etc/yum.repos.d/mtroamd.repo <<'EOF'
+  [mtroamd]
+  name=mtroamd
+  baseurl=https://ag-studio-apps.github.io/mtroamd/rpm/stable/$basearch
   enabled=1
   gpgcheck=1
-  gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+  gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
   EOF
-  sudo dnf install meshtermd
+  sudo dnf install mtroamd
   # then, as your login user:
-  systemctl --user enable --now meshtermd
+  systemctl --user enable --now mtroamd
   ```
 
-  A pre-release **development** channel exists for testers — unstable, see [`docs/dnf-dev-channel.md`](docs/dnf-dev-channel.md). Uninstall: `sudo dnf remove meshtermd`.
-- **Homebrew tap** (macOS, Linux): `brew tap AG-Studio-Apps/meshtermd && brew install meshtermd`
-- **Arch Linux (AUR)**: `meshtermd-bin` (pre-built) and `meshtermd` (build-from-source)
+  A pre-release **development** channel exists for testers — unstable, see [`docs/dnf-dev-channel.md`](docs/dnf-dev-channel.md). Uninstall: `sudo dnf remove mtroamd`.
+- **Homebrew tap** (macOS, Linux): `brew tap AG-Studio-Apps/mtroamd && brew install mtroamd`
+- **Arch Linux (AUR)**: `mtroamd-bin` (pre-built) and `mtroamd` (build-from-source)
 
 The formula, `PKGBUILD`s, and apt packaging (`nfpm` config + repo setup) are already staged under [`packaging/`](packaging/) so anyone curious can preview the install shape; the live channels go up on co-release day.
 
 Once installed, the daemon usually runs under a supervisor — systemd-user on Linux, launchd on macOS, or a `nohup` fallback. The supervisor unit is dropped automatically by the iOS app's auto-installer on first connect, by the distro packages on `pacman -S` / `brew install`, or by hand:
 
 ```
-meshtermd unit print > ~/.config/systemd/user/meshtermd.service
+mtroamd unit print > ~/.config/systemd/user/mtroamd.service
 systemctl --user daemon-reload
-systemctl --user enable --now meshtermd
+systemctl --user enable --now mtroamd
 ```
 
-`meshtermd unit print` is the single source of truth for the systemd-user unit — it's what every install path emits, so the `KillMode=process` setting (load-bearing for v0.6+ pty-sidecar restart-resilience) is always in place.
+`mtroamd unit print` is the single source of truth for the systemd-user unit — it's what every install path emits, so the `KillMode=process` setting (load-bearing for v0.6+ pty-sidecar restart-resilience) is always in place.
 
-## Companion CLI: `mtctl`
+## Companion CLI: `mtroam`
 
-`mtctl` is the laptop/desktop counterpart to the iOS app — manages remote sessions over SSH and attaches to them as your local terminal. Same binary distribution; same release artifacts.
+`mtroam` is the laptop/desktop counterpart to the iOS app — manages remote sessions over SSH and attaches to them as your local terminal. Same binary distribution; same release artifacts.
 
-Full install + usage guide: [`docs/mtctl.md`](docs/mtctl.md). Man page: `man mtctl`.
+Full install + usage guide: [`docs/mtroam.md`](docs/mtroam.md). Man page: `man mtroam`.
 
 ```
-mtctl --host me@dev-box list                       # what's alive on the daemon
-mtctl --host me@dev-box new --name dev             # create without attaching
-mtctl --host me@dev-box attach dev                 # land in the same shell
+mtroam --host me@dev-box list                       # what's alive on the daemon
+mtroam --host me@dev-box new --name dev             # create without attaching
+mtroam --host me@dev-box attach dev                 # land in the same shell
                                                    # your iPhone is using
-mtctl --host me@dev-box attach dev --mode readonly # watch over someone's
+mtroam --host me@dev-box attach dev --mode readonly # watch over someone's
                                                    # shoulder; can't type
-mtctl --host me@dev-box rename dev staging
-mtctl --host me@dev-box kill staging
-mtctl --host me@dev-box status                     # daemon snapshot
+mtroam --host me@dev-box rename dev staging
+mtroam --host me@dev-box kill staging
+mtroam --host me@dev-box status                     # daemon snapshot
 ```
 
 In an attached session, type `~.` on a fresh line to detach (mosh / ssh convention). The remote shell stays alive on the daemon; pick it up from any other client.
 
-Set `MTCTL_HOST` once per shell or write the target into `~/.config/mtctl/host` to omit `--host`.
+Set `MTROAM_HOST` once per shell or write the target into `~/.config/mtroam/host` to omit `--host`.
 
 Auth is plain SSH — we shell out to the system `ssh` binary, so your existing `~/.ssh/config`, ssh-agent, and keys work transparently. The QUIC connection that carries the attached terminal is cert-pinned to the fingerprint received over SSH (same trust hop the iOS app uses).
 
@@ -126,7 +126,7 @@ Transport-layer security is TLS 1.3 (provided by Go's standard library inside `q
 
 ## Reporting issues
 
-Bugs and questions about the daemon, `mtctl`, or the wire protocol: file an issue on this repo. Templates are provided.
+Bugs and questions about the daemon, `mtroam`, or the wire protocol: file an issue on this repo. Templates are provided.
 
 Bugs about the **meshTerm iOS app** (UI, host management, anything that isn't the daemon): use the in-app help/feedback channel — the meshTerm app source is private, so issues here aren't the right venue for app-side problems.
 
@@ -138,4 +138,8 @@ See [SECURITY.md](docs/SECURITY.md). **Do not file security reports as public is
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) — see
+[LICENSE](LICENSE). Copyright © 2026 AG Studio Apps.
+
+A commercial / proprietary license (for use without the AGPL's network-copyleft
+obligations) is available from AG Studio Apps — contact the maintainer.

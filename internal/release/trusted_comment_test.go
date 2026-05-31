@@ -10,15 +10,15 @@ func TestEnforceTrustedComment(t *testing.T) {
 		wantTag string
 		wantErr bool
 	}{
-		{"exact match", "meshtermd v1.1.3", "v1.1.3", false},
-		{"trailing whitespace tolerated", "meshtermd v1.1.3\n", "v1.1.3", false},
-		{"leading whitespace tolerated", "  meshtermd v1.1.3", "v1.1.3", false},
-		{"different tag rejected", "meshtermd v1.1.2", "v1.1.3", true},
-		{"older tag rejected (rollback attack)", "meshtermd v0.9.0", "v1.1.3", true},
+		{"exact match", "mtroamd v1.1.3", "v1.1.3", false},
+		{"trailing whitespace tolerated", "mtroamd v1.1.3\n", "v1.1.3", false},
+		{"leading whitespace tolerated", "  mtroamd v1.1.3", "v1.1.3", false},
+		{"different tag rejected", "mtroamd v1.1.2", "v1.1.3", true},
+		{"older tag rejected (rollback attack)", "mtroamd v0.9.0", "v1.1.3", true},
 		{"no prefix rejected", "v1.1.3", "v1.1.3", true},
 		{"different repo rejected", "other-tool v1.1.3", "v1.1.3", true},
 		{"empty comment rejected", "", "v1.1.3", true},
-		{"case-sensitive (uppercase V)", "meshtermd V1.1.3", "v1.1.3", true},
+		{"case-sensitive (uppercase V)", "mtroamd V1.1.3", "v1.1.3", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

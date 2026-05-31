@@ -1,7 +1,7 @@
 // Package cert manages the daemon's self-signed TLS certificate.
 //
 // We generate a fresh ECDSA P-256 keypair + cert on first daemon startup
-// and persist them to ~/.local/share/meshtermd/. The certificate is
+// and persist them to ~/.local/share/mtroamd/. The certificate is
 // identified by the SHA-256 fingerprint of its DER encoding — that
 // fingerprint travels through the SSH bootstrap to the iOS client,
 // which pins it via Network.framework's verify block. There is no
@@ -62,7 +62,7 @@ const RenewalWindow = 30 * 24 * time.Hour
 type Fingerprint [sha256.Size]byte
 
 // String returns the lowercase hex encoding (no separators), which
-// is the format docs/roam-protocol.md mandates for the bootstrap
+// is the format docs/mtroam-protocol.md mandates for the bootstrap
 // line's <cert_fp> field.
 func (f Fingerprint) String() string {
 	return hex.EncodeToString(f[:])
@@ -80,20 +80,20 @@ type Manager struct {
 }
 
 // DefaultDir returns the conventional state directory:
-// $XDG_DATA_HOME/meshtermd, falling back to $HOME/.local/share/meshtermd.
+// $XDG_DATA_HOME/mtroamd, falling back to $HOME/.local/share/mtroamd.
 //
 // Returns an error only if both XDG_DATA_HOME is unset and the user
 // has no home directory — pathological enough to surface rather than
 // silently picking some other location.
 func DefaultDir() (string, error) {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "meshtermd"), nil
+		return filepath.Join(x, "mtroamd"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve home directory: %w", err)
 	}
-	return filepath.Join(home, ".local", "share", "meshtermd"), nil
+	return filepath.Join(home, ".local", "share", "mtroamd"), nil
 }
 
 // LoadOrGenerate reads an existing cert+key from m.Dir, or generates
@@ -213,7 +213,7 @@ func generateAndPersist(certPath, keyPath string, validity time.Duration) (tls.C
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: "meshtermd",
+			CommonName: "mtroamd",
 		},
 		NotBefore:             now.Add(-time.Minute),
 		NotAfter:              now.Add(validity),
@@ -259,7 +259,7 @@ func generateAndPersist(certPath, keyPath string, validity time.Duration) (tls.C
 // permissions even before rename.
 func writeFileAtomic(path string, data []byte, mode fs.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".meshtermd-tmp-*")
+	tmp, err := os.CreateTemp(dir, ".mtroamd-tmp-*")
 	if err != nil {
 		return err
 	}

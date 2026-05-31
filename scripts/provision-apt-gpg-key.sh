@@ -3,19 +3,19 @@
 # provision-apt-gpg-key.sh — one-time setup of the apt-repo signing key.
 #
 # Generates a passphraseless ed25519 GPG signing key, stores the PRIVATE key
-# in the meshtermd repo's Actions secret APT_GPG_KEY (piped straight to gh —
+# in the mtroamd repo's Actions secret APT_GPG_KEY (piped straight to gh —
 # never printed), and exports the PUBLIC key for gh-pages + the repo docs.
 #
 # The private key never touches disk or the terminal. The public key is safe
 # to share/commit. Run it from anywhere; it writes the public exports into the
-# meshtermd repo it can locate (or $PWD).
+# mtroamd repo it can locate (or $PWD).
 #
 # Prereqs: gpg, gh (authenticated: `gh auth login`).
 # Usage:   scripts/provision-apt-gpg-key.sh [--yes]
 set -euo pipefail
 
-KEY_UID="meshtermd apt repo"
-REPO="AG-Studio-Apps/meshtermd"
+KEY_UID="mtroamd apt repo"
+REPO="AG-Studio-Apps/mtroamd"
 ASSUME_YES="${1:-}"
 
 note() { printf '\033[1;36m▸ %s\033[0m\n' "$*"; }
@@ -33,7 +33,7 @@ command -v gpg >/dev/null || die "gpg not found"
 command -v gh  >/dev/null || die "gh (GitHub CLI) not found — install it and run 'gh auth login'"
 gh auth status >/dev/null 2>&1 || die "gh is not authenticated — run 'gh auth login'"
 
-# Locate the meshtermd repo for the public-key exports (fall back to $PWD).
+# Locate the mtroamd repo for the public-key exports (fall back to $PWD).
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || pwd)"
 note "public-key exports will be written under: $REPO_ROOT"
 
@@ -66,7 +66,7 @@ gpg --armor --export-secret-keys "$FPR" | gh secret set APT_GPG_KEY --repo "$REP
 note "passphraseless key → leave APT_GPG_PASSPHRASE UNSET."
 
 # --- export the PUBLIC key --------------------------------------------------
-KEYRING="$REPO_ROOT/meshtermd-archive-keyring.gpg"   # dearmored — goes on gh-pages root
+KEYRING="$REPO_ROOT/mtroamd-archive-keyring.gpg"   # dearmored — goes on gh-pages root
 DOC_GPG="$REPO_ROOT/docs/apt-signing-key.gpg"
 DOC_ASC="$REPO_ROOT/docs/apt-signing-key.asc"
 mkdir -p "$REPO_ROOT/docs"
@@ -82,6 +82,6 @@ cat <<EOF
 ✓ Done. Next (see docs/apt-repo-setup.md):
   1. Commit docs/apt-signing-key.{gpg,asc} on feature/apt-packaging.
   2. Seed the gh-pages branch (conf/distributions, .nojekyll, and the
-     meshtermd-archive-keyring.gpg above), then enable Pages → gh-pages.
+     mtroamd-archive-keyring.gpg above), then enable Pages → gh-pages.
   3. Push the branch + cut a -rc tag → it publishes to the 'dev' suite.
 EOF

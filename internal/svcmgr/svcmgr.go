@@ -1,5 +1,5 @@
 // Package svcmgr abstracts the host service manager (systemd-user /
-// launchd / direct exec) so meshtermd's uninstall + update flows
+// launchd / direct exec) so mtroamd's uninstall + update flows
 // don't need to branch in three places. Each Manager implements a
 // minimal stop / start / restart interface, plus a `Detect` helper
 // that picks the right backend at runtime.

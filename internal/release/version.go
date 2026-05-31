@@ -22,8 +22,8 @@ var tagPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)
 const MaxTagLength = 64
 
 // ValidateTag returns nil iff `tag` is shaped like a release tag we
-// would publish. Used at the boundary in `meshtermd update` /
-// `mtctl update` to reject `--tag` values (or surprising responses
+// would publish. Used at the boundary in `mtroamd update` /
+// `mtroam update` to reject `--tag` values (or surprising responses
 // from the GitHub API) before they're interpolated into asset URLs.
 //
 // Closes one of the LOW-severity audit gaps from the 2026-05-11

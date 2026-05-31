@@ -95,7 +95,7 @@ func WatchTermiosOn(ctx context.Context, snooper TermiosSnooper, interval time.D
 	if interval <= 0 {
 		interval = DefaultEchoPollInterval
 	}
-	// External inspection (tests, debug-only `meshtermd status`
+	// External inspection (tests, debug-only `mtroamd status`
 	// introspection) reads `last` without blocking the watcher goroutine.
 	var last atomic.Value
 	last.Store(TermiosSnapshot{Echo: EchoStateUnknown, Canon: EchoStateUnknown})

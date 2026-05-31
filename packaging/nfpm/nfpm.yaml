@@ -1,19 +1,19 @@
-# nfpm config for the meshtermd .deb (Debian/Ubuntu) AND .rpm (Fedora) packages.
+# nfpm config for the mtroamd .deb (Debian/Ubuntu) AND .rpm (Fedora) packages.
 #
 # Built in CI from the binaries `make dist` already produces, driven by env vars
 # so one config covers every arch + both formats:
 #
-#   MESHTERMD_GOARCH    amd64 | arm64 | armv7   (matches dist/<bin>-linux-<GOARCH>)
-#   MESHTERMD_PKG_ARCH  the Architecture field for the target format:
+#   MTROAMD_GOARCH    amd64 | arm64 | armv7   (matches dist/<bin>-linux-<GOARCH>)
+#   MTROAMD_PKG_ARCH  the Architecture field for the target format:
 #                         deb → amd64 | arm64 | armhf
 #                         rpm → x86_64 | aarch64
-#   MESHTERMD_VERSION   e.g. 2.0.0  or  2.0.0-rc.1  (semver schema → ~rc, which
+#   MTROAMD_VERSION   e.g. 2.0.0  or  2.0.0-rc.1  (semver schema → ~rc, which
 #                       sorts below the stable release in BOTH deb and rpm)
 #
 #   # deb:
-#   MESHTERMD_GOARCH=amd64 MESHTERMD_PKG_ARCH=amd64  … nfpm package -f … -p deb -t dist/
+#   MTROAMD_GOARCH=amd64 MTROAMD_PKG_ARCH=amd64  … nfpm package -f … -p deb -t dist/
 #   # rpm:
-#   MESHTERMD_GOARCH=amd64 MESHTERMD_PKG_ARCH=x86_64 … nfpm package -f … -p rpm -t dist/
+#   MTROAMD_GOARCH=amd64 MTROAMD_PKG_ARCH=x86_64 … nfpm package -f … -p rpm -t dist/
 #
 # Per-user service model: the package installs the binaries + a systemd
 # **--user** unit template; it never creates a system user, installs a system
@@ -21,20 +21,20 @@
 # + postremove.sh; rpm scriptlets (numeric %post/%postun args) are supplied via
 # `overrides.rpm.scripts` below.
 
-name: meshtermd
-arch: ${MESHTERMD_PKG_ARCH}
+name: mtroamd
+arch: ${MTROAMD_PKG_ARCH}
 platform: linux
-version: ${MESHTERMD_VERSION}
+version: ${MTROAMD_VERSION}
 version_schema: semver # turns a -rc/-dev prerelease into a ~ deb version (sorts below the release)
 section: net
 priority: optional
 maintainer: AG Studio Apps <james@agnticstudio.com>
-homepage: https://github.com/AG-Studio-Apps/meshtermd
-license: Apache-2.0
+homepage: https://github.com/AG-Studio-Apps/mtroamd
+license: AGPL-3.0-or-later
 description: |
-  Persistent terminal sessions for the meshTerm iOS app, plus the mtctl CLI.
-  meshtermd is a per-user daemon that hosts QUIC/Roam terminal sessions which
-  survive disconnects and roaming; mtctl is the laptop CLI that attaches to a
+  Persistent terminal sessions for the meshTerm iOS app, plus the mtroam CLI.
+  mtroamd is a per-user daemon that hosts QUIC/MTRoam terminal sessions which
+  survive disconnects and roaming; mtroam is the laptop CLI that attaches to a
   remote daemon over SSH+QUIC. Runs as a systemd --user service (one per login
   user) — it spawns shells as you, so it is never a system-wide daemon.
 
@@ -42,57 +42,57 @@ description: |
 depends: []
 
 contents:
-  - src: dist/meshtermd-linux-${MESHTERMD_GOARCH}
-    dst: /usr/bin/meshtermd
+  - src: dist/mtroamd-linux-${MTROAMD_GOARCH}
+    dst: /usr/bin/mtroamd
     file_info: { mode: 0755 }
-  - src: dist/mtctl-linux-${MESHTERMD_GOARCH}
-    dst: /usr/bin/mtctl
+  - src: dist/mtroam-linux-${MTROAMD_GOARCH}
+    dst: /usr/bin/mtroam
     file_info: { mode: 0755 }
 
-  # systemd --user unit template (generated in CI via `meshtermd unit print
-  # --bin=/usr/bin/meshtermd`). Installed to the standard packaged-user-unit
+  # systemd --user unit template (generated in CI via `mtroamd unit print
+  # --bin=/usr/bin/mtroamd`). Installed to the standard packaged-user-unit
   # location; NOT auto-enabled — each user opts in with `systemctl --user`.
-  - src: dist/meshtermd.service
-    dst: /usr/lib/systemd/user/meshtermd.service
+  - src: dist/mtroamd.service
+    dst: /usr/lib/systemd/user/mtroamd.service
     file_info: { mode: 0644 }
 
-  - src: dist/man/meshtermd.8
-    dst: /usr/share/man/man8/meshtermd.8
+  - src: dist/man/mtroamd.8
+    dst: /usr/share/man/man8/mtroamd.8
     file_info: { mode: 0644 }
-  - src: dist/man/mtctl.1
-    dst: /usr/share/man/man1/mtctl.1
+  - src: dist/man/mtroam.1
+    dst: /usr/share/man/man1/mtroam.1
     file_info: { mode: 0644 }
 
-  - src: dist/completions/meshtermd.bash
-    dst: /usr/share/bash-completion/completions/meshtermd
+  - src: dist/completions/mtroamd.bash
+    dst: /usr/share/bash-completion/completions/mtroamd
     file_info: { mode: 0644 }
-  - src: dist/completions/mtctl.bash
-    dst: /usr/share/bash-completion/completions/mtctl
+  - src: dist/completions/mtroam.bash
+    dst: /usr/share/bash-completion/completions/mtroam
     file_info: { mode: 0644 }
-  - src: dist/completions/meshtermd.zsh
-    dst: /usr/share/zsh/site-functions/_meshtermd
+  - src: dist/completions/mtroamd.zsh
+    dst: /usr/share/zsh/site-functions/_mtroamd
     file_info: { mode: 0644 }
-  - src: dist/completions/mtctl.zsh
-    dst: /usr/share/zsh/site-functions/_mtctl
+  - src: dist/completions/mtroam.zsh
+    dst: /usr/share/zsh/site-functions/_mtroam
     file_info: { mode: 0644 }
-  - src: dist/completions/meshtermd.fish
-    dst: /usr/share/fish/vendor_completions.d/meshtermd.fish
+  - src: dist/completions/mtroamd.fish
+    dst: /usr/share/fish/vendor_completions.d/mtroamd.fish
     file_info: { mode: 0644 }
-  - src: dist/completions/mtctl.fish
-    dst: /usr/share/fish/vendor_completions.d/mtctl.fish
+  - src: dist/completions/mtroam.fish
+    dst: /usr/share/fish/vendor_completions.d/mtroam.fish
     file_info: { mode: 0644 }
 
   - src: LICENSE
-    dst: /usr/share/doc/meshtermd/copyright
+    dst: /usr/share/doc/mtroamd/copyright
     file_info: { mode: 0644 }
   - src: NOTICE
-    dst: /usr/share/doc/meshtermd/NOTICE
+    dst: /usr/share/doc/mtroamd/NOTICE
     file_info: { mode: 0644 }
   - src: README.md
-    dst: /usr/share/doc/meshtermd/README.md
+    dst: /usr/share/doc/mtroamd/README.md
     file_info: { mode: 0644 }
   - src: SECURITY.md
-    dst: /usr/share/doc/meshtermd/SECURITY.md
+    dst: /usr/share/doc/mtroamd/SECURITY.md
     file_info: { mode: 0644 }
 
 scripts:
