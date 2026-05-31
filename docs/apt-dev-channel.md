@@ -24,6 +24,17 @@ systemctl --user enable --now meshtermd
 Every dev install/upgrade prints a `⚠ DEVELOPMENT build` warning, and
 `meshtermd --version` / `apt policy meshtermd` show the `~rc`/`~dev` suffix.
 
+## Uninstall
+
+```sh
+sudo apt remove meshtermd     # stops + removes the daemon; keeps ~/.local/share/meshtermd (cert, sessions)
+sudo apt purge  meshtermd     # also wipes that state dir — full clean removal (iOS would need to re-pair)
+sudo rm -f /etc/apt/sources.list.d/meshtermd-dev.list   # drop the dev source
+```
+
+`remove`/`purge` stop + disable your `--user` service and remove the unit for
+the user who ran sudo; other users on the box manage their own.
+
 ## Go back to stable
 
 The dev version sorts *below* the matching stable release, so just drop the dev

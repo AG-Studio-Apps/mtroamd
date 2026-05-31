@@ -30,9 +30,11 @@ scripts only:
   for them when their user bus is reachable, else print the command; (c) on a
   plain upgrade, `try-restart` the installing user's already-running service so
   it picks up the new binary (no-op if not running — never forces it on).
-- **`postremove.sh`** — leaves `~/.local/share/meshtermd` (certs, sessions)
-  alone; only cleans an orphaned `--user` unit that still points at the removed
-  `/usr/bin/meshtermd`.
+- **`postremove.sh`** — `apt remove` stops + disables the installing user's
+  `--user` service and removes a migrate-created `~/.config` unit pointing at
+  the package binary, but **keeps** `~/.local/share/meshtermd` (cert, sessions)
+  so a reinstall reuses the identity. `apt purge` additionally wipes that state
+  dir for a full clean removal. Per-user (`$SUDO_USER`); all best-effort.
 
 A fresh install prints how to opt in: `systemctl --user enable --now meshtermd`.
 
