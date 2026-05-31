@@ -1,48 +1,48 @@
 -----BEGIN PGP SIGNED MESSAGE-----
 Hash: SHA512
 
-Origin: meshtermd
-Label: meshtermd
+Origin: mtroamd
+Label: mtroamd
 Suite: dev
 Codename: dev
-Date: Sun, 31 May 2026 16:32:02 UTC
+Date: Sun, 31 May 2026 20:12:43 UTC
 Architectures: amd64 arm64 armhf
 Components: main
-Description: meshtermd apt repository (DEVELOPMENT — unstable, may break your system)
+Description: mtroamd apt repository (DEVELOPMENT — unstable, may break your system)
 MD5Sum:
- 94d4be24e004ad6e34890c53079141ea 851 main/binary-amd64/Packages
- 4cef6d693a366a71c597edb239cc4ef7 572 main/binary-amd64/Packages.gz
+ 1416b56855cc871ccff726ccc12bc9a4 1696 main/binary-amd64/Packages
+ da1b1fdcb5f2390ef32d705591e5a9d9 736 main/binary-amd64/Packages.gz
  1ae03e9791b5505e796a73d9ef6facf7 172 main/binary-amd64/Release
- b7ac3769e703afca517140a5e69ebf3e 851 main/binary-arm64/Packages
- 4fe4d6abdf6234dbf8c7c7191d958901 574 main/binary-arm64/Packages.gz
+ b465e26f229c450c479d7c61396d06af 1696 main/binary-arm64/Packages
+ 585a1bae4fb01207500b2162af638787 739 main/binary-arm64/Packages.gz
  df9924a80dcdb9c5af9faa42134fb9f1 172 main/binary-arm64/Release
- e130df977e048cdeb8cba4724ef17deb 851 main/binary-armhf/Packages
- fe88ba3fa4f17f506e3aa74fd15bc092 573 main/binary-armhf/Packages.gz
+ 8fcc2889aa1d46b6ac3afb579f3785b6 1696 main/binary-armhf/Packages
+ c4e5288200959865e58db4c9fa3a0d43 738 main/binary-armhf/Packages.gz
  06a694288bc17c38da1ff7f42783efbd 172 main/binary-armhf/Release
 SHA1:
- 7d591b317c98fd3387c3a4a5426e38b7de4bf4dc 851 main/binary-amd64/Packages
- 53bb304874b176c38a958d4dd2ccec65fd5d672b 572 main/binary-amd64/Packages.gz
+ c52c41100fa911dc1602b7f24960f249b241b8cd 1696 main/binary-amd64/Packages
+ c0dca88ae83b90f73ca401ebdfe0db498c9224da 736 main/binary-amd64/Packages.gz
  a64ab171e4ec062319f89be7ac4a718aa50f3b27 172 main/binary-amd64/Release
- 5a8e2e6dc10880b1873ebd37cf2d365fbba1014b 851 main/binary-arm64/Packages
- 8dd8d0b3797f74f3fa1e0fa3719849c08ce53f39 574 main/binary-arm64/Packages.gz
+ 6be4048c8da0325867b9cf4811f8d3b52b8e8bae 1696 main/binary-arm64/Packages
+ c08544691604cdac09a1f018496080a66f25ccef 739 main/binary-arm64/Packages.gz
  5d96665768b1ec0746f52b6b6276d8d8ad970cc4 172 main/binary-arm64/Release
- 4573750f5aba03f07d4d0ca8bb740a8b6ee921fb 851 main/binary-armhf/Packages
- e0c1b3e8ed4e428159fc0b7b03fb95ca05fbc1ff 573 main/binary-armhf/Packages.gz
+ e7c7b67cee8e542b23321c64b44ddf34a8a95cbe 1696 main/binary-armhf/Packages
+ dfa9901e942fbfccd0f3f04a02b53fba51500b90 738 main/binary-armhf/Packages.gz
  c539e44ee0cc91f9a450aec773c7aad68d9056bd 172 main/binary-armhf/Release
 SHA256:
- 6a02a13e148368b886d130f0ed54c009a065e2a73094cbeff83738ac58859d91 851 main/binary-amd64/Packages
- ef056a3b68768ddcd77227da3cc45730a4c5036550a79ab763359a3403d94d5b 572 main/binary-amd64/Packages.gz
+ 4321c301e8fb943293e313406ccaca7398d45741ef138628177822f583fe44ce 1696 main/binary-amd64/Packages
+ 5805e9ff82aa3da654b0ce3c4e46a9e2d9d30812e05c8e682f11890e86ba3ba5 736 main/binary-amd64/Packages.gz
  a1253f2bcbdc5091ebf4bbb3af22e90291d08c89421c04642bf7ef277c56627b 172 main/binary-amd64/Release
- 5002022cfb64c6904fc152bf602e42792630e500118c55e57484aac9a0a2fafe 851 main/binary-arm64/Packages
- 4ffaf3e6672bbe1aef89556a8b37b1708e61625e61c0b7d3c4770fcda27ed3f1 574 main/binary-arm64/Packages.gz
+ 72e8e269c97106f90d0239c671c63848993e762954762e98b91c5a08f8d74ffa 1696 main/binary-arm64/Packages
+ 8dee5eeb77b482e172c3266543aadaac36861d185d69cbdb78934ff3846cf8c2 739 main/binary-arm64/Packages.gz
  3734524224f4b900e8cb1494001d4ed13ef93a209ca911622c0bc4a4486c2add 172 main/binary-arm64/Release
- 9a344e910e5e33e5210ef5c3a1926053a87e7af11861ecf4b9426c40243c1971 851 main/binary-armhf/Packages
- 96753103857ea40e81d480fda13098f8f217ad200831c9cdcc1abea04a08dfb0 573 main/binary-armhf/Packages.gz
+ 204caf486009f5d9a7f1eb76a099d69915d66484531879beff46ffe929f54c01 1696 main/binary-armhf/Packages
+ 00bf96cae199b649b62f0ff22475ad5cfcac6c3b172a846f6a7b17297052304d 738 main/binary-armhf/Packages.gz
  0c89a57dc0f5c86c96dd0465a9c475d62c2c68fb447627a9345fd182e6086ae3 172 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCahxiggAKCRBQfbpy8DxF
-wv5CAP9/lOz+PpwdlPtDh5tEbfLdlkyv2Tx8Gwqg4MuJ4QxcXwEAslkdlRJj80n+
-C0Ve2vZlBzZzWLRCYpF0xZLCnwhP7As=
-=PH7L
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCahyWOwAKCRBQfbpy8DxF
+wvqjAQDIEJFVfEOoMhXgrGtBrNGNnyCN++oCqvir0ZcGVMtAkwEA0IKDlJVQyK+l
+RkbGWbFIrsdIvtki37bCjLtr8OaomQU=
+=AJaY
 -----END PGP SIGNATURE-----
