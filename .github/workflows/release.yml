@@ -51,11 +51,27 @@ jobs:
           ./dist/meshtermd-linux-amd64 unit print --bin=/usr/bin/meshtermd > dist/meshtermd.service
           for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
             set -- $triple
-            export MESHTERMD_GOARCH="$1" MESHTERMD_DEB_ARCH="$2"
-            envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.$2.yaml"
-            nfpm package -f "dist/nfpm.$2.yaml" -p deb -t dist/
+            export MESHTERMD_GOARCH="$1" MESHTERMD_PKG_ARCH="$2"
+            envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.deb.$2.yaml"
+            nfpm package -f "dist/nfpm.deb.$2.yaml" -p deb -t dist/
           done
           ls -la dist/*.deb
+
+      - name: Build .rpm packages
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Same nfpm config + binaries as the .deb step; rpm-native arch names
+          # + scriptlets (via overrides.rpm in nfpm.yaml). Fedora dropped 32-bit
+          # ARM, so x86_64 + aarch64 only.
+          export MESHTERMD_VERSION="${TAG#v}"
+          for pair in "amd64 x86_64" "arm64 aarch64"; do
+            set -- $pair
+            export MESHTERMD_GOARCH="$1" MESHTERMD_PKG_ARCH="$2"
+            envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.rpm.$2.yaml"
+            nfpm package -f "dist/nfpm.rpm.$2.yaml" -p rpm -t dist/
+          done
+          ls -la dist/*.rpm
 
       - name: Generate SHA256SUMS
         working-directory: dist
@@ -171,6 +187,7 @@ jobs:
             dist/meshtermd-*
             dist/mtctl-*
             dist/*.deb
+            dist/*.rpm
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
             dist/SHA256SUMS-deb
@@ -262,4 +279,85 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "apt: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
+          git push origin HEAD:gh-pages
+
+  rpm-repo:
+    name: Publish to rpm repo (gh-pages)
+    # Runs AFTER apt-repo (not in parallel) — both push gh-pages, so serialize
+    # to avoid a non-fast-forward race.
+    needs: [release, apt-repo]
+    runs-on: ubuntu-latest
+    env:
+      APT_GPG_KEY: ${{ secrets.APT_GPG_KEY }}
+      APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+    steps:
+      - name: Checkout (full history for branch routing)
+        if: ${{ env.APT_GPG_KEY != '' }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts (the .rpm files)
+        if: ${{ env.APT_GPG_KEY != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish .rpm(s) to the routed channel
+        if: ${{ env.APT_GPG_KEY != '' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob   # an empty *.rpm / */ glob expands to nothing, not a literal
+          sudo apt-get update && sudo apt-get install -y rpm createrepo-c
+
+          # --- Route by branch (same rule as apt): main-ancestor + clean semver
+          # → stable, else dev.
+          git fetch --no-tags origin main
+          SUITE=dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
+            SUITE=stable
+          fi
+          echo "Publishing $TAG → rpm channel '$SUITE'"
+
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "::notice::gh-pages not seeded yet — skipping rpm publish"
+            exit 0
+          fi
+
+          # --- Import the (passphraseless) signing key + point rpmsign at it.
+          export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
+          echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+          gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+          printf '%s' "$APT_GPG_KEY" | gpg --batch --import
+          KEYID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
+          {
+            echo "%_gpg_name $KEYID"
+            echo "%__gpg $(command -v gpg)"
+            echo "%_gpg_sign_cmd_extra_args --pinentry-mode loopback --batch --homedir $GNUPGHOME${APT_GPG_PASSPHRASE:+ --passphrase $APT_GPG_PASSPHRASE}"
+          } > "$HOME/.rpmmacros"
+          # dnf verifies each package's signature (gpgcheck=1), so sign them all.
+          rpmsign --addsign dist/*.rpm
+
+          # --- Stage gh-pages, drop rpms into rpm/<channel>/<basearch>/, reindex.
+          git fetch --no-tags origin gh-pages
+          git worktree add --checkout rpmrepo origin/gh-pages
+          for r in dist/*.rpm; do
+            base="$(basename "$r" .rpm)"; arch="${base##*.}"   # x86_64 / aarch64
+            dest="rpmrepo/rpm/${SUITE}/${arch}"
+            mkdir -p "$dest"
+            cp "$r" "$dest/"
+          done
+          for d in rpmrepo/rpm/"$SUITE"/*/; do createrepo_c "$d"; done
+          # ASCII-armored key for dnf's gpgkey=, plus keep Jekyll off.
+          cp docs/apt-signing-key.asc rpmrepo/meshtermd-archive-keyring.asc
+          touch rpmrepo/.nojekyll
+
+          cd rpmrepo
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "rpm: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
           git push origin HEAD:gh-pages

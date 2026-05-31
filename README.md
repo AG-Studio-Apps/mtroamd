@@ -66,6 +66,23 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
   Or grab a `.deb` straight from a release and `sudo dpkg -i meshtermd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
 
   Uninstall: `sudo apt remove meshtermd` stops + removes the daemon but keeps your sessions/cert (so a reinstall reuses the same identity); `sudo apt purge meshtermd` removes those too for a full clean wipe.
+- **Fedora (dnf)** — a GPG-signed yum/dnf repo (`x86_64`, `aarch64`):
+
+  ```sh
+  sudo tee /etc/yum.repos.d/meshtermd.repo <<'EOF'
+  [meshtermd]
+  name=meshtermd
+  baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/stable/$basearch
+  enabled=1
+  gpgcheck=1
+  gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+  EOF
+  sudo dnf install meshtermd
+  # then, as your login user:
+  systemctl --user enable --now meshtermd
+  ```
+
+  A pre-release **development** channel exists for testers — unstable, see [`docs/dnf-dev-channel.md`](docs/dnf-dev-channel.md). Uninstall: `sudo dnf remove meshtermd`.
 - **Homebrew tap** (macOS, Linux): `brew tap AG-Studio-Apps/meshtermd && brew install meshtermd`
 - **Arch Linux (AUR)**: `meshtermd-bin` (pre-built) and `meshtermd` (build-from-source)
 

@@ -1,24 +1,28 @@
-# nfpm config for the meshtermd Debian package.
+# nfpm config for the meshtermd .deb (Debian/Ubuntu) AND .rpm (Fedora) packages.
 #
-# Built in CI from the binaries `make dist` already produces — one .deb per
-# arch, driven by env vars so a single config covers all three:
+# Built in CI from the binaries `make dist` already produces, driven by env vars
+# so one config covers every arch + both formats:
 #
 #   MESHTERMD_GOARCH    amd64 | arm64 | armv7   (matches dist/<bin>-linux-<GOARCH>)
-#   MESHTERMD_DEB_ARCH  amd64 | arm64 | armhf   (the Debian Architecture field)
-#   MESHTERMD_VERSION   e.g. 2.0.0  or  2.0.0-rc.1  (semver schema → ~rc for deb)
+#   MESHTERMD_PKG_ARCH  the Architecture field for the target format:
+#                         deb → amd64 | arm64 | armhf
+#                         rpm → x86_64 | aarch64
+#   MESHTERMD_VERSION   e.g. 2.0.0  or  2.0.0-rc.1  (semver schema → ~rc, which
+#                       sorts below the stable release in BOTH deb and rpm)
 #
-#   for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
-#     set -- $triple
-#     MESHTERMD_GOARCH=$1 MESHTERMD_DEB_ARCH=$2 MESHTERMD_VERSION=${TAG#v} \
-#       nfpm package -f packaging/nfpm/nfpm.yaml -p deb -t dist/
-#   done
+#   # deb:
+#   MESHTERMD_GOARCH=amd64 MESHTERMD_PKG_ARCH=amd64  … nfpm package -f … -p deb -t dist/
+#   # rpm:
+#   MESHTERMD_GOARCH=amd64 MESHTERMD_PKG_ARCH=x86_64 … nfpm package -f … -p rpm -t dist/
 #
 # Per-user service model: the package installs the binaries + a systemd
 # **--user** unit template; it never creates a system user, installs a system
-# unit, or auto-enables a service. See packaging/nfpm/postinstall.sh.
+# unit, or auto-enables a service. deb scriptlets: packaging/nfpm/postinstall.sh
+# + postremove.sh; rpm scriptlets (numeric %post/%postun args) are supplied via
+# `overrides.rpm.scripts` below.
 
 name: meshtermd
-arch: ${MESHTERMD_DEB_ARCH}
+arch: ${MESHTERMD_PKG_ARCH}
 platform: linux
 version: ${MESHTERMD_VERSION}
 version_schema: semver # turns a -rc/-dev prerelease into a ~ deb version (sorts below the release)
@@ -94,3 +98,12 @@ contents:
 scripts:
   postinstall: packaging/nfpm/postinstall.sh
   postremove: packaging/nfpm/postremove.sh
+
+# RPM %post/%postun receive a NUMERIC arg ($1: 0 = final uninstall, 1 = fresh,
+# >=2 = upgrade) rather than dpkg's string args — so the dev scriptlets above
+# would misbehave. Supply rpm-native equivalents.
+overrides:
+  rpm:
+    scripts:
+      postinstall: packaging/nfpm/rpm-postinstall.sh
+      postremove: packaging/nfpm/rpm-postremove.sh

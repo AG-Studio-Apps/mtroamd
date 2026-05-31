@@ -43,11 +43,21 @@ A fresh install prints how to opt in: `systemctl --user enable --now meshtermd`.
 ```sh
 make dist                                            # or one arch: make dist-linux-amd64 …
 ./dist/meshtermd-linux-amd64 unit print --bin=/usr/bin/meshtermd > dist/meshtermd.service
-for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
-  set -- $triple
-  MESHTERMD_GOARCH=$1 MESHTERMD_DEB_ARCH=$2 MESHTERMD_VERSION=2.0.0 \
-    envsubst < packaging/nfpm/nfpm.yaml > dist/nfpm.$2.yaml
-  nfpm package -f dist/nfpm.$2.yaml -p deb -t dist/
+
+# .deb (Debian/Ubuntu)
+for pair in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
+  set -- $pair
+  MESHTERMD_GOARCH=$1 MESHTERMD_PKG_ARCH=$2 MESHTERMD_VERSION=2.0.0 \
+    envsubst < packaging/nfpm/nfpm.yaml > dist/nfpm.deb.$2.yaml
+  nfpm package -f dist/nfpm.deb.$2.yaml -p deb -t dist/
+done
+
+# .rpm (Fedora) — same config, rpm arch names + rpm scriptlets (overrides.rpm)
+for pair in "amd64 x86_64" "arm64 aarch64"; do
+  set -- $pair
+  MESHTERMD_GOARCH=$1 MESHTERMD_PKG_ARCH=$2 MESHTERMD_VERSION=2.0.0 \
+    envsubst < packaging/nfpm/nfpm.yaml > dist/nfpm.rpm.$2.yaml
+  nfpm package -f dist/nfpm.rpm.$2.yaml -p rpm -t dist/
 done
 ```
 
