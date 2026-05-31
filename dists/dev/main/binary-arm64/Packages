@@ -1,35 +1,16 @@
-Package: meshtermd
-Version: 1.4.7~rc.3
-Architecture: arm64
-Maintainer: AG Studio Apps <james@agnticstudio.com>
-Installed-Size: 16321
-Homepage: https://github.com/AG-Studio-Apps/meshtermd
-Priority: optional
-Section: net
-Filename: pool/main/m/meshtermd/meshtermd_1.4.7~rc.3_arm64.deb
-Size: 6813488
-SHA256: 8ca9b77e4a39c07d1989335200e4abd7cab51bb1ecaec0c3abc7813e437b9f36
-SHA1: 612e19d532dfd28558b2578f41a37f07f9fd6ebf
-MD5sum: d389157cf5942c21aa7108c874bd7b29
-Description: Persistent terminal sessions for the meshTerm iOS app, plus the mtctl CLI.
- meshtermd is a per-user daemon that hosts QUIC/Roam terminal sessions which
- survive disconnects and roaming; mtctl is the laptop CLI that attaches to a
- remote daemon over SSH+QUIC. Runs as a systemd --user service (one per login
- user) — it spawns shells as you, so it is never a system-wide daemon.
-
 Package: mtroamd
-Version: 1.4.7~rc.4
+Version: 1.4.7~rc.5
 Architecture: arm64
 Maintainer: AG Studio Apps <james@agnticstudio.com>
 Installed-Size: 16344
 Homepage: https://github.com/AG-Studio-Apps/mtroamd
 Priority: optional
 Section: net
-Filename: pool/main/m/mtroamd/mtroamd_1.4.7~rc.4_arm64.deb
-Size: 6823936
-SHA256: 0363df3e5a425ead8eb785635519a91a386162e77154a574d9e628d5f2c9f7b1
-SHA1: 35ae24e8736ab29751d1980e1b97b5ae11774bfd
-MD5sum: bc336bf771f0f27c43216cd57efc5a8a
+Filename: pool/main/m/mtroamd/mtroamd_1.4.7~rc.5_arm64.deb
+Size: 6823938
+SHA256: 045705fbfee96b605d9d81ecbfaef7b01d26db5366e0790bc61099729874ddca
+SHA1: 7e285cfada4953c4d88f18790958b18b35503ef7
+MD5sum: 26fadd5d97f1455271453112a555b52a
 Description: Persistent terminal sessions for the meshTerm iOS app, plus the mtroam CLI.
  mtroamd is a per-user daemon that hosts QUIC/mtRoam terminal sessions which
  survive disconnects and roaming; mtroam is the laptop CLI that attaches to a
