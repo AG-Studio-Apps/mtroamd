@@ -60,6 +60,8 @@ func main() {
 		os.Exit(runRestart(args))
 	case "uninstall":
 		os.Exit(runUninstall(args))
+	case "migrate":
+		os.Exit(runMigrate(args))
 	case "pty-sidecar":
 		os.Exit(runPtySidecar(args))
 	case "unit":
@@ -94,6 +96,7 @@ Subcommands:
   update             check for / apply a signed self-update from GitHub Releases
   restart            cycle the daemon via the detected supervisor (sessions survive)
   uninstall          remove the daemon, supervisor unit, and (optionally) state
+  migrate            switch a ~/.local/bin install onto this package-managed binary
   unit               emit / manage the systemd-user unit file
   wedge-report       dump the de-identified resize-wedge event log (safe to share upstream)
 

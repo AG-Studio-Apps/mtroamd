@@ -112,6 +112,24 @@ func (s *systemdUser) unitPath() string {
 // UnitPath exposes the unit-file location for the doctor command.
 func (s *systemdUser) UnitPath() string { return s.unitPath() }
 
+// SystemctlUser runs `systemctl --user <args>` with the env that makes the
+// user bus reachable from a non-pam_systemd session (matching the env used
+// by Stop/Start/Restart). Exposed for `meshtermd migrate`, which rewrites
+// the unit then reloads/restarts/queries outside the Manager interface.
+// Returns combined stdout+stderr for diagnostics.
+func SystemctlUser(ctx context.Context, args ...string) ([]byte, error) {
+	s := &systemdUser{}
+	return s.cmd(ctx, args...).CombinedOutput()
+}
+
+// UserUnitPath returns the canonical systemd --user unit path
+// (~/.config/systemd/user/meshtermd.service), independent of whether the
+// manager is currently Available. Used by `meshtermd migrate` to read/rewrite
+// the unit even when the bus is momentarily unreachable.
+func UserUnitPath() string {
+	return (&systemdUser{}).unitPath()
+}
+
 func userRuntimeDir() string {
 	if v := os.Getenv("XDG_RUNTIME_DIR"); v != "" {
 		return v

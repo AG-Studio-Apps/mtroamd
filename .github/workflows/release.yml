@@ -28,15 +28,53 @@ jobs:
       - name: Build all targets
         run: make dist
 
+      # --- Debian packaging (nfpm) -------------------------------------------
+      # Builds one .deb per arch from the binaries above. Kept entirely
+      # separate from SHA256SUMS so the iOS verify path is byte-for-byte
+      # unchanged; the .deb naming (meshtermd_<ver>_<arch>.deb, underscores)
+      # also can't be matched by the `meshtermd-*` checksum glob below.
+      - name: Set up nfpm
+        run: |
+          sudo apt-get install -y gettext-base   # envsubst (nfpm doesn't expand env in contents globs)
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.3   # pinned for reproducible/auditable release builds
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build .deb packages
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # nfpm's semver schema converts a -rc/-dev prerelease tag into a
+          # ~ deb version (sorts below the matching stable release).
+          export MESHTERMD_VERSION="${TAG#v}"
+          # The systemd --user unit is a static render — generate once with the
+          # amd64 binary and reuse it for every arch's deb.
+          ./dist/meshtermd-linux-amd64 unit print --bin=/usr/bin/meshtermd > dist/meshtermd.service
+          for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
+            set -- $triple
+            export MESHTERMD_GOARCH="$1" MESHTERMD_DEB_ARCH="$2"
+            envsubst < packaging/nfpm/nfpm.yaml > "dist/nfpm.$2.yaml"
+            nfpm package -f "dist/nfpm.$2.yaml" -p deb -t dist/
+          done
+          ls -la dist/*.deb
+
       - name: Generate SHA256SUMS
         working-directory: dist
         run: |
           # Hash both meshtermd-* (the daemon) and mtctl-* (the laptop
           # CLI). The single signed SHA256SUMS covers everything, so
           # iOS's verify path picks up mtctl integrity for free once
-          # it learns the new asset filenames.
+          # it learns the new asset filenames. The .deb files are
+          # intentionally NOT included here (see SHA256SUMS-deb).
           sha256sum meshtermd-* mtctl-* > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Generate SHA256SUMS-deb
+        working-directory: dist
+        run: |
+          # Separate checksum file for the Debian packages so `dpkg -i`
+          # users can verify, without touching the iOS-trusted SHA256SUMS.
+          sha256sum *.deb > SHA256SUMS-deb
+          cat SHA256SUMS-deb
 
       # Optional minisign signing. Only fires if the MINISIGN_KEY
       # repository secret is set. Generate the key locally with
@@ -66,6 +104,14 @@ jobs:
             -s /tmp/minisign.key \
             -t "meshtermd ${GITHUB_REF_NAME}" \
             -m SHA256SUMS
+          # Sign the Debian-package checksums too (separate file → the
+          # iOS-trusted SHA256SUMS.minisig is unaffected).
+          if [ -f SHA256SUMS-deb ]; then
+            echo "$MINISIGN_PASSWORD" | minisign -S \
+              -s /tmp/minisign.key \
+              -t "meshtermd ${GITHUB_REF_NAME} (deb)" \
+              -m SHA256SUMS-deb
+          fi
           rm /tmp/minisign.key
           ls -la
 
@@ -120,8 +166,11 @@ jobs:
           files: |
             dist/meshtermd-*
             dist/mtctl-*
+            dist/*.deb
             dist/SHA256SUMS
             dist/SHA256SUMS.minisig
+            dist/SHA256SUMS-deb
+            dist/SHA256SUMS-deb.minisig
             dist/man/meshtermd.8
             dist/man/mtctl.1
             dist/completions/mtctl.bash
@@ -130,4 +179,83 @@ jobs:
             dist/completions/meshtermd.bash
             dist/completions/meshtermd.zsh
             dist/completions/meshtermd.fish
-          fail_on_unmatched_files: false  # minisig is optional
+          fail_on_unmatched_files: false  # minisig + deb sigs are optional
+
+  apt-repo:
+    name: Publish to apt repo (gh-pages)
+    needs: [release]
+    runs-on: ubuntu-latest
+    # Gated on the signing-key secret (mirrors the minisign guard). Without it
+    # the whole job no-ops, so forks and unconfigured repos stay green.
+    env:
+      APT_GPG_KEY: ${{ secrets.APT_GPG_KEY }}
+      APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+    steps:
+      - name: Checkout (full history for branch routing)
+        if: ${{ env.APT_GPG_KEY != '' }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts (the .deb files)
+        if: ${{ env.APT_GPG_KEY != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish .deb(s) to the routed suite
+        if: ${{ env.APT_GPG_KEY != '' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y reprepro
+
+          # --- Route by branch: main-ancestor + clean semver → stable, else dev.
+          # main only advances on an App Store release, so 'stable' always
+          # matches the live iOS pin. develop / -rc tags land in 'dev'.
+          # Fail loudly if we can't resolve main — better than silently
+          # misrouting a real release to the wrong suite (set -e aborts here).
+          git fetch --no-tags origin main
+          SUITE=dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
+            SUITE=stable
+          fi
+          echo "Publishing $TAG → suite '$SUITE'"
+
+          # --- gh-pages must be seeded first (dormant until then; see
+          # docs/apt-repo-setup.md). Skip cleanly rather than fail.
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "::notice::gh-pages not seeded yet — skipping apt publish (see docs/apt-repo-setup.md)"
+            exit 0
+          fi
+
+          # --- Import the signing key into an isolated keyring. A
+          # passphraseless key (recommended for CI) needs no preset; if a
+          # passphrase secret is set, cache it in the agent via loopback so
+          # reprepro's gpg calls are non-interactive.
+          export GNUPGHOME="$(mktemp -d)"; chmod 700 "$GNUPGHOME"
+          echo "allow-loopback-pinentry" > "$GNUPGHOME/gpg-agent.conf"
+          gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+          printf '%s' "$APT_GPG_KEY" | gpg --batch --import
+          if [ -n "${APT_GPG_PASSPHRASE:-}" ]; then
+            KEYID="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
+            printf 'preset' | gpg --batch --pinentry-mode loopback \
+              --passphrase "$APT_GPG_PASSPHRASE" -u "$KEYID" --clearsign -o /dev/null || true
+          fi
+
+          # --- Stage the gh-pages worktree, ensure conf/ + .nojekyll, include.
+          git worktree add --checkout aptrepo origin/gh-pages
+          mkdir -p aptrepo/conf
+          cp -n packaging/apt/conf/distributions aptrepo/conf/distributions || true
+          touch aptrepo/.nojekyll
+          reprepro -b aptrepo includedeb "$SUITE" dist/*.deb
+
+          # --- Commit + push the updated archive.
+          cd aptrepo
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "apt: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
+          git push origin HEAD:gh-pages

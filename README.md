@@ -51,10 +51,23 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
 
 **Coming with the v2.0 coordinated release** (alongside meshTerm iOS v2.0 hitting the App Store):
 
+- **Debian / Ubuntu (apt)** — a signed apt repo on the same release line as the App Store app:
+
+  ```sh
+  curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
+    | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
+  echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://ag-studio-apps.github.io/meshtermd stable main" \
+    | sudo tee /etc/apt/sources.list.d/meshtermd.list
+  sudo apt update && sudo apt install meshtermd
+  # then, as your login user:
+  systemctl --user enable --now meshtermd
+  ```
+
+  Or grab a `.deb` straight from a release and `sudo dpkg -i meshtermd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
 - **Homebrew tap** (macOS, Linux): `brew tap AG-Studio-Apps/meshtermd && brew install meshtermd`
 - **Arch Linux (AUR)**: `meshtermd-bin` (pre-built) and `meshtermd` (build-from-source)
 
-The formula and `PKGBUILD`s are already staged under [`packaging/`](packaging/) so anyone curious can preview the install shape; the live channels go up on co-release day.
+The formula, `PKGBUILD`s, and apt packaging (`nfpm` config + repo setup) are already staged under [`packaging/`](packaging/) so anyone curious can preview the install shape; the live channels go up on co-release day.
 
 Once installed, the daemon usually runs under a supervisor — systemd-user on Linux, launchd on macOS, or a `nohup` fallback. The supervisor unit is dropped automatically by the iOS app's auto-installer on first connect, by the distro packages on `pacman -S` / `brew install`, or by hand:
 

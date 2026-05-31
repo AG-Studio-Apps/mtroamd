@@ -54,6 +54,17 @@ func runUpdate(args []string) int {
 	}
 	_ = fs.Parse(args)
 
+	// Refuse to self-update a package-managed install (apt/dpkg, AUR,
+	// Homebrew). Writing the new binary to ~/.local/bin would leave a
+	// shadow copy that diverges from what the package manager tracks and
+	// (on a --user host) silently rewrite the unit to point at it. `--check`
+	// is still allowed — reporting the available version is harmless.
+	if release.IsPackageManaged() && !*checkOnly {
+		fmt.Fprintf(os.Stderr, "update: %s\n",
+			release.PackageManagedHint("sudo apt upgrade meshtermd"))
+		return 2
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 

@@ -43,6 +43,16 @@ func runUninstall(args []string) int {
 	}
 	_ = fs.Parse(args)
 
+	// Refuse to uninstall a package-managed install. The binary lives in a
+	// root-owned path (e.g. /usr/bin) we don't own — rm would fail with
+	// EPERM and the supervisor teardown would tear down a daemon the package
+	// manager still believes is installed. Defer to the package manager.
+	if release.IsPackageManaged() {
+		fmt.Fprintf(os.Stderr, "uninstall: %s\n",
+			release.PackageManagedHint("sudo apt remove meshtermd"))
+		return 2
+	}
+
 	binPath := release.JoinBin()
 	stateDir, _ := cert.DefaultDir()
 

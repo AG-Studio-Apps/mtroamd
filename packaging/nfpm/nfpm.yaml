@@ -1,0 +1,96 @@
+# nfpm config for the meshtermd Debian package.
+#
+# Built in CI from the binaries `make dist` already produces — one .deb per
+# arch, driven by env vars so a single config covers all three:
+#
+#   MESHTERMD_GOARCH    amd64 | arm64 | armv7   (matches dist/<bin>-linux-<GOARCH>)
+#   MESHTERMD_DEB_ARCH  amd64 | arm64 | armhf   (the Debian Architecture field)
+#   MESHTERMD_VERSION   e.g. 2.0.0  or  2.0.0-rc.1  (semver schema → ~rc for deb)
+#
+#   for triple in "amd64 amd64" "arm64 arm64" "armv7 armhf"; do
+#     set -- $triple
+#     MESHTERMD_GOARCH=$1 MESHTERMD_DEB_ARCH=$2 MESHTERMD_VERSION=${TAG#v} \
+#       nfpm package -f packaging/nfpm/nfpm.yaml -p deb -t dist/
+#   done
+#
+# Per-user service model: the package installs the binaries + a systemd
+# **--user** unit template; it never creates a system user, installs a system
+# unit, or auto-enables a service. See packaging/nfpm/postinstall.sh.
+
+name: meshtermd
+arch: ${MESHTERMD_DEB_ARCH}
+platform: linux
+version: ${MESHTERMD_VERSION}
+version_schema: semver # turns a -rc/-dev prerelease into a ~ deb version (sorts below the release)
+section: net
+priority: optional
+maintainer: AG Studio Apps <james@agnticstudio.com>
+homepage: https://github.com/AG-Studio-Apps/meshtermd
+license: Apache-2.0
+description: |
+  Persistent terminal sessions for the meshTerm iOS app, plus the mtctl CLI.
+  meshtermd is a per-user daemon that hosts QUIC/Roam terminal sessions which
+  survive disconnects and roaming; mtctl is the laptop CLI that attaches to a
+  remote daemon over SSH+QUIC. Runs as a systemd --user service (one per login
+  user) — it spawns shells as you, so it is never a system-wide daemon.
+
+# Statically linked (CGO_ENABLED=0) — no runtime library dependencies.
+depends: []
+
+contents:
+  - src: dist/meshtermd-linux-${MESHTERMD_GOARCH}
+    dst: /usr/bin/meshtermd
+    file_info: { mode: 0755 }
+  - src: dist/mtctl-linux-${MESHTERMD_GOARCH}
+    dst: /usr/bin/mtctl
+    file_info: { mode: 0755 }
+
+  # systemd --user unit template (generated in CI via `meshtermd unit print
+  # --bin=/usr/bin/meshtermd`). Installed to the standard packaged-user-unit
+  # location; NOT auto-enabled — each user opts in with `systemctl --user`.
+  - src: dist/meshtermd.service
+    dst: /usr/lib/systemd/user/meshtermd.service
+    file_info: { mode: 0644 }
+
+  - src: dist/man/meshtermd.8
+    dst: /usr/share/man/man8/meshtermd.8
+    file_info: { mode: 0644 }
+  - src: dist/man/mtctl.1
+    dst: /usr/share/man/man1/mtctl.1
+    file_info: { mode: 0644 }
+
+  - src: dist/completions/meshtermd.bash
+    dst: /usr/share/bash-completion/completions/meshtermd
+    file_info: { mode: 0644 }
+  - src: dist/completions/mtctl.bash
+    dst: /usr/share/bash-completion/completions/mtctl
+    file_info: { mode: 0644 }
+  - src: dist/completions/meshtermd.zsh
+    dst: /usr/share/zsh/site-functions/_meshtermd
+    file_info: { mode: 0644 }
+  - src: dist/completions/mtctl.zsh
+    dst: /usr/share/zsh/site-functions/_mtctl
+    file_info: { mode: 0644 }
+  - src: dist/completions/meshtermd.fish
+    dst: /usr/share/fish/vendor_completions.d/meshtermd.fish
+    file_info: { mode: 0644 }
+  - src: dist/completions/mtctl.fish
+    dst: /usr/share/fish/vendor_completions.d/mtctl.fish
+    file_info: { mode: 0644 }
+
+  - src: LICENSE
+    dst: /usr/share/doc/meshtermd/copyright
+    file_info: { mode: 0644 }
+  - src: NOTICE
+    dst: /usr/share/doc/meshtermd/NOTICE
+    file_info: { mode: 0644 }
+  - src: README.md
+    dst: /usr/share/doc/meshtermd/README.md
+    file_info: { mode: 0644 }
+  - src: SECURITY.md
+    dst: /usr/share/doc/meshtermd/SECURITY.md
+    file_info: { mode: 0644 }
+
+scripts:
+  postinstall: packaging/nfpm/postinstall.sh
+  postremove: packaging/nfpm/postremove.sh

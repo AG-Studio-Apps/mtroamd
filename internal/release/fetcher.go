@@ -290,3 +290,55 @@ func JoinBin() string {
 	}
 	return filepath.Join(home, ".local", "bin", "meshtermd")
 }
+
+// RunningBinaryPath returns the absolute, symlink-resolved path of the
+// currently executing meshtermd binary. Falls back to JoinBin() if the
+// OS can't report it (never observed in practice).
+func RunningBinaryPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return JoinBin()
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		return resolved
+	}
+	return exe
+}
+
+// IsPackageManaged reports whether the running binary lives OUTSIDE the
+// user's conventional ~/.local/bin install dir — i.e. it was placed by a
+// system package manager (apt/dpkg, AUR, Homebrew) rather than the iOS app
+// or `meshtermd update`. The in-app self-update + uninstall paths refuse to
+// act on such installs: the package manager owns the binary's lifecycle, and
+// writing to (or rm-ing) a root-owned /usr/bin path would either fail with
+// EPERM or silently drop a shadow copy in ~/.local/bin that diverges from
+// what the package manager tracks.
+func IsPackageManaged() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Can't resolve the user's install dir — fail open (assume
+		// self-managed) so we never wrongly block update/uninstall for a
+		// normal ~/.local/bin install. (JoinBin's "./meshtermd" fallback
+		// would otherwise mis-compare and report package-managed.)
+		return false
+	}
+	selfBinDir := filepath.Join(home, ".local", "bin")
+	// Canonicalize both sides: RunningBinaryPath already resolves the
+	// executable's symlinks, so a symlinked $HOME (automount, /var→/private/var)
+	// would otherwise make a legitimate ~/.local/bin install look package-managed
+	// and wrongly block its self-update.
+	if resolved, err := filepath.EvalSymlinks(selfBinDir); err == nil {
+		selfBinDir = resolved
+	}
+	return filepath.Dir(RunningBinaryPath()) != selfBinDir
+}
+
+// PackageManagedHint is the refusal message shown when an in-app lifecycle
+// command is run against a package-managed install. aptCmd is the suggested
+// package-manager command for this action (e.g. "sudo apt upgrade meshtermd").
+func PackageManagedHint(aptCmd string) string {
+	return fmt.Sprintf(
+		"meshtermd was installed by a package manager (running from %s); "+
+			"manage it with your package manager — e.g. `%s`",
+		RunningBinaryPath(), aptCmd)
+}
