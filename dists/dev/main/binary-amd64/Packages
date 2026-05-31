@@ -1,0 +1,19 @@
+Package: meshtermd
+Version: 1.4.7~rc.1
+Architecture: amd64
+Maintainer: AG Studio Apps <james@agnticstudio.com>
+Installed-Size: 17668
+Homepage: https://github.com/AG-Studio-Apps/meshtermd
+Priority: optional
+Section: net
+Filename: pool/main/m/meshtermd/meshtermd_1.4.7~rc.1_amd64.deb
+Size: 7528840
+SHA256: 3e1aa6a7c9f6c28160febb355e7f73de1e1a435217fd0c5e4abe7bb70fcc470f
+SHA1: 2c849d77db5dbd387161160e7a139fd02e78c43f
+MD5sum: cafae0de70d835cb22722bf40f0057b4
+Description: Persistent terminal sessions for the meshTerm iOS app, plus the mtctl CLI.
+ meshtermd is a per-user daemon that hosts QUIC/Roam terminal sessions which
+ survive disconnects and roaming; mtctl is the laptop CLI that attaches to a
+ remote daemon over SSH+QUIC. Runs as a systemd --user service (one per login
+ user) — it spawns shells as you, so it is never a system-wide daemon.
+

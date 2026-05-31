@@ -1,0 +1,6 @@
+Archive: dev
+Component: main
+Origin: meshtermd
+Label: meshtermd
+Architecture: arm64
+Description: meshtermd apt repository (DEVELOPMENT — unstable, may break your system)
