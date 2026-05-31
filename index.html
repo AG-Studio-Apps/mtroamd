@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>meshtermd · apt repository</title>
+<title>meshtermd · package repository</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -20,18 +20,19 @@
   p.lead { margin: .2rem 0 0; color: #8b949e; }
   a { color: #58a6ff; text-decoration: none; }
   a:hover { text-decoration: underline; }
-  h2 { margin: 2.4rem 0 .6rem; font-size: 1.25rem; color: #f0f6fc; }
-  h2 .badge { font-size: .7rem; font-weight: 600; vertical-align: middle;
-    padding: .15rem .5rem; border-radius: 999px; margin-left: .5rem; }
+  h2 { margin: 2.6rem 0 .2rem; font-size: 1.35rem; color: #f0f6fc;
+    padding-bottom: .3rem; border-bottom: 1px solid #21262d; }
+  h3 { margin: 1.3rem 0 .4rem; font-size: 1.02rem; color: #d7dde3; font-weight: 600; }
+  h3 .badge { font-size: .68rem; font-weight: 600; vertical-align: middle;
+    padding: .12rem .5rem; border-radius: 999px; margin-left: .5rem; }
   .badge.live { background: #1f6f3f; color: #d3f9d8; }
   .badge.soon { background: #3d3522; color: #f5d98b; }
-  .badge.warn { background: #5c2323; color: #ffc9c9; }
-  .note { font-size: .92rem; color: #8b949e; margin: .2rem 0 .7rem; }
+  .note { font-size: .9rem; color: #8b949e; margin: .1rem 0 .5rem; }
   .warn-box { background: #2d1a1a; border: 1px solid #5c2323; border-radius: 8px;
-    padding: .8rem 1rem; margin: .6rem 0 .9rem; color: #ffb3b3; font-size: .95rem; }
-  .codeblock { position: relative; margin: .5rem 0 1.2rem; }
+    padding: .7rem .95rem; margin: .5rem 0 .7rem; color: #ffb3b3; font-size: .92rem; }
+  .codeblock { position: relative; margin: .4rem 0 1rem; }
   pre { margin: 0; background: #161b22; border: 1px solid #21262d; border-radius: 8px;
-    padding: 1rem 1rem; overflow-x: auto; font-size: .86rem; line-height: 1.55;
+    padding: 1rem; overflow-x: auto; font-size: .84rem; line-height: 1.5;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #e6edf3; }
   .copy { position: absolute; top: .5rem; right: .5rem; cursor: pointer;
     background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
@@ -47,19 +48,21 @@
 <body>
 <div class="wrap">
 <header>
-  <h1><span class="mono">meshtermd</span> <span class="tag">· apt</span></h1>
+  <h1><span class="mono">meshtermd</span> <span class="tag">· packages</span></h1>
   <p class="lead">Server-side daemon for the
     <a href="https://github.com/AG-Studio-Apps/meshtermd">meshTerm</a> iOS app —
     persistent terminal sessions over QUIC, plus the <code class="inline">mtctl</code> CLI.
-    Debian / Ubuntu packages for <code class="inline">amd64</code>,
-    <code class="inline">arm64</code>, <code class="inline">armhf</code>.</p>
+    Signed <code class="inline">apt</code> + <code class="inline">dnf</code> repos for
+    <code class="inline">amd64/x86_64</code>, <code class="inline">arm64/aarch64</code>
+    (<code class="inline">armhf</code> on apt).</p>
 </header>
 
-<h2>Stable<span class="badge soon">from v2.0</span></h2>
-<p class="note">The production channel — tracks the version paired with the live App Store app.
-  It goes live when meshTerm 2.0 ships; until then the commands below will report no package.</p>
-<div class="codeblock">
-<button class="copy">Copy</button>
+<h2>Debian / Ubuntu (apt)</h2>
+
+<h3>Stable<span class="badge soon">from v2.0</span></h3>
+<p class="note">Production channel — tracks the App Store app's pinned version. Live when
+  meshTerm 2.0 ships; until then this reports no package.</p>
+<div class="codeblock"><button class="copy">Copy</button>
 <pre>curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
 
@@ -67,18 +70,12 @@ echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://
   | sudo tee /etc/apt/sources.list.d/meshtermd.list
 
 sudo apt update && sudo apt install meshtermd
+systemctl --user enable --now meshtermd   # as your login user</pre></div>
 
-# then, as your login user:
-systemctl --user enable --now meshtermd</pre>
-</div>
-
-<h2>Development<span class="badge live">live</span></h2>
-<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong>
-  Pre-release (<code class="inline">-rc</code>) builds for testing; pairs with TestFlight, not
-  the App Store app. Not for production. Drop the dev source and
-  <code class="inline">apt upgrade</code> to converge back to stable.</div>
-<div class="codeblock">
-<button class="copy">Copy</button>
+<h3>Development<span class="badge live">live</span></h3>
+<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release
+  (<code class="inline">-rc</code>) builds for testing; pairs with TestFlight, not the App Store app.</div>
+<div class="codeblock"><button class="copy">Copy</button>
 <pre>curl -fsSL https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/meshtermd-archive-keyring.gpg > /dev/null
 
@@ -86,22 +83,54 @@ echo "deb [signed-by=/usr/share/keyrings/meshtermd-archive-keyring.gpg] https://
   | sudo tee /etc/apt/sources.list.d/meshtermd-dev.list
 
 sudo apt update && sudo apt install meshtermd
+systemctl --user enable --now meshtermd   # as your login user</pre></div>
 
-# then, as your login user:
-systemctl --user enable --now meshtermd</pre>
-</div>
+<h2>Fedora (dnf)</h2>
+
+<h3>Stable<span class="badge soon">from v2.0</span></h3>
+<p class="note">Live when meshTerm 2.0 ships; until then this reports no package.</p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>sudo tee /etc/yum.repos.d/meshtermd.repo <<'EOF'
+[meshtermd]
+name=meshtermd
+baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/stable/$basearch
+enabled=1
+gpgcheck=1
+gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+EOF
+
+sudo dnf install meshtermd
+systemctl --user enable --now meshtermd   # as your login user</pre></div>
+
+<h3>Development<span class="badge live">live</span></h3>
+<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight.</div>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>sudo tee /etc/yum.repos.d/meshtermd-dev.repo <<'EOF'
+[meshtermd-dev]
+name=meshtermd (development — unstable)
+baseurl=https://ag-studio-apps.github.io/meshtermd/rpm/dev/$basearch
+enabled=1
+gpgcheck=1
+gpgkey=https://ag-studio-apps.github.io/meshtermd/meshtermd-archive-keyring.asc
+EOF
+
+sudo dnf install meshtermd
+systemctl --user enable --now meshtermd   # as your login user</pre></div>
 
 <h2>Uninstall</h2>
-<div class="codeblock">
-<button class="copy">Copy</button>
-<pre>sudo apt remove meshtermd     # stops + removes the daemon, keeps your sessions + cert
-sudo apt purge  meshtermd     # also wipes ~/.local/share/meshtermd (full clean removal)</pre>
-</div>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre># Debian / Ubuntu
+sudo apt remove meshtermd     # stops + removes the daemon, keeps your sessions + cert
+sudo apt purge  meshtermd     # also wipes ~/.local/share/meshtermd (full clean removal)
+
+# Fedora
+sudo dnf remove meshtermd     # stops + removes the daemon, keeps your sessions + cert</pre></div>
 
 <footer>
-  Packages are GPG-signed. Key fingerprint
-  <code class="inline">61725E39 A1A4EEF3 28BE3694 507DBA72 F03C45C2</code>
-  (<a href="meshtermd-archive-keyring.gpg">keyring</a>).
+  Packages are GPG-signed (ed25519). Key fingerprint
+  <code class="inline">61725E39 A1A4EEF3 28BE3694 507DBA72 F03C45C2</code> —
+  <a href="meshtermd-archive-keyring.gpg">keyring (.gpg)</a> ·
+  <a href="meshtermd-archive-keyring.asc">armored (.asc)</a>.
   Source &amp; docs: <a href="https://github.com/AG-Studio-Apps/meshtermd">github.com/AG-Studio-Apps/meshtermd</a>.
 </footer>
 </div>
