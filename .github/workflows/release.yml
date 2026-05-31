@@ -271,6 +271,15 @@ jobs:
           mkdir -p aptrepo/conf
           cp -n packaging/apt/conf/distributions aptrepo/conf/distributions || true
           touch aptrepo/.nojekyll
+
+          # --- Prune the pre-rebrand 'meshtermd' package (old name; it carried
+          # the old Apache-2.0 License field) from both suites and delete its
+          # now-orphaned pool files. Idempotent: a no-op once it's gone.
+          for s in stable dev; do
+            reprepro -b aptrepo remove "$s" meshtermd 2>/dev/null || true
+          done
+          reprepro -b aptrepo deleteunreferenced 2>/dev/null || true
+
           reprepro -b aptrepo includedeb "$SUITE" dist/*.deb
 
           # --- Commit + push the updated archive.
@@ -350,6 +359,10 @@ jobs:
             mkdir -p "$dest"
             cp "$r" "$dest/"
           done
+          # Prune pre-rebrand 'meshtermd' rpms (old name; License: Apache-2.0)
+          # from this channel BEFORE reindex, so they drop out of the
+          # regenerated repodata instead of lingering as a stale Apache entry.
+          find "rpmrepo/rpm/$SUITE" -type f -name 'meshtermd-*.rpm' -delete 2>/dev/null || true
           for d in rpmrepo/rpm/"$SUITE"/*/; do createrepo_c "$d"; done
           # ASCII-armored key for dnf's gpgkey=, plus keep Jekyll off.
           cp docs/apt-signing-key.asc rpmrepo/mtroamd-archive-keyring.asc
