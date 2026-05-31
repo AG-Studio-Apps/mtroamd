@@ -163,6 +163,10 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
+          # Mark -rc/-dev tags as prereleases so they never become GitHub's
+          # "latest" (which iOS self-update queries and which the fetcher
+          # refuses) — keeps the dev channel out of the production update path.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/meshtermd-*
             dist/mtctl-*
