@@ -1,0 +1,48 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: mtroamd
+Label: mtroamd
+Suite: stable
+Codename: stable
+Date: Sun, 31 May 2026 20:30:16 UTC
+Architectures: amd64 arm64 armhf
+Components: main
+Description: mtroamd apt repository (stable — production, matches the App Store app)
+MD5Sum:
+ c8bd58a0027797d103e71d30f854f5c0 835 main/binary-amd64/Packages
+ 240442269e225b85dc72997f00f4cae0 563 main/binary-amd64/Packages.gz
+ f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
+ c5fb94c94937b2708ad210ceb704c284 835 main/binary-arm64/Packages
+ a78fbd192415a6a073a235305a17492e 565 main/binary-arm64/Packages.gz
+ adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
+ 6d81590a949fef6d90af8be2c9759c22 835 main/binary-armhf/Packages
+ 65d01f87a578a7d3d2a05926026ea3bf 568 main/binary-armhf/Packages.gz
+ f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
+SHA1:
+ 597e0152907a23e5acd0f24d497ad762265f59d8 835 main/binary-amd64/Packages
+ f594715b17d7a08e90ea822d07926ced0457454e 563 main/binary-amd64/Packages.gz
+ d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
+ 86ed2358e076eb6b642d4341a8733994c8ecb75f 835 main/binary-arm64/Packages
+ 39fa279c22cd6fcd08136b65ccd3e632d329b21d 565 main/binary-arm64/Packages.gz
+ 347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
+ 10d3c4d6d7d97d11ef17002ae266e96cf47f56f2 835 main/binary-armhf/Packages
+ a8eb017d44593f99938987e22192488593af72df 568 main/binary-armhf/Packages.gz
+ 6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
+SHA256:
+ 87a5f3364a77bea5dfb8ecfcb1a73d9ff9d09a8bcd1b00243c78dbd36208e157 835 main/binary-amd64/Packages
+ dc98ddacf3d732127985461c13a1a4740e53b18ff1c0fb982d9fc7d098482424 563 main/binary-amd64/Packages.gz
+ 44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
+ 7b6f6747b8688f3401fe68d9405c7f196f06ca289b46eb518e25e7df91d94296 835 main/binary-arm64/Packages
+ a47ec677a4507c9f39d9d711e7208c406b2c740a1823bb979c8c77e647ea1372 565 main/binary-arm64/Packages.gz
+ ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
+ 1574dffaa570cfb9e5cf301bb5bbace16f4d881474edb4a6c7b17ca1a9b08418 835 main/binary-armhf/Packages
+ f47c3078087605478d3df34b2e6040ae6d124994f76a7ca370f78810ee103a1e 568 main/binary-armhf/Packages.gz
+ e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCahyaWAAKCRBQfbpy8DxF
+wopCAP9ywE4r7cqBOsQ/QjZlVOpgSXegMB58KlAyM2AeZsLDSwEAz19x4godSzs4
+/zxsYQJ5ZNSXel5SWmMPRBSu0PXgbwk=
+=oxSI
+-----END PGP SIGNATURE-----

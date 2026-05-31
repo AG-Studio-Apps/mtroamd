@@ -1,0 +1,6 @@
+Archive: stable
+Component: main
+Origin: mtroamd
+Label: mtroamd
+Architecture: arm64
+Description: mtroamd apt repository (stable — production, matches the App Store app)
