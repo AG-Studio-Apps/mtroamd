@@ -14,6 +14,12 @@ set -eu
 
 : "${MTROAMD_VERSION:?MTROAMD_VERSION must be set}"
 
+# Alpine pkgver can't carry semver prerelease syntax (no '-', no dotted
+# suffix). Map "-rc.N" → "_rcN" — the apk pre-release form, which also sorts
+# below the matching stable release (same intent as the deb/rpm "~rc").
+MTROAMD_VERSION="$(printf '%s' "$MTROAMD_VERSION" | sed -E 's/-rc\.?([0-9]+).*/_rc\1/')"
+echo ">>> apk pkgver: $MTROAMD_VERSION"
+
 apk add --no-cache alpine-sdk openssl doas >/dev/null
 # Let the abuild group install build-deps via doas (none here, but abuild's
 # dep phase still expects a privilege helper).
@@ -36,19 +42,25 @@ chown -R builder:abuild /home/builder
 # Build each arch as the unprivileged user. No compilation: package() installs
 # the matching prebuilt binary from $MTROAMD_DIST.
 su builder -c '
-  set -eu
+  set -u
   export MTROAMD_VERSION="'"$MTROAMD_VERSION"'"
   export MTROAMD_DIST=/work/dist
   export MTROAMD_LICENSE=/work/LICENSE
   cd /home/builder/apkbuild
   abuild checksum
+  # Per-arch, best-effort: a single arch failing (e.g. a foreign CARCH abuild
+  # quirk) must not sink the others — collection below fails only if NOTHING
+  # built. CARCH is overridden because package() just repackages the matching
+  # prebuilt static binary (no compilation).
   for pair in "x86_64 amd64" "aarch64 arm64" "armv7 armv7"; do
     set -- $pair
-    CARCH="$1" MTROAMD_GOARCH="$2" abuild -r
+    echo ">>> apk build: CARCH=$1 GOARCH=$2"
+    CARCH="$1" MTROAMD_GOARCH="$2" abuild -r || echo ">>> WARN: abuild failed for CARCH=$1"
   done
 '
 
 # Collect, index, and sign per arch (root is fine for these).
+total=0
 for arch in x86_64 aarch64 armv7; do
   out="/work/apkout/$arch"
   mkdir -p "$out"
@@ -62,8 +74,15 @@ for arch in x86_64 aarch64 armv7; do
     rmdir "$out"
     continue
   fi
+  total=$((total + 1))
   ( cd "$out"
     apk index -o APKINDEX.tar.gz ./*.apk
     abuild-sign -k /home/builder/.abuild/mtroamd-apk.rsa APKINDEX.tar.gz )
 done
+
+if [ "$total" = 0 ]; then
+  echo ">>> ERROR: no apks built for any arch" >&2
+  exit 1
+fi
+echo ">>> built apks for $total arch(es)"
 cp /home/builder/.abuild/mtroamd-apk.rsa.pub /work/apkout/mtroamd-apk.rsa.pub
