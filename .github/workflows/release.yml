@@ -424,41 +424,13 @@ jobs:
           mkdir -p apkout
 
           # abuild is Alpine-only; build + sign all arches in a throwaway
-          # container. The APKBUILD repackages the prebuilt static dist/
-          # binaries (no compilation), so one amd64 host emits every arch.
+          # container. The build logic lives in packaging/apk/ci-build.sh
+          # (runs the abuild loop as an unprivileged user — abuild refuses
+          # root). The APKBUILD repackages the prebuilt static dist/ binaries
+          # (no compilation), so one amd64 host emits every arch.
           docker run --rm -v "$PWD:/work" -w /work \
             -e MTROAMD_VERSION="${TAG#v}" \
-            alpine:latest sh -euc '
-              apk add --no-cache alpine-sdk openssl >/dev/null
-              mkdir -p "$HOME/.abuild" /etc/apk/keys
-              install -m600 abuild-key.rsa "$HOME/.abuild/mtroamd-apk.rsa"
-              openssl rsa -in "$HOME/.abuild/mtroamd-apk.rsa" -pubout \
-                -out "$HOME/.abuild/mtroamd-apk.rsa.pub" 2>/dev/null
-              cp "$HOME/.abuild/mtroamd-apk.rsa.pub" /etc/apk/keys/
-              echo "PACKAGER_PRIVKEY=$HOME/.abuild/mtroamd-apk.rsa" > "$HOME/.abuild/abuild.conf"
-
-              export MTROAMD_DIST=/work/dist MTROAMD_LICENSE=/work/LICENSE
-              cd packaging/apk
-              abuild checksum
-              for pair in "x86_64 amd64" "aarch64 arm64" "armv7 armv7"; do
-                set -- $pair
-                CARCH="$1" MTROAMD_GOARCH="$2" abuild -F -r
-              done
-
-              # Collect signed .apks per arch and build a signed APKINDEX.
-              for arch in x86_64 aarch64 armv7; do
-                out="/work/apkout/$arch"; mkdir -p "$out"
-                for f in "$HOME"/packages/*/"$arch"/*.apk; do
-                  [ -e "$f" ] || continue
-                  cp "$f" "$out/"
-                done
-                ls "$out"/*.apk >/dev/null 2>&1 || { rmdir "$out"; continue; }
-                ( cd "$out"
-                  apk index -o APKINDEX.tar.gz *.apk
-                  abuild-sign -k "$HOME/.abuild/mtroamd-apk.rsa" APKINDEX.tar.gz )
-              done
-              cp "$HOME/.abuild/mtroamd-apk.rsa.pub" /work/apkout/mtroamd-apk.rsa.pub
-            '
+            alpine:latest sh /work/packaging/apk/ci-build.sh
           rm -f abuild-key.rsa
 
           # --- Stage gh-pages, publish to apk/<suite>/<arch>/ + the pubkey.
