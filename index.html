@@ -149,13 +149,23 @@ inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";
 #   services.mtroamd.enable = true;</pre></div>
 
 <h2>Uninstall</h2>
-<div class="codeblock"><button class="copy">Copy</button>
-<pre># Debian / Ubuntu
-sudo apt remove mtroamd     # stops + removes the daemon, keeps your sessions + cert
-sudo apt purge  mtroamd     # also wipes ~/.local/share/mtroamd (full clean removal)
 
-# Fedora
-sudo dnf remove mtroamd     # stops + removes the daemon, keeps your sessions + cert</pre></div>
+<h3>Debian / Ubuntu</h3>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>sudo apt remove mtroamd     # stops + removes the daemon, keeps your sessions + cert
+sudo apt purge  mtroamd     # also wipes ~/.local/share/mtroamd (full clean removal)</pre></div>
+
+<h3>Fedora</h3>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>sudo dnf remove mtroamd     # stops + removes the daemon, keeps your sessions + cert</pre></div>
+
+<h3>Alpine</h3>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>rc-service mtroamd stop && rc-update del mtroamd
+apk del mtroamd             # state in ~/.local/share/mtroamd is kept</pre></div>
+
+<h3>NixOS / Nix</h3>
+<p class="note">Declarative — remove <code class="inline">services.mtroamd</code> (or the module import) from your config and rebuild. For an ad-hoc profile install: <code class="inline">nix profile remove mtroamd</code>.</p>
 
 <footer>
   Packages are GPG-signed (ed25519). Key fingerprint
