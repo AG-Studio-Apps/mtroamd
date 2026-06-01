@@ -69,8 +69,8 @@
 echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd stable main" \
   | sudo tee /etc/apt/sources.list.d/mtroamd.list
 
-sudo apt update && sudo apt install mtroamd
-systemctl --user enable --now mtroamd   # as your login user</pre></div>
+sudo apt update && sudo apt install mtroamd</pre></div>
+<p class="note">That's it — the package enables + starts the daemon for your login user and turns on linger, so it survives logout + reboot (check with <code class="inline">mtroamd doctor</code>). Installed as root / non-interactively? Finish as your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code></p>
 
 <h3>Development<span class="badge live">live</span></h3>
 <div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release
@@ -82,8 +82,8 @@ systemctl --user enable --now mtroamd   # as your login user</pre></div>
 echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd dev main" \
   | sudo tee /etc/apt/sources.list.d/mtroamd-dev.list
 
-sudo apt update && sudo apt install mtroamd
-systemctl --user enable --now mtroamd   # as your login user</pre></div>
+sudo apt update && sudo apt install mtroamd</pre></div>
+<p class="note">That's it — the package enables + starts the daemon for your login user and turns on linger, so it survives logout + reboot (check with <code class="inline">mtroamd doctor</code>). Installed as root / non-interactively? Finish as your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code></p>
 
 <h2>Fedora (dnf)</h2>
 
@@ -99,8 +99,8 @@ gpgcheck=1
 gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
-sudo dnf install mtroamd
-systemctl --user enable --now mtroamd   # as your login user</pre></div>
+sudo dnf install mtroamd</pre></div>
+<p class="note">That's it — the package enables + starts the daemon for your login user and turns on linger, so it survives logout + reboot (check with <code class="inline">mtroamd doctor</code>). Installed as root / non-interactively? Finish as your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code></p>
 
 <h3>Development<span class="badge live">live</span></h3>
 <div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight.</div>
@@ -114,8 +114,8 @@ gpgcheck=1
 gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
-sudo dnf install mtroamd
-systemctl --user enable --now mtroamd   # as your login user</pre></div>
+sudo dnf install mtroamd</pre></div>
+<p class="note">That's it — the package enables + starts the daemon for your login user and turns on linger, so it survives logout + reboot (check with <code class="inline">mtroamd doctor</code>). Installed as root / non-interactively? Finish as your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code></p>
 
 <h2>Uninstall</h2>
 <div class="codeblock"><button class="copy">Copy</button>
