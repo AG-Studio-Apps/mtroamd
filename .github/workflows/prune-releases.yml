@@ -57,14 +57,21 @@ jobs:
           fetch-depth: 0  # need full tag history
 
       - name: Compute keep-list
+        env:
+          # Fine-grained PAT with read-only Contents access to the iOS repo,
+          # used ONLY for the cross-repo pin read below. Falls back to the
+          # default GITHUB_TOKEN (which can't read the other repo) when unset,
+          # so an absent secret degrades to the fail-safe rather than failing.
+          IOS_PIN_TOKEN: ${{ secrets.IOS_PIN_TOKEN }}
         run: |
           set -euo pipefail
 
-          # --- iOS-pinned tag (force-keep). Best-effort cross-repo read; the
-          # default GITHUB_TOKEN can read another repo in the same org when
-          # Actions has org read access. If we CAN'T resolve it, we abort all
-          # deletions — never risk pruning whatever the app installs.
-          PIN="$(gh api "repos/${IOS_REPO}/contents/${IOS_PIN_PATH}" --jq '.content' 2>/dev/null \
+          # --- iOS-pinned tag (force-keep). Read via IOS_PIN_TOKEN (a
+          # fine-grained PAT with read-only Contents on the iOS repo); the
+          # default GITHUB_TOKEN is repo-scoped and can't read it. If we
+          # CAN'T resolve it, we abort all deletions — never risk pruning
+          # whatever the app installs.
+          PIN="$(GH_TOKEN="${IOS_PIN_TOKEN:-$GH_TOKEN}" gh api "repos/${IOS_REPO}/contents/${IOS_PIN_PATH}" --jq '.content' 2>/dev/null \
                   | base64 -d 2>/dev/null \
                   | grep -oE 'pinnedReleaseTag[^"]*"v[0-9][^"]*"' \
                   | grep -oE 'v[0-9][^"]*' | head -1 || true)"
