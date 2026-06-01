@@ -41,6 +41,10 @@ env:
   KEEP_PRERELEASE: "2"
   IOS_REPO: AG-Studio-Apps/meshTerm
   IOS_PIN_PATH: Sources/meshTerm/MTRoam/MTRoamInstallConstants.swift
+  # The active mtroamd pin lives on the iOS repo's develop branch (TestFlight
+  # line). The App Store/main branch predates mtroamd, so its default branch
+  # doesn't carry this constant — read develop explicitly.
+  IOS_PIN_REF: develop
 
 jobs:
   prune:
@@ -71,7 +75,7 @@ jobs:
           # default GITHUB_TOKEN is repo-scoped and can't read it. If we
           # CAN'T resolve it, we abort all deletions — never risk pruning
           # whatever the app installs.
-          PIN="$(GH_TOKEN="${IOS_PIN_TOKEN:-$GH_TOKEN}" gh api "repos/${IOS_REPO}/contents/${IOS_PIN_PATH}" --jq '.content' 2>/dev/null \
+          PIN="$(GH_TOKEN="${IOS_PIN_TOKEN:-$GH_TOKEN}" gh api "repos/${IOS_REPO}/contents/${IOS_PIN_PATH}?ref=${IOS_PIN_REF}" --jq '.content' 2>/dev/null \
                   | base64 -d 2>/dev/null \
                   | grep -oE 'pinnedReleaseTag[^"]*"v[0-9][^"]*"' \
                   | grep -oE 'v[0-9][^"]*' | head -1 || true)"
