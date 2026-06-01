@@ -433,6 +433,19 @@ jobs:
             alpine:latest sh /work/packaging/apk/ci-build.sh
           rm -f abuild-key.rsa
 
+          # --- Gate publish on a smoke test of the freshly-built x86_64 apk:
+          # install it, start the OpenRC service, create a session, restart, and
+          # assert the pty-sidecar survived + the daemon reattached it. A broken
+          # package never reaches the repo.
+          apkfile="$(ls apkout/x86_64/mtroamd-*.apk 2>/dev/null | head -1)"
+          if [ -n "$apkfile" ]; then
+            docker run --rm --privileged -v "$PWD:/work" \
+              -e MTROAMD_APK="/work/$apkfile" \
+              alpine:latest sh /work/packaging/apk/smoke.sh
+          else
+            echo "::error::no x86_64 apk built — nothing to smoke-test"; exit 1
+          fi
+
           # --- Stage gh-pages, publish to apk/<suite>/<arch>/ + the pubkey.
           git fetch --no-tags origin gh-pages
           git worktree add --checkout apkrepo origin/gh-pages

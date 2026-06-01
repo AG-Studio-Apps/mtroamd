@@ -73,8 +73,48 @@
           devShells.default = pkgs.mkShell {
             packages = [ pkgs.go pkgs.pandoc ];
           };
-          # `nix flake check` builds the package.
-          checks.mtroamd = mtroamd;
+          # `nix flake check` builds the package and (on Linux) runs a NixOS VM
+          # test of the module: service active, linger on, doctor reports
+          # systemd-user (also exercises the multi-dir unit detection on NixOS,
+          # where the unit lives in /etc/systemd/user).
+          checks = {
+            mtroamd = mtroamd;
+          } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+            nixos-module = pkgs.nixosTest {
+              name = "mtroamd-nixos-module";
+              nodes.machine = { ... }: {
+                imports = [ self.nixosModules.default ];
+                services.mtroamd = {
+                  enable = true;
+                  users = [ "alice" ];
+                  package = mtroamd;
+                  tcpAddr = "-"; # QUIC-only; no tailnet poll in the test VM
+                };
+                users.users.alice = {
+                  isNormalUser = true;
+                  uid = 1000;
+                };
+              };
+              testScript = ''
+                machine.wait_for_unit("multi-user.target")
+                # The module enabled linger for alice.
+                machine.wait_until_succeeds(
+                    "loginctl show-user alice --property=Linger | grep -q Linger=yes"
+                )
+                # alice's systemd --user service is active.
+                machine.wait_until_succeeds(
+                    "systemctl --user --machine=alice@.host is-active mtroamd",
+                    timeout=90,
+                )
+                # doctor detects the systemd-user backend (unit in /etc/systemd/user).
+                machine.succeed(
+                    "su alice -c 'XDG_RUNTIME_DIR=/run/user/1000 "
+                    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+                    "mtroamd doctor' | grep -E 'Backend:.*systemd-user'"
+                )
+              '';
+            };
+          };
         });
 
       # ── NixOS system module ──────────────────────────────────────────────
