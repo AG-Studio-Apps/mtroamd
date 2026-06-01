@@ -60,74 +60,97 @@ jobs:
         with:
           fetch-depth: 0  # need full tag history
 
-      - name: Compute keep-list
+      - name: Plan prune (resolve pin + channels + per-channel keep-lists)
         env:
           # Fine-grained PAT with read-only Contents access to the iOS repo,
           # used ONLY for the cross-repo pin read below. Falls back to the
           # default GITHUB_TOKEN (which can't read the other repo) when unset,
           # so an absent secret degrades to the fail-safe rather than failing.
           IOS_PIN_TOKEN: ${{ secrets.IOS_PIN_TOKEN }}
+          # SHA the triggering Release ran on (empty for manual dispatch).
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
 
-          # --- iOS-pinned tag (force-keep). Read via IOS_PIN_TOKEN (a
-          # fine-grained PAT with read-only Contents on the iOS repo); the
-          # default GITHUB_TOKEN is repo-scoped and can't read it. If we
-          # CAN'T resolve it, we abort all deletions — never risk pruning
-          # whatever the app installs.
+          # --- iOS-pinned tag (force-keep). Read via IOS_PIN_TOKEN against
+          # IOS_PIN_REF; the default token is repo-scoped and can't read the
+          # other repo. If unresolved we ABORT all deletions — never risk
+          # pruning whatever the app installs.
           PIN="$(GH_TOKEN="${IOS_PIN_TOKEN:-$GH_TOKEN}" gh api "repos/${IOS_REPO}/contents/${IOS_PIN_PATH}?ref=${IOS_PIN_REF}" --jq '.content' 2>/dev/null \
                   | base64 -d 2>/dev/null \
                   | grep -oE 'pinnedReleaseTag[^"]*"v[0-9][^"]*"' \
                   | grep -oE 'v[0-9][^"]*' | head -1 || true)"
           if [ -z "${PIN:-}" ]; then
-            echo "::warning::could not resolve iOS pinnedReleaseTag from ${IOS_REPO}/${IOS_PIN_PATH} — ABORTING deletions (fail-safe)"
-            echo "ABORT=1" >> "$GITHUB_ENV"
-            : > /tmp/keep.txt
-            exit 0
+            echo "::warning::could not resolve iOS pinnedReleaseTag — ABORTING deletions (fail-safe)"
+            echo "ABORT=1" >> "$GITHUB_ENV"; exit 0
           fi
-          echo "iOS pin: ${PIN}"
+          echo "$PIN" > /tmp/pin
+          echo "iOS pin (force-keep): ${PIN}"
 
-          # --- All tags, newest-first by semver.
-          mapfile -t ALL < <(git tag -l 'v*' | sort -rV)
+          # --- Which channel(s) to prune. Channel-scoped so a release only
+          # touches its OWN line — a dev rc never chews into stable history,
+          # and a stable release never churns dev.
+          #   - manual dispatch: clean BOTH channels.
+          #   - post-Release: only the channel the triggering tag belongs to
+          #     (clean semver -> stable, -rc/-dev -> dev).
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            CHANNELS="stable dev"
+          else
+            TAG="$(git tag --points-at "${TRIGGER_SHA}" 2>/dev/null | grep -E '^v[0-9]' | head -1 || true)"
+            if [ -z "$TAG" ]; then
+              echo "::warning::no release tag at ${TRIGGER_SHA} — nothing to prune"
+              echo "ABORT=1" >> "$GITHUB_ENV"; exit 0
+            fi
+            case "$TAG" in *-*) CHANNELS="dev";; *) CHANNELS="stable";; esac
+            echo "triggering tag: ${TAG}"
+          fi
+          echo "$CHANNELS" > /tmp/channels
+          echo "## Prune plan" >> "$GITHUB_STEP_SUMMARY"
+          echo "- channels: ${CHANNELS} · iOS pin: ${PIN}" >> "$GITHUB_STEP_SUMMARY"
 
-          KEEP=()
-          # last KEEP_STABLE stable tags (no '-')
-          n=0; for t in "${ALL[@]}"; do
-            case "$t" in *-*) continue;; esac
-            KEEP+=("$t"); n=$((n+1)); [ "$n" -ge "${KEEP_STABLE}" ] && break
+          # --- Per-channel keep-list: last N of that channel + the pin iff it
+          # belongs to that channel. Written to /tmp/keep-<ch>.txt for the
+          # delete steps below (single source of truth).
+          for ch in $CHANNELS; do
+            if [ "$ch" = "stable" ]; then
+              mapfile -t IN < <(git tag -l 'v*' | grep -v '[-]' | sort -rV || true); keepN="${KEEP_STABLE}"
+            else
+              mapfile -t IN < <(git tag -l 'v*' | grep '[-]' | sort -rV || true); keepN="${KEEP_PRERELEASE}"
+            fi
+            KEEP=(); n=0
+            for t in "${IN[@]}"; do KEEP+=("$t"); n=$((n+1)); [ "$n" -ge "$keepN" ] && break; done
+            case "$PIN" in
+              *-*) [ "$ch" = "dev" ]    && KEEP+=("$PIN");;
+              *)   [ "$ch" = "stable" ] && KEEP+=("$PIN");;
+            esac
+            printf '%s\n' "${KEEP[@]}" | sort -uV > "/tmp/keep-$ch.txt"
+            echo "[$ch] keep: $(paste -sd' ' "/tmp/keep-$ch.txt")"
+            echo "- $ch keeps: $(paste -sd' ' "/tmp/keep-$ch.txt")" >> "$GITHUB_STEP_SUMMARY"
           done
-          # last KEEP_PRERELEASE prerelease tags (has '-')
-          n=0; for t in "${ALL[@]}"; do
-            case "$t" in *-*) ;; *) continue;; esac
-            KEEP+=("$t"); n=$((n+1)); [ "$n" -ge "${KEEP_PRERELEASE}" ] && break
-          done
-          # force-keep the iOS pin
-          KEEP+=("$PIN")
 
-          mapfile -t KEEP < <(printf '%s\n' "${KEEP[@]}" | sort -uV)
-          printf '%s\n' "${KEEP[@]}" > /tmp/keep.txt
-          echo "KEEP (${#KEEP[@]}): ${KEEP[*]}"
-          echo "## Prune keep-list" >> "$GITHUB_STEP_SUMMARY"
-          printf -- '- %s\n' "${KEEP[@]}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Prune GitHub Releases + tags
+      - name: Prune GitHub Releases + tags (per channel)
         run: |
           set -euo pipefail
           if [ "${ABORT:-0}" = "1" ]; then echo "fail-safe: skipping"; exit 0; fi
           echo "DRY_RUN=${DRY_RUN}"
-          for t in $(git tag -l 'v*'); do
-            grep -qxF "$t" /tmp/keep.txt && continue
-            if [ "${DRY_RUN}" = "true" ]; then
-              echo "[dry-run] would delete release+tag $t"
+          for ch in $(cat /tmp/channels); do
+            if [ "$ch" = "stable" ]; then
+              mapfile -t IN < <(git tag -l 'v*' | grep -v '[-]' | sort -rV || true)
             else
-              echo "deleting release+tag $t"
-              gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+              mapfile -t IN < <(git tag -l 'v*' | grep '[-]' | sort -rV || true)
             fi
+            for t in "${IN[@]}"; do
+              grep -qxF "$t" "/tmp/keep-$ch.txt" && continue
+              if [ "${DRY_RUN}" = "true" ]; then
+                echo "[dry-run][$ch] would delete release+tag $t"
+              else
+                echo "[$ch] deleting release+tag $t"
+                gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+              fi
+            done
           done
 
-      - name: Prune gh-pages dnf rpms + reindex
-        env:
-          APT_GPG_KEY: ${{ secrets.APT_GPG_KEY }}
+      - name: Prune gh-pages dnf rpms + reindex (per channel)
         run: |
           set -euo pipefail
           if [ "${ABORT:-0}" = "1" ]; then echo "fail-safe: skipping"; exit 0; fi
@@ -135,45 +158,34 @@ jobs:
             echo "gh-pages not seeded — nothing to prune"; exit 0
           fi
           sudo apt-get update && sudo apt-get install -y createrepo-c
-
-          # Tag -> rpm version: strip leading 'v', '-' becomes '~' (nfpm semver schema).
-          # Stable keep-tags map to rpm/stable; prerelease keep-tags map to rpm/dev.
-          keep_versions () { # $1 = "stable" | "dev"
-            while read -r t; do
-              case "$1:$t" in
-                stable:*-*) continue;;          # prerelease tag — not a stable-channel pkg
-                dev:*-*) ;;                      # prerelease tag — dev channel
-                dev:*) continue;;                # stable tag — not a dev-channel pkg
-              esac
-              printf '%s\n' "${t#v}" | tr '-' '~'
-            done < /tmp/keep.txt
-          }
-
           git fetch --no-tags origin gh-pages
           git worktree add --checkout rpmrepo origin/gh-pages
           changed=0
-          for ch in stable dev; do
-            mapfile -t KV < <(keep_versions "$ch")
+          PRUNED_CH=()
+          for ch in $(cat /tmp/channels); do
+            # keep-versions = keep-tags as rpm versions (strip 'v', '-' -> '~').
+            KV=(); while read -r t; do KV+=("$(printf '%s' "${t#v}" | tr '-' '~')"); done < "/tmp/keep-$ch.txt"
             for f in rpmrepo/rpm/"$ch"/*/*.rpm; do
               [ -e "$f" ] || continue
-              base="$(basename "$f")"            # mtroamd-1.4.7-1.x86_64.rpm
-              keep=0
-              for v in "${KV[@]}"; do
-                case "$base" in "mtroamd-${v}-"*) keep=1; break;; esac
-              done
+              base="$(basename "$f")"; keep=0
+              for v in "${KV[@]}"; do case "$base" in "mtroamd-${v}-"*) keep=1; break;; esac; done
               if [ "$keep" -eq 0 ]; then
-                if [ "${DRY_RUN}" = "true" ]; then echo "[dry-run] would rm $f";
-                else echo "rm $f"; rm -f "$f"; changed=1; fi
+                if [ "${DRY_RUN}" = "true" ]; then echo "[dry-run][$ch] would rm $f"
+                else echo "[$ch] rm $f"; rm -f "$f"; changed=1; fi
               fi
             done
+            PRUNED_CH+=("$ch")
           done
           if [ "${DRY_RUN}" = "true" ] || [ "$changed" -eq 0 ]; then
             echo "no rpm changes to commit"; exit 0
           fi
-          for d in rpmrepo/rpm/*/*/; do [ -d "$d" ] && createrepo_c "$d"; done
+          # Reindex only the channels we touched.
+          for ch in "${PRUNED_CH[@]}"; do
+            for d in rpmrepo/rpm/"$ch"/*/; do [ -d "$d" ] && createrepo_c "$d"; done
+          done
           cd rpmrepo
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "prune: drop rpms outside keep-list" || { echo "nothing to commit"; exit 0; }
+          git commit -m "prune: drop rpms outside per-channel keep-list" || { echo "nothing to commit"; exit 0; }
           git push origin HEAD:gh-pages
