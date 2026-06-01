@@ -56,6 +56,11 @@ type ProtocolHandler struct {
 	Registry *session.Registry
 	Logger   *slog.Logger
 
+	// Limiter records attach-token validation failures so a source that
+	// repeatedly presents bad tokens is put into an accept cooldown by
+	// the transports. Nil disables it. Shared with the QUIC + TCP servers.
+	Limiter *SourceLimiter
+
 	// PTYSpawner is the lazy-spawn factory the handler calls when a
 	// client attaches to a session that was restored from disk by
 	// LoadPersisted (and therefore has Session.pty == nil). The daemon
@@ -110,7 +115,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// treats it the same).
 	_ = ctrl.SetReadDeadline(time.Time{})
 
-	sess, err := h.resolveAttach(att, ctrl)
+	sess, err := h.resolveAttach(att, ctrl, ipFromAddr(ctrl.RemoteAddr()))
 	if err != nil {
 		// resolveAttach already wrote the AttachAck failure response.
 		// Close the control stream's write side, then drain briefly
@@ -472,8 +477,9 @@ func (h *ProtocolHandler) logger() *slog.Logger {
 // resolveAttach validates the token + session id and consumes the
 // token. On failure it sends an AttachAck{ok:false} on the control
 // stream and returns the underlying error so the caller can log.
-func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer) (*session.Session, error) {
+func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer, srcIP string) (*session.Session, error) {
 	if len(att.Token) != session.AttachTokenLen {
+		h.Limiter.RecordBadToken(srcIP)
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
 			V:   1,
 			Err: protocol.AttachErrBadToken,
@@ -482,6 +488,10 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer) (*s
 		return nil, errors.New("invalid token length")
 	}
 	if len(att.SessionID) != session.SessionIDLen {
+		// Malformed attach (a legitimate client always sends a fixed-length
+		// session id): strike it like the other bad-token paths so a scanner
+		// can't probe unbounded behind the accept bucket.
+		h.Limiter.RecordBadToken(srcIP)
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
 			V:   1,
 			Err: protocol.AttachErrUnknownSession,
@@ -493,6 +503,7 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer) (*s
 	copy(tok[:], att.Token)
 	sess, err := h.Registry.ConsumeAttachToken(tok)
 	if err != nil {
+		h.Limiter.RecordBadToken(srcIP)
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
 			V:   1,
 			Err: protocol.AttachErrBadToken,
