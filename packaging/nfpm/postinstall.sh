@@ -2,16 +2,16 @@
 # mtroamd .deb postinstall — per-user service model.
 #
 # Runs as root during `apt install`/`apt upgrade`. mtroamd is a systemd
-# --user daemon that spawns shells AS the login user, so this script:
-#   - NEVER creates a system user or installs a system unit,
-#   - NEVER enables/starts a service for a user who hasn't opted in,
-# and only:
+# --user daemon that spawns shells AS the login user, so this script never
+# creates a system user or installs a system-wide unit. What it does:
 #   (a) loudly flags DEVELOPMENT builds (dev apt channel),
 #   (b) migrates a prior ~/.local/bin install (iOS app / `mtroamd update`)
 #       onto this package binary, when it safely can,
-#   (c) on a fresh install, prints the exact command to start the service
-#       (it never auto-enables); on an upgrade, restarts the installing
-#       user's already-running --user service onto the new /usr/bin binary.
+#   (c) on a FRESH install, fully sets up the installing user's --user service
+#       (enable-linger + enable --now) so it works with no manual step and
+#       survives logout + reboot; on an UPGRADE, cycles that user's
+#       already-running service onto the new /usr/bin binary without changing
+#       their opt-in state.
 set -eu
 
 BIN=/usr/bin/mtroamd
@@ -60,34 +60,64 @@ if [ -e "$old_bin" ] || [ -e "$old_unit" ]; then
 	exit 0
 fi
 
-# (c) No prior ~/.local/bin install. The package deliberately never
-# auto-enables a service (opt-in only). dpkg passes the previously-configured
+# (c) No prior ~/.local/bin install. dpkg passes the previously-configured
 # version in $2 — empty on a FRESH install, set on an UPGRADE:
 #   - upgrade: silently cycle the already-running --user service onto the new
-#     /usr/bin binary (try-restart is a no-op if it isn't running).
-#   - fresh:   print the exact paste-able command to start it. Tailored to
-#     whether the user bus is reachable from here, because a session-less /
-#     headless user (no `/run/user/<uid>/bus`) also needs `enable-linger`.
-#     Without this, a fresh `apt install` left the user with no next step
-#     (and only systemd's own "no user bus" trigger noise).
+#     /usr/bin binary (try-restart is a no-op if it isn't running). We never
+#     change a user's opt-in/linger state on upgrade.
+#   - fresh:   fully set the service up (below).
 if [ -n "${2:-}" ]; then
 	if bus_ok; then
 		run_user systemctl --user daemon-reload >/dev/null 2>&1 || true
 		run_user systemctl --user try-restart mtroamd.service >/dev/null 2>&1 || true
 	fi
-elif bus_ok; then
+	exit 0
+fi
+
+# Fresh install. mtroamd is a roaming daemon meant to outlive SSH logout +
+# reboot, so set it up completely for '$u' — no paste-and-run step left behind.
+
+# Skip the systemd dance entirely on hosts without it (containers, chroots,
+# WSL1, minimal images) — no point enabling linger or polling for a user bus
+# that can never appear, and it avoids a pointless 5s wait + misleading hint.
+if ! command -v systemctl >/dev/null 2>&1; then
+	echo "mtroamd: installed at $BIN. No systemd here — start it with whatever"
+	echo "  supervisor this host uses (or: mtroamd serve)."
+	exit 0
+fi
+
+# Enable linger first, as root: unlike a user enabling their own linger this
+# needs no polkit prompt, and it spins up user@<uid>.service, which CREATES
+# /run/user/<uid>/bus — so even a session-less / headless user becomes
+# reachable here. Best-effort: a linger failure must never fail the install.
+loginctl enable-linger "$u" >/dev/null 2>&1 || true
+
+# enable-linger brings the user manager up asynchronously; wait briefly (≤5s)
+# for the bus socket before driving `systemctl --user`. (Fractional `sleep` is
+# a GNU/busybox coreutils extension, not POSIX, but both Debian and Fedora
+# ship it.)
+i=0
+while [ "$i" -lt 25 ] && ! bus_ok; do
+	sleep 0.2
+	i=$((i + 1))
+done
+
+if bus_ok; then
 	run_user systemctl --user daemon-reload >/dev/null 2>&1 || true
-	cat <<EOF
-mtroamd: installed at $BIN. To start it now and on boot, run as '$u':
-
-    systemctl --user enable --now mtroamd
-
-  Check status any time with:  mtroamd doctor
+	if run_user systemctl --user enable --now mtroamd.service >/dev/null 2>&1; then
+		cat <<EOF
+mtroamd: installed at $BIN and started for '$u' — enabled on boot and set to
+  survive logout (linger). Check status any time with:  mtroamd doctor
 EOF
-else
-	cat <<EOF
-mtroamd: installed at $BIN — but '$u' has no active systemd --user session,
-  so the service isn't running yet. Enable it (survives logout + reboot):
+		exit 0
+	fi
+fi
+
+# Bus never came up, or enable failed — never leave the user stranded; print
+# the manual steps as a fallback.
+cat <<EOF
+mtroamd: installed at $BIN, but couldn't auto-start the --user service for '$u'.
+  Enable it manually (survives logout + reboot):
 
     sudo loginctl enable-linger $u
     sudo -u $u env XDG_RUNTIME_DIR=/run/user/$uid systemctl --user enable --now mtroamd
@@ -95,5 +125,4 @@ mtroamd: installed at $BIN — but '$u' has no active systemd --user session,
   Verify with: mtroamd doctor
   Or open this host in the meshTerm iOS app and choose "Reuse system binary".
 EOF
-fi
 exit 0

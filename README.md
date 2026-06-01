@@ -59,8 +59,11 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
   echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag-studio-apps.github.io/mtroamd stable main" \
     | sudo tee /etc/apt/sources.list.d/mtroamd.list
   sudo apt update && sudo apt install mtroamd
-  # then, as your login user:
-  systemctl --user enable --now mtroamd
+  # That's it — the package enables + starts the daemon for your login user and
+  # turns on linger so it survives logout + reboot. Check with: mtroamd doctor
+  #
+  # Installed as root / non-interactively (no $SUDO_USER)? Finish as your user:
+  #   sudo loginctl enable-linger "$USER" && systemctl --user enable --now mtroamd
   ```
 
   Or grab a `.deb` straight from a release and `sudo dpkg -i mtroamd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
@@ -78,8 +81,11 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
   gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
   EOF
   sudo dnf install mtroamd
-  # then, as your login user:
-  systemctl --user enable --now mtroamd
+  # That's it — the package enables + starts the daemon for your login user and
+  # turns on linger so it survives logout + reboot. Check with: mtroamd doctor
+  #
+  # Installed as root / non-interactively (no $SUDO_USER)? Finish as your user:
+  #   sudo loginctl enable-linger "$USER" && systemctl --user enable --now mtroamd
   ```
 
   A pre-release **development** channel exists for testers — unstable, see [`docs/dnf-dev-channel.md`](docs/dnf-dev-channel.md). Uninstall: `sudo dnf remove mtroamd`.

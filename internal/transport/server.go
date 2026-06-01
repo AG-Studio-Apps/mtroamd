@@ -86,9 +86,13 @@ func (f HandlerFunc) HandleConnection(ctx context.Context, c Conn) { f(ctx, c) }
 
 // Config tunes the QUIC + TLS layer.
 type Config struct {
-	// Addr to listen on (e.g. "127.0.0.1:0" for an ephemeral port).
-	// Daemon convention: bind to localhost only — the bootstrap line
-	// already restricts which iOS clients can attach.
+	// Addr to listen on. The `serve` default is "127.0.0.1:0" (ephemeral),
+	// but production supervisors override it to "0.0.0.0:49820" so the iOS
+	// client can reach the daemon over the network (direct mode) or the
+	// tailnet — the listener is intentionally network-reachable. Peer
+	// authorization is the single-use attach token (see resolveAttach in
+	// protocol_handler.go), not the bind address; the client additionally
+	// pins this cert's fingerprint via the bootstrap line.
 	Addr string
 
 	// Cert is the daemon's TLS certificate. The fingerprint of this
@@ -187,7 +191,10 @@ func New(cfg Config) (*Server, error) {
 	// HandshakeIdleTimeout caps the cost of a peer who completes
 	// ALPN but stalls before Attach.
 	listener, err := quic.Listen(udpConn, tlsConfig, &quic.Config{
-		EnableDatagrams:       true,
+		// No part of the protocol uses QUIC datagrams (everything rides
+		// the single bidi stream), so don't advertise the capability —
+		// it's only unused attack surface on a network-reachable listener.
+		EnableDatagrams:       false,
 		MaxIdleTimeout:        idle,
 		KeepAlivePeriod:       keepalive,
 		MaxIncomingStreams:    1,

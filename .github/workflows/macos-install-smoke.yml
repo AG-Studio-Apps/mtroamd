@@ -25,6 +25,12 @@ on:
         default: v0.9.7
         required: true
 
+# Read-only: every step fetches public release assets over unauthenticated
+# curl and never writes back to the repo, so the GITHUB_TOKEN needs nothing
+# beyond contents:read. (Resolves CodeQL actions/missing-workflow-permissions.)
+permissions:
+  contents: read
+
 jobs:
   install:
     runs-on: macos-14  # Apple Silicon

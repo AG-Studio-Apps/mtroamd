@@ -17,8 +17,11 @@ echo "deb [signed-by=/usr/share/keyrings/mtroamd-archive-keyring.gpg] https://ag
   | sudo tee /etc/apt/sources.list.d/mtroamd-dev.list
 
 sudo apt update && sudo apt install mtroamd
-# then, as your login user:
-systemctl --user enable --now mtroamd
+# That's it — the package enables + starts the daemon for your login user and
+# turns on linger so it survives logout + reboot. Check with: mtroamd doctor
+#
+# Installed as root / non-interactively (no $SUDO_USER)? Finish as your user:
+#   sudo loginctl enable-linger "$USER" && systemctl --user enable --now mtroamd
 ```
 
 Every dev install/upgrade prints a `⚠ DEVELOPMENT build` warning, and
