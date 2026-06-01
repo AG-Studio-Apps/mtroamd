@@ -145,7 +145,11 @@ jobs:
                 echo "[dry-run][$ch] would delete release+tag $t"
               else
                 echo "[$ch] deleting release+tag $t"
-                gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+                # --cleanup-tag removes the tag too, but ONLY when a release
+                # exists; a `git push --delete` also clears orphan tags whose
+                # release was already gone.
+                gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+                git push origin --delete "refs/tags/$t" 2>/dev/null || true
               fi
             done
           done
