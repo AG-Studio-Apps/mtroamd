@@ -234,12 +234,23 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 				CursorRowSeen:      n.CursorRowSeen,
 			})
 			if err != nil {
+				slog.Warn("wedge: marshal WedgeDetected failed",
+					"sid", sess.ID().String(), "err", err)
 				return
 			}
-			// Write errors are silent — the stream may be tearing
-			// down. The wedge JSONL on disk is the durable record;
-			// the client push is a UX hint.
-			_ = writeFrame(protocol.FrameTypeControl, body)
+			// The wedge JSONL on disk is the durable record; the client
+			// push is a UX hint. Log the push so a transient wedge can be
+			// traced end-to-end against the iOS [wedge] logs (telling us
+			// which hop it died at). Write errors are expected during
+			// stream teardown.
+			if werr := writeFrame(protocol.FrameTypeControl, body); werr != nil {
+				slog.Debug("wedge: push to client failed (stream tearing down?)",
+					"sid", sess.ID().String(), "err", werr)
+			} else {
+				slog.Info("wedge: pushed WedgeDetected to client",
+					"sid", sess.ID().String(), "kind", n.Kind,
+					"old_rows", n.OldRows, "new_rows", n.NewRows, "cud", n.CudObserved)
+			}
 		})
 		defer sess.OnWedge(nil)
 	}
