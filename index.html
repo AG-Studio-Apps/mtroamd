@@ -117,6 +117,37 @@ EOF
 sudo dnf install mtroamd</pre></div>
 <p class="note">That's it — the package enables + starts the daemon for your login user and turns on linger, so it survives logout + reboot (check with <code class="inline">mtroamd doctor</code>). Installed as root / non-interactively? Finish as your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code></p>
 
+<h2>Alpine (apk)</h2>
+
+<h3>Development<span class="badge live">live · x86_64</span></h3>
+<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight. aarch64 / armv7 coming soon; stable lands with v2.0.</div>
+<p class="note">Alpine has no systemd, so mtroamd runs as an <strong>OpenRC</strong> service under <code class="inline">MTROAMD_USER</code> — set it in <code class="inline">/etc/conf.d/mtroamd</code> (the daemon spawns your shells as that user). Run as root.</p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>wget -qO /etc/apk/keys/mtroamd-apk.rsa.pub \
+  https://ag-studio-apps.github.io/mtroamd/mtroamd-apk.rsa.pub
+
+echo "https://ag-studio-apps.github.io/mtroamd/apk/dev" >> /etc/apk/repositories
+
+apk update && apk add mtroamd
+rc-update add mtroamd && rc-service mtroamd start</pre></div>
+
+<h2>NixOS / Nix</h2>
+
+<h3>Development<span class="badge live">live · from develop</span></h3>
+<div class="warn-box">⚠ <strong>Unstable.</strong> Tracks the <code class="inline">develop</code> branch; pairs with TestFlight. The stable flake on the default branch lands with v2.0.</div>
+<p class="note">Try it: <code class="inline">nix run github:AG-Studio-Apps/mtroamd/develop -- version</code></p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre># flake.nix
+inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";
+
+# NixOS — declarative systemd --user service + linger:
+#   imports = [ mtroamd.nixosModules.default ];
+#   services.mtroamd = { enable = true; users = [ "you" ]; };
+
+# home-manager (set users.&lt;you&gt;.linger = true at the system level):
+#   imports = [ mtroamd.homeManagerModules.default ];
+#   services.mtroamd.enable = true;</pre></div>
+
 <h2>Uninstall</h2>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre># Debian / Ubuntu
