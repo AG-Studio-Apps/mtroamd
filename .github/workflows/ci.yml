@@ -62,6 +62,22 @@ jobs:
       - name: govulncheck
         run: govulncheck ./...
 
+  nix:
+    name: Nix flake build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+      - name: nix build .#mtroamd
+        run: |
+          nix build .#mtroamd --print-build-logs
+          ./result/bin/mtroamd version
+
   build:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest

@@ -1,0 +1,53 @@
+# Maintainer: AG Studio Apps <james@agnticstudio.com>
+#
+# Binary apk — repackages the prebuilt, fully static (CGO_ENABLED=0, netgo)
+# mtroamd/mtroam binaries that `make dist` already produces, exactly as
+# packaging/nfpm does for .deb/.rpm. No compilation here, so one amd64 CI
+# runner can emit every arch by looping CARCH + MTROAMD_GOARCH (the static
+# binary is musl-safe). For a from-source build, model on the AUR PKGBUILD
+# at packaging/aur/mtroamd/PKGBUILD.
+#
+# CI drives this via env vars (see .github/workflows/release.yml apk-repo job):
+#   MTROAMD_VERSION   e.g. 1.4.10   (→ pkgver)
+#   MTROAMD_GOARCH    amd64 | arm64 | armv7   (selects dist/<bin>-linux-<GOARCH>)
+#   MTROAMD_DIST      absolute path to the dist/ dir holding the binaries,
+#                     man pages (man/), and completions (completions/)
+#   MTROAMD_LICENSE   absolute path to the repo LICENSE file
+#   CARCH             x86_64 | aarch64 | armv7   (the apk's target arch)
+
+pkgname=mtroamd
+pkgver="${MTROAMD_VERSION:-0.0.0}"
+pkgrel=0
+pkgdesc="Persistent terminal daemon over QUIC/mtRoam, with the mtroam CLI"
+url="https://github.com/AG-Studio-Apps/mtroamd"
+arch="x86_64 aarch64 armv7"
+license="AGPL-3.0-or-later"
+# OpenRC service files (Alpine has no systemd). The binaries are taken from
+# $MTROAMD_DIST, not from source, so they aren't listed here.
+source="mtroamd.initd mtroamd.confd"
+# Prebuilt + already stripped (-s -w); no test phase on a binary repackage.
+options="!check !strip"
+
+package() {
+	local goarch="${MTROAMD_GOARCH:?MTROAMD_GOARCH must be set}"
+	local dist="${MTROAMD_DIST:?MTROAMD_DIST must be set}"
+
+	install -Dm755 "$dist/mtroamd-linux-$goarch" "$pkgdir/usr/bin/mtroamd"
+	install -Dm755 "$dist/mtroam-linux-$goarch"  "$pkgdir/usr/bin/mtroam"
+
+	install -Dm755 "$srcdir/mtroamd.initd" "$pkgdir/etc/init.d/mtroamd"
+	install -Dm644 "$srcdir/mtroamd.confd" "$pkgdir/etc/conf.d/mtroamd"
+
+	install -Dm644 "$dist/man/mtroamd.8" "$pkgdir/usr/share/man/man8/mtroamd.8"
+	install -Dm644 "$dist/man/mtroam.1"  "$pkgdir/usr/share/man/man1/mtroam.1"
+
+	install -Dm644 "$dist/completions/mtroamd.bash" "$pkgdir/usr/share/bash-completion/completions/mtroamd"
+	install -Dm644 "$dist/completions/mtroam.bash"  "$pkgdir/usr/share/bash-completion/completions/mtroam"
+	install -Dm644 "$dist/completions/mtroamd.zsh"  "$pkgdir/usr/share/zsh/site-functions/_mtroamd"
+	install -Dm644 "$dist/completions/mtroam.zsh"   "$pkgdir/usr/share/zsh/site-functions/_mtroam"
+	install -Dm644 "$dist/completions/mtroamd.fish" "$pkgdir/usr/share/fish/vendor_completions.d/mtroamd.fish"
+	install -Dm644 "$dist/completions/mtroam.fish"  "$pkgdir/usr/share/fish/vendor_completions.d/mtroam.fish"
+
+	install -Dm644 "${MTROAMD_LICENSE:?MTROAMD_LICENSE must be set}" \
+		"$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

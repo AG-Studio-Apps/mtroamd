@@ -91,6 +91,31 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
   A pre-release **development** channel exists for testers — unstable, see [`docs/dnf-dev-channel.md`](docs/dnf-dev-channel.md). Uninstall: `sudo dnf remove mtroamd`.
 - **Homebrew tap** (macOS, Linux): `brew tap AG-Studio-Apps/mtroamd && brew install mtroamd`
 - **Arch Linux (AUR)**: `mtroamd-bin` (pre-built) and `mtroamd` (build-from-source)
+- **NixOS / Nix** — a flake ships the package + a NixOS module and a home-manager
+  module (declarative `systemd --user` service + linger):
+
+  ```nix
+  # flake.nix
+  inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd";
+  # NixOS:        imports = [ mtroamd.nixosModules.default ];
+  #              services.mtroamd = { enable = true; users = [ "you" ]; };
+  # home-manager: imports = [ mtroamd.homeManagerModules.default ];
+  #              services.mtroamd.enable = true;   # set users.<you>.linger at system level
+  ```
+
+  Or just try it: `nix run github:AG-Studio-Apps/mtroamd -- version`.
+- **Alpine (apk)** — a signed apk repo; Alpine has no systemd, so it ships an
+  **OpenRC** service. See [`docs/apk-dev-channel.md`](docs/apk-dev-channel.md):
+
+  ```sh
+  curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-apk.rsa.pub \
+    | sudo tee /etc/apk/keys/mtroamd-apk.rsa.pub > /dev/null
+  echo "https://ag-studio-apps.github.io/mtroamd/apk/stable" \
+    | sudo tee -a /etc/apk/repositories
+  sudo apk add mtroamd
+  # set MTROAMD_USER in /etc/conf.d/mtroamd (the daemon spawns shells as it), then:
+  sudo rc-update add mtroamd && sudo rc-service mtroamd start
+  ```
 
 The formula, `PKGBUILD`s, and apt packaging (`nfpm` config + repo setup) are already staged under [`packaging/`](packaging/) so anyone curious can preview the install shape; the live channels go up on co-release day.
 

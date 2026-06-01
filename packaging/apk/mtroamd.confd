@@ -1,0 +1,18 @@
+# /etc/conf.d/mtroamd — configuration for the mtroamd OpenRC service.
+
+# User the daemon runs as. mtroamd spawns your shells AS this user, so set it
+# to YOUR login user, not a service account. Defaults to root (fine on the
+# common single-user Alpine LXC, but change it on a multi-user box).
+#MTROAMD_USER="root"
+
+# QUIC bind address (host:port). The iOS client reaches the daemon here over
+# the network (direct mode) or the tailnet.
+#MTROAMD_ADDR="0.0.0.0:49820"
+
+# mtRoam-over-TCP listener. The "tailnet:<port>" sentinel binds a Tailscale
+# interface IP once available (the plaintext TCP path trusts WireGuard, so it
+# must only be bound on a tailnet interface). Set to "-" to run QUIC-only.
+#MTROAMD_TCP_ADDR="tailnet:49920"
+
+# IPC socket path. Defaults to <MTROAMD_USER home>/.local/share/mtroamd/mtroamd.sock.
+#MTROAMD_SOCKET=""

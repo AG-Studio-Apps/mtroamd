@@ -374,3 +374,106 @@ jobs:
           git add -A
           git commit -m "rpm: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
           git push origin HEAD:gh-pages
+
+  apk-repo:
+    name: Publish to apk repo (gh-pages)
+    # Runs AFTER rpm-repo — all three push gh-pages, so serialize to avoid a
+    # non-fast-forward race.
+    needs: [release, apt-repo, rpm-repo]
+    runs-on: ubuntu-latest
+    env:
+      ABUILD_KEY: ${{ secrets.ABUILD_KEY }}
+    steps:
+      - name: Checkout (full history for branch routing)
+        if: ${{ env.ABUILD_KEY != '' }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts (the static binaries + man + completions)
+        if: ${{ env.ABUILD_KEY != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Build + sign apks (Alpine), publish to routed suite
+        if: ${{ env.ABUILD_KEY != '' }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # --- Route by branch (same rule as apt/rpm): main-ancestor + clean
+          # semver → stable, else dev.
+          git fetch --no-tags origin main
+          SUITE=dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
+            SUITE=stable
+          fi
+          echo "Publishing $TAG → apk suite '$SUITE'"
+
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "::notice::gh-pages not seeded yet — skipping apk publish"
+            exit 0
+          fi
+
+          printf '%s' "$ABUILD_KEY" > abuild-key.rsa
+          mkdir -p apkout
+
+          # abuild is Alpine-only; build + sign all arches in a throwaway
+          # container. The APKBUILD repackages the prebuilt static dist/
+          # binaries (no compilation), so one amd64 host emits every arch.
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e MTROAMD_VERSION="${TAG#v}" \
+            alpine:latest sh -euc '
+              apk add --no-cache alpine-sdk openssl >/dev/null
+              mkdir -p "$HOME/.abuild" /etc/apk/keys
+              install -m600 abuild-key.rsa "$HOME/.abuild/mtroamd-apk.rsa"
+              openssl rsa -in "$HOME/.abuild/mtroamd-apk.rsa" -pubout \
+                -out "$HOME/.abuild/mtroamd-apk.rsa.pub" 2>/dev/null
+              cp "$HOME/.abuild/mtroamd-apk.rsa.pub" /etc/apk/keys/
+              echo "PACKAGER_PRIVKEY=$HOME/.abuild/mtroamd-apk.rsa" > "$HOME/.abuild/abuild.conf"
+
+              export MTROAMD_DIST=/work/dist MTROAMD_LICENSE=/work/LICENSE
+              cd packaging/apk
+              abuild checksum
+              for pair in "x86_64 amd64" "aarch64 arm64" "armv7 armv7"; do
+                set -- $pair
+                CARCH="$1" MTROAMD_GOARCH="$2" abuild -F -r
+              done
+
+              # Collect signed .apks per arch and build a signed APKINDEX.
+              for arch in x86_64 aarch64 armv7; do
+                out="/work/apkout/$arch"; mkdir -p "$out"
+                for f in "$HOME"/packages/*/"$arch"/*.apk; do
+                  [ -e "$f" ] || continue
+                  cp "$f" "$out/"
+                done
+                ls "$out"/*.apk >/dev/null 2>&1 || { rmdir "$out"; continue; }
+                ( cd "$out"
+                  apk index -o APKINDEX.tar.gz *.apk
+                  abuild-sign -k "$HOME/.abuild/mtroamd-apk.rsa" APKINDEX.tar.gz )
+              done
+              cp "$HOME/.abuild/mtroamd-apk.rsa.pub" /work/apkout/mtroamd-apk.rsa.pub
+            '
+          rm -f abuild-key.rsa
+
+          # --- Stage gh-pages, publish to apk/<suite>/<arch>/ + the pubkey.
+          git fetch --no-tags origin gh-pages
+          git worktree add --checkout apkrepo origin/gh-pages
+          for arch in x86_64 aarch64 armv7; do
+            [ -d "apkout/$arch" ] || continue
+            dest="apkrepo/apk/${SUITE}/${arch}"
+            mkdir -p "$dest"
+            cp apkout/"$arch"/*.apk apkout/"$arch"/APKINDEX.tar.gz "$dest/"
+          done
+          cp apkout/mtroamd-apk.rsa.pub apkrepo/mtroamd-apk.rsa.pub
+          touch apkrepo/.nojekyll
+
+          cd apkrepo
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "apk: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
+          git push origin HEAD:gh-pages
