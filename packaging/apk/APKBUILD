@@ -38,8 +38,10 @@ package() {
 	install -Dm755 "$srcdir/mtroamd.initd" "$pkgdir/etc/init.d/mtroamd"
 	install -Dm644 "$srcdir/mtroamd.confd" "$pkgdir/etc/conf.d/mtroamd"
 
+	# Alpine's abuild postcheck requires gzipped man pages.
 	install -Dm644 "$dist/man/mtroamd.8" "$pkgdir/usr/share/man/man8/mtroamd.8"
 	install -Dm644 "$dist/man/mtroam.1"  "$pkgdir/usr/share/man/man1/mtroam.1"
+	gzip -9 "$pkgdir/usr/share/man/man8/mtroamd.8" "$pkgdir/usr/share/man/man1/mtroam.1"
 
 	install -Dm644 "$dist/completions/mtroamd.bash" "$pkgdir/usr/share/bash-completion/completions/mtroamd"
 	install -Dm644 "$dist/completions/mtroam.bash"  "$pkgdir/usr/share/bash-completion/completions/mtroam"
