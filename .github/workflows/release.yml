@@ -404,14 +404,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # --- Route by branch (same rule as apt/rpm): main-ancestor + clean
-          # semver → stable, else dev.
+          # apk is DEV-PINNED until the OpenRC service + signed repo are
+          # verified on a real Alpine box. Until then a stable daemon release
+          # must NOT push a stable apk. Once verified, delete this override and
+          # uncomment the apt/rpm main-ancestry routing below.
           git fetch --no-tags origin main
           SUITE=dev
-          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
-            SUITE=stable
-          fi
-          echo "Publishing $TAG → apk suite '$SUITE'"
+          # if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
+          #   SUITE=stable
+          # fi
+          echo "Publishing $TAG → apk suite '$SUITE' (dev-pinned until Alpine-verified)"
 
           if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
             echo "::notice::gh-pages not seeded yet — skipping apk publish"
