@@ -34,8 +34,13 @@ func (s *systemdUser) Available(ctx context.Context) bool {
 	if _, err := os.Stat(rd + "/bus"); err != nil {
 		return false
 	}
-	// Last check: the unit file we manage must be installed.
-	return fileExists(s.unitPath())
+	// Last check: our unit must be installed in one of systemd's --user
+	// unit dirs. Look in ALL of them, not just ~/.config: the .deb/.rpm
+	// drop the unit in /usr/lib/systemd/user, so a hardcoded ~/.config
+	// check falsely reports a package install as unmanaged → Detect falls
+	// back to nohup even though `systemctl --user` (which searches every
+	// dir) runs it fine.
+	return s.installedUnitPath() != ""
 }
 
 func (s *systemdUser) Stop(ctx context.Context) error {
@@ -105,12 +110,46 @@ func (s *systemdUser) cmd(ctx context.Context, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// unitPath is the canonical, WRITABLE per-user unit location — the target
+// `mtroamd migrate` reads/rewrites and where the iOS installer drops the unit.
+// (Not the package location, which is root-owned and read-only to the user.)
 func (s *systemdUser) unitPath() string {
 	return homePath(".config", "systemd", "user", "mtroamd.service")
 }
 
-// UnitPath exposes the unit-file location for the doctor command.
-func (s *systemdUser) UnitPath() string { return s.unitPath() }
+// unitSearchPaths lists the systemd --user unit locations we install to or
+// support, in systemd's own precedence order: the per-user dir (iOS
+// auto-installer, `mtroamd migrate`, manual installs), the admin override
+// dir, and the packaged vendor dir (the .deb/.rpm drop the unit here).
+func (s *systemdUser) unitSearchPaths() []string {
+	return []string{
+		s.unitPath(),
+		"/etc/systemd/user/mtroamd.service",
+		"/usr/lib/systemd/user/mtroamd.service",
+	}
+}
+
+// installedUnitPath returns the first unit-file location that exists, or ""
+// if the unit isn't installed anywhere systemd would find it.
+func (s *systemdUser) installedUnitPath() string {
+	for _, p := range s.unitSearchPaths() {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// UnitPath exposes the unit-file location for the doctor command — the path
+// where the unit is actually installed (so a package install reports
+// /usr/lib/... rather than a non-existent ~/.config path), falling back to
+// the canonical user location when nothing is installed yet.
+func (s *systemdUser) UnitPath() string {
+	if p := s.installedUnitPath(); p != "" {
+		return p
+	}
+	return s.unitPath()
+}
 
 // SystemctlUser runs `systemctl --user <args>` with the env that makes the
 // user bus reachable from a non-pam_systemd session (matching the env used
