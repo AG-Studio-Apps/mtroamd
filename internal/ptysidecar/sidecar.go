@@ -37,6 +37,13 @@ type Config struct {
 	GraceSecs   int          // seconds to wait for daemon reconnect before reaping child
 	RingBytes   int          // capacity of the drop-oldest output ring (0 → DefaultRingBytes)
 	Logger      *slog.Logger // nil → discard
+
+	// AllowInheritedEnv permits the child to inherit this process's full
+	// environment when EnvFile is empty. This is a test-only escape hatch:
+	// real spawns always pass a curated env file (internal/ptyclient/spawn.go),
+	// so production leaves this false and an empty EnvFile fails closed rather
+	// than silently leaking the daemon's environment to the child.
+	AllowInheritedEnv bool
 }
 
 // Run is the sidecar's entry point. It blocks until the sidecar has
@@ -62,7 +69,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// 2. Load env file then immediately remove it from disk. We need
 	//    the env in this process's memory; leaving the file around
 	//    after fork is a needless creds-on-disk window.
-	env, err := loadEnvFile(cfg.EnvFile)
+	env, err := loadEnvFile(cfg.EnvFile, cfg.AllowInheritedEnv)
 	if err != nil {
 		return fmt.Errorf("load env-file %q: %w", cfg.EnvFile, err)
 	}
@@ -218,12 +225,16 @@ func buildChildExit(cmd *exec.Cmd, _ error) childExit {
 }
 
 // loadEnvFile reads KEY=VAL lines from path. Lines starting with '#'
-// or empty are ignored. Path may be empty, in which case the daemon's
-// own environment is inherited (this is only useful for the unit
-// tests; real spawns always pass an explicit env file).
-func loadEnvFile(path string) ([]string, error) {
+// or empty are ignored. An empty path fails closed unless allowInherit
+// is set (a test-only escape hatch): real spawns always pass an explicit
+// curated env file, so silently inheriting the daemon's full environment
+// would only ever happen via caller misuse and would leak it to the child.
+func loadEnvFile(path string, allowInherit bool) ([]string, error) {
 	if path == "" {
-		return os.Environ(), nil
+		if allowInherit {
+			return os.Environ(), nil
+		}
+		return nil, errors.New("env-file path required (refusing to inherit the daemon environment)")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
