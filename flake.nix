@@ -24,9 +24,9 @@
             src = self;
 
             # No vendor/ dir in-tree → buildGoModule fetches deps and pins
-            # them by hash. Lock this on the first build: set to
-            # pkgs.lib.fakeHash, run `nix build`, paste the "got:" hash here.
-            vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+            # them by hash. Re-lock (fakeHash → build → paste "got:") whenever
+            # go.mod/go.sum change.
+            vendorHash = "sha256-6+ZtnjwY5rvjLU8zNMuoyHg+8tiUqMvqHOrxsOjDCdc=";
 
             subPackages = [ "cmd/mtroamd" "cmd/mtroam" ];
 
