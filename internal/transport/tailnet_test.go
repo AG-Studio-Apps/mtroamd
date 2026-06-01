@@ -207,3 +207,41 @@ func TestResolveBindAddr_NoTailnet(t *testing.T) {
 		t.Errorf("resolved addr %q doesn't keep the requested port", addr)
 	}
 }
+
+func TestGuardPlaintextBind(t *testing.T) {
+	allowed := []net.IP{
+		net.ParseIP("127.0.0.1"),         // loopback
+		net.ParseIP("::1"),               // loopback v6
+		net.ParseIP("10.0.0.5"),          // RFC1918
+		net.ParseIP("192.168.1.20"),      // RFC1918
+		net.ParseIP("172.16.3.4"),        // RFC1918
+		net.ParseIP("169.254.1.1"),       // link-local
+		net.ParseIP("100.96.0.1"),        // tailnet (100.64/10)
+		net.ParseIP("fd7a:115c:a1e0::1"), // tailnet v6
+	}
+	for _, ip := range allowed {
+		if err := guardPlaintextBind(ip); err != nil {
+			t.Errorf("guardPlaintextBind(%v) = %v, want allowed (nil)", ip, err)
+		}
+	}
+
+	// Unspecified / host-less binds warn but are permitted.
+	for _, ip := range []net.IP{nil, net.IPv4zero, net.IPv6unspecified} {
+		if err := guardPlaintextBind(ip); err != nil {
+			t.Errorf("guardPlaintextBind(%v) = %v, want permitted-with-warning (nil)", ip, err)
+		}
+	}
+
+	// Concrete globally-routable addresses are refused.
+	refused := []net.IP{
+		net.ParseIP("8.8.8.8"),
+		net.ParseIP("1.1.1.1"),
+		net.ParseIP("203.0.113.7"),
+		net.ParseIP("2606:4700:4700::1111"),
+	}
+	for _, ip := range refused {
+		if err := guardPlaintextBind(ip); err == nil {
+			t.Errorf("guardPlaintextBind(%v) = nil, want refusal", ip)
+		}
+	}
+}

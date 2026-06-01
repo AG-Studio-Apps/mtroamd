@@ -1,0 +1,56 @@
+#!/sbin/openrc-run
+# mtroamd — meshTerm roaming daemon (OpenRC service for Alpine).
+#
+# mtroamd is normally a systemd --user service that spawns shells AS the login
+# user. Alpine has no systemd, so this runs it as a system service under a
+# configured user (MTROAMD_USER, see /etc/conf.d/mtroamd) via OpenRC's
+# supervise-daemon.
+#
+# Sidecar survival: supervise-daemon signals only the supervised daemon pid on
+# stop/restart. The per-session pty-sidecar children are setsid'd into their
+# own sessions (see internal/svcmgr/nohup.go), so they are NOT in the daemon's
+# process group and survive a restart — the OpenRC parallel to the systemd
+# unit's `KillMode=process` (internal/svcmgr/unitfile.go). Do NOT add a
+# group-kill stop here or you defeat the restart-resilient PTY split.
+
+name="mtroamd"
+description="meshTerm roaming terminal daemon"
+
+# Defaults (overridable in /etc/conf.d/mtroamd).
+: "${MTROAMD_USER:=root}"
+: "${MTROAMD_ADDR:=0.0.0.0:49820}"
+: "${MTROAMD_TCP_ADDR:=tailnet:49920}"
+
+# Resolve the run-as user's home so the daemon's state dir (cert + sessions)
+# and the default socket land under it — there's no XDG_RUNTIME_DIR here.
+_mtroamd_home="$(getent passwd "${MTROAMD_USER}" | cut -d: -f6)"
+: "${MTROAMD_HOME:=${_mtroamd_home:-/root}}"
+: "${MTROAMD_SOCKET:=${MTROAMD_HOME}/.local/share/mtroamd/mtroamd.sock}"
+
+supervisor="supervise-daemon"
+command="/usr/bin/mtroamd"
+command_user="${MTROAMD_USER}"
+output_log="/var/log/mtroamd.log"
+error_log="/var/log/mtroamd.log"
+
+# Build the serve args; append the mtRoam-over-TCP listener unless disabled.
+command_args="serve --addr ${MTROAMD_ADDR} --socket ${MTROAMD_SOCKET}"
+if [ "${MTROAMD_TCP_ADDR}" != "-" ] && [ -n "${MTROAMD_TCP_ADDR}" ]; then
+	command_args="${command_args} --mtroam-tcp-addr ${MTROAMD_TCP_ADDR}"
+fi
+
+# The daemon resolves its state dir from $HOME; supervise-daemon doesn't set it
+# for command_user, so export it explicitly.
+export HOME="${MTROAMD_HOME}"
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	# Ensure the state-dir parent exists and is owned by the run-as user
+	# (0700 — the daemon tightens it further on first run).
+	checkpath -d -m 0700 -o "${MTROAMD_USER}" "${MTROAMD_HOME}/.local/share/mtroamd"
+	checkpath -f -m 0644 -o "${MTROAMD_USER}" "/var/log/mtroamd.log"
+}

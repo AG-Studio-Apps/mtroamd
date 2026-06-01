@@ -43,7 +43,12 @@ func dialDaemonQUIC(
 	target := net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
 
 	tlsConf := &tls.Config{
-		InsecureSkipVerify: true, // we do our own verify below
+		// #nosec G402,G123 -- InsecureSkipVerify is compensated by the
+		// constant-time SHA-256 fingerprint pin in VerifyPeerCertificate
+		// below; with no ClientSessionCache here (and SessionTicketsDisabled
+		// server-side) TLS 1.3 never skips that callback via resumption, so
+		// the pin always runs. See the ClientSessionCache note below.
+		InsecureSkipVerify: true,
 		NextProtos:         []string{protocol.ALPN},
 		MinVersion:         tls.VersionTLS13,
 		// Match the server's CurvePreferences exactly. iOS interop
@@ -56,6 +61,8 @@ func dialDaemonQUIC(
 		// SessionTicketsDisabled defensively, but leaving this nil
 		// keeps the client side honest too. If you ever need session
 		// reuse, also re-run the fingerprint check in VerifyConnection.
+		// #nosec G123 -- resumption is disabled (no ClientSessionCache; server
+		// sets SessionTicketsDisabled), so this callback always runs.
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 			if len(rawCerts) == 0 {
 				return errors.New("server presented no certificate")

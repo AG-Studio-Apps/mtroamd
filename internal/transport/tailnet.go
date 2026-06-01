@@ -110,6 +110,36 @@ func IsTailnetIP(ip net.IP) bool {
 	return false
 }
 
+// guardPlaintextBind vets a bind IP for the un-TLS'd TCP listener. That
+// transport carries the session protocol in cleartext, relying on
+// tailnet/loopback/LAN confinement — the QUIC listener is the TLS-bearing
+// path for any wider exposure. We therefore:
+//
+//   - allow loopback, RFC1918-private, link-local, and tailnet addresses
+//     (confined to a trusted network) silently;
+//   - loudly warn on an unspecified bind (0.0.0.0 / :: / host-less ":port"),
+//     which can't be classified at bind time — refusing it would break
+//     legitimate private-LAN setups, so we leave the operator a breadcrumb;
+//   - refuse a concrete globally-routable address, where plaintext exposure
+//     would be unambiguous.
+func guardPlaintextBind(ip net.IP) error {
+	if ip == nil || ip.IsUnspecified() {
+		addr := "(unspecified)"
+		if ip != nil {
+			addr = ip.String()
+		}
+		slog.Warn("transport: plaintext (un-TLS'd) TCP listener bound to an unspecified address; "+
+			"ensure it is firewalled to a tailnet/LAN — for public exposure use the QUIC listener",
+			"addr", addr)
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || IsTailnetIP(ip) {
+		return nil
+	}
+	return fmt.Errorf("refusing to bind the plaintext (un-TLS'd) TCP listener to globally-routable address %s: "+
+		"bind a loopback/private/tailnet address, or use the QUIC listener (TLS 1.3) for public exposure", ip.String())
+}
+
 // ResolveBindAddr expands the "tailnet:<port>" sentinel into a
 // concrete "<tailnet-ip>:<port>" bind address using
 // ResolveTailnetBindIP. Any other input is returned unchanged — the

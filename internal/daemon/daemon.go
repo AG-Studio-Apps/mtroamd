@@ -311,9 +311,18 @@ func New(cfg Config) (*Daemon, error) {
 	// session lifecycle, same attach-token plumbing — only the
 	// transport differs (QUIC over kernel UDP vs TCP, the latter
 	// reached via tsnet's userspace stack on the iOS side).
+	// One source limiter shared across the QUIC + TCP listeners and the
+	// protocol handler, so per-source accept rate-limiting and bad-token
+	// cooldowns count a peer's behaviour across every transport. Defaults
+	// (see transport.LimiterConfig) are generous enough that legitimate
+	// reconnect bursts pass; they only bite churn/scanning on a
+	// network-reachable bind.
+	srcLimiter := transport.NewSourceLimiter(transport.LimiterConfig{})
+
 	mtroamHandler := &transport.ProtocolHandler{
 		Registry: reg,
 		Logger:   logger,
+		Limiter:  srcLimiter,
 		// PTYSpawner gives protocol_handler a way to lazy-spawn
 		// the child shell for a restored session on its first
 		// attach. We spawn an out-of-process sidecar so the
@@ -342,6 +351,7 @@ func New(cfg Config) (*Daemon, error) {
 		Cert:     tlsCert,
 		Handler:  mtroamHandler,
 		StateDir: stateDir,
+		Limiter:  srcLimiter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("transport: %w", err)
@@ -354,6 +364,7 @@ func New(cfg Config) (*Daemon, error) {
 		StateDir: stateDir,
 		Handler:  mtroamHandler,
 		Logger:   logger,
+		Limiter:  srcLimiter,
 	})
 	if err != nil {
 		_ = d.quic.Close()
@@ -376,6 +387,7 @@ func New(cfg Config) (*Daemon, error) {
 				StateDir: stateDir,
 				Handler:  mtroamHandler,
 				Logger:   logger,
+				Limiter:  srcLimiter,
 			})
 			if err != nil {
 				_ = d.quic.Close()
@@ -389,6 +401,7 @@ func New(cfg Config) (*Daemon, error) {
 			StateDir: stateDir,
 			Handler:  mtroamHandler,
 			Logger:   logger,
+			Limiter:  srcLimiter,
 		})
 		if err != nil {
 			_ = d.quic.Close()
@@ -592,6 +605,7 @@ func (d *Daemon) tailnetTCPPoller(ctx context.Context, wg *sync.WaitGroup, errCh
 				StateDir: d.stateDir,
 				Handler:  d.mtroamHandler,
 				Logger:   d.logger,
+				Limiter:  d.mtroamHandler.Limiter,
 			})
 			if srvErr != nil {
 				d.tcpMu.Unlock()

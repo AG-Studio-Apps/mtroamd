@@ -206,6 +206,7 @@ This is the checklist we run before each release. Contributors are encouraged to
 - [ ] PTY child inherits clean environment (specific allowlist, not full `os.Environ()`)
 - [ ] No timing-sensitive comparisons of secrets; use `crypto/subtle.ConstantTimeCompare`
 - [ ] `~/.local/share/mtroamd/key.pem` written with 0600 mode atomically
+- [ ] `~/.local/share/mtroamd/key.pem` marked backup-excluded (best-effort `FS_NODUMP` on Linux; no-op elsewhere)
 - [ ] `/proc/<pid>/environ`, `/proc/<pid>/cmdline` do not contain secrets
 - [ ] IPC socket bound at mode 0600 with `verifyParentDir` covering the containing dir
 - [ ] `Status` response does not leak fields that aren't already user-derivable (cert FP and QUIC addr are fine — they appear in the bootstrap line anyway)

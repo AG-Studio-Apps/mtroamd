@@ -57,6 +57,7 @@ type TCPServer struct {
 	logger              *slog.Logger
 	inflight            chan struct{}
 	preAuthReadDeadline time.Duration
+	limiter             *SourceLimiter
 }
 
 // TCPConfig parallels transport.Config but without TLS or
@@ -85,6 +86,11 @@ type TCPConfig struct {
 	// first Attach frame to arrive. Defaults to 5s if zero. Tests
 	// override this to run fast.
 	PreAuthReadDeadline time.Duration
+
+	// Limiter applies per-source accept rate-limiting + bad-token
+	// cooldown. Nil disables it. Daemons pass the same limiter they
+	// give the QUIC Server + ProtocolHandler so strikes are shared.
+	Limiter *SourceLimiter
 }
 
 // NewTCPServer binds the listener with port-walk fallback. Returns
@@ -119,6 +125,7 @@ func NewTCPServer(cfg TCPConfig) (*TCPServer, error) {
 		logger:              logger,
 		inflight:            make(chan struct{}, cfg.MaxInflight),
 		preAuthReadDeadline: cfg.PreAuthReadDeadline,
+		limiter:             cfg.Limiter,
 	}, nil
 }
 
@@ -130,6 +137,10 @@ func bindTCPWithFallback(addr string, stateDir string) (net.Listener, error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve tcp addr %q: %w", addr, err)
+	}
+
+	if err := guardPlaintextBind(tcpAddr.IP); err != nil {
+		return nil, err
 	}
 
 	if tcpAddr.Port == 0 {
@@ -200,6 +211,13 @@ func (s *TCPServer) Serve(ctx context.Context) error {
 				return nil
 			}
 			return fmt.Errorf("tcp accept: %w", err)
+		}
+		// Per-source admission control ahead of the inflight gate.
+		if !s.limiter.AllowAccept(ipFromAddr(conn.RemoteAddr())) {
+			s.logger.WarnContext(ctx, "tcp: dropping connection (source rate-limited)",
+				"remote", conn.RemoteAddr().String())
+			_ = conn.Close()
+			continue
 		}
 		select {
 		case s.inflight <- struct{}{}:

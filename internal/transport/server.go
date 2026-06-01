@@ -59,6 +59,9 @@ type Server struct {
 	// caps that; over-capacity peers get a clean CONNECTION_CLOSE
 	// from quic.CloseWithError rather than holding our state.
 	inflight chan struct{}
+	// limiter applies per-source accept rate-limiting + bad-token
+	// cooldown on top of the inflight semaphore. Nil → disabled.
+	limiter *SourceLimiter
 }
 
 // MaxConcurrentHandlers caps how many connections may be inside
@@ -123,6 +126,12 @@ type Config struct {
 	// every time. Callers typically pass the resolved
 	// `cert.DefaultDir()` here.
 	StateDir string
+
+	// Limiter applies per-source accept rate-limiting + bad-token
+	// cooldown. Nil disables it (the inflight semaphore still applies).
+	// Daemons share one limiter across the QUIC + TCP listeners and the
+	// ProtocolHandler so a source's strikes count across all of them.
+	Limiter *SourceLimiter
 }
 
 // New constructs a Server. The QUIC listener starts immediately; call
@@ -231,6 +240,7 @@ func New(cfg Config) (*Server, error) {
 		udpConn:  udpConn,
 		handler:  cfg.Handler,
 		inflight: make(chan struct{}, maxConcurrent),
+		limiter:  cfg.Limiter,
 	}, nil
 }
 
@@ -259,6 +269,14 @@ func (s *Server) Serve(ctx context.Context) error {
 			// quic-go itself; we only see truly fatal listener
 			// errors here.
 			return fmt.Errorf("quic accept: %w", err)
+		}
+		// Per-source admission control (rate-limit + bad-token cooldown)
+		// ahead of the inflight gate, so a throttled source is shed before
+		// we allocate handler state. 0x110 = arbitrary application error
+		// code; quic-go sends a CONNECTION_CLOSE so the peer backs off.
+		if !s.limiter.AllowAccept(ipFromAddr(conn.RemoteAddr())) {
+			_ = conn.CloseWithError(0x110, "rate limited")
+			continue
 		}
 		// Bound concurrent handlers — a public listener can be
 		// reached by anyone on the network, and the handshake itself

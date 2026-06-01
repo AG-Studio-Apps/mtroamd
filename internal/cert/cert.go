@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -242,6 +243,14 @@ func generateAndPersist(certPath, keyPath string, validity time.Duration) (tls.C
 	}
 	if err := writeFileAtomic(keyPath, keyPEM, 0o600); err != nil {
 		return tls.Certificate{}, Fingerprint{}, fmt.Errorf("write key: %w", err)
+	}
+	// Best-effort: mark the private key as backup-excluded (FS_NODUMP on
+	// Linux; no-op elsewhere). Non-fatal — the key is already 0600 in a
+	// 0700 uid-checked state dir; this just keeps it out of ordinary
+	// home-directory backups, matching how the iOS client excludes its
+	// tsnet state.
+	if err := excludeFromBackup(keyPath); err != nil {
+		slog.Debug("cert: could not mark key for backup exclusion", "path", keyPath, "err", err)
 	}
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)

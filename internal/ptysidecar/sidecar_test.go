@@ -45,6 +45,8 @@ func startSidecar(t *testing.T, ctx context.Context, mods ...func(*Config)) (str
 		Cols:        80,
 		GraceSecs:   1,
 		RingBytes:   1024,
+
+		AllowInheritedEnv: true, // test: no env file, inherit the test env
 	}
 	for _, m := range mods {
 		m(&cfg)
@@ -156,6 +158,8 @@ func TestSidecarBuffersWhileDetachedThenDrains(t *testing.T) {
 		Cols:        80,
 		GraceSecs:   30,
 		RingBytes:   4096,
+
+		AllowInheritedEnv: true, // test: no env file, inherit the test env
 	}
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg) }()
@@ -265,6 +269,8 @@ func TestSidecarChildExitFramePropagated(t *testing.T) {
 		Cols:        80,
 		GraceSecs:   5,
 		RingBytes:   1024,
+
+		AllowInheritedEnv: true, // test: no env file, inherit the test env
 	}
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg) }()

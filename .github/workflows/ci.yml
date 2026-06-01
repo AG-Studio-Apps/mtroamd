@@ -62,6 +62,47 @@ jobs:
       - name: govulncheck
         run: govulncheck ./...
 
+  gosec:
+    name: gosec (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+
+      # Gate on high-severity, high-confidence findings only. The
+      # excluded rules are audited false-positives for this codebase
+      # (see docs/security-scan-2026-06-01.md): G115 is mechanical
+      # MEDIUM-confidence integer-conversion noise (all bounds-checked
+      # before allocation), and G702/G703 are gosec's experimental taint
+      # rules (local-only sources, argv-form exec). The TLS G402/G123
+      # findings stay in scope and are individually #nosec-justified, so a
+      # NEW high-severity finding still fails this gate.
+      - name: gosec
+        run: gosec -severity high -confidence high -exclude G702,G703,G115 ./...
+
+  nix:
+    name: Nix flake build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+      - name: nix build .#mtroamd
+        run: |
+          nix build .#mtroamd --print-build-logs
+          ./result/bin/mtroamd version
+
   build:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest
