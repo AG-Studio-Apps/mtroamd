@@ -26,7 +26,7 @@
             # No vendor/ dir in-tree → buildGoModule fetches deps and pins
             # them by hash. Re-lock (fakeHash → build → paste "got:") whenever
             # go.mod/go.sum change.
-            vendorHash = "sha256-6+ZtnjwY5rvjLU8zNMuoyHg+8tiUqMvqHOrxsOjDCdc=";
+            vendorHash = "sha256-9RRP1j8TKHkyKXASymnkyB9xFh9xKIOvpSiOmBry1iY=";
 
             subPackages = [ "cmd/mtroamd" "cmd/mtroam" ];
 
