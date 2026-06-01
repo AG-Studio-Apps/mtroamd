@@ -26,9 +26,18 @@ if [ -n "$uid" ] && [ -S "${rundir}/bus" ]; then
 	run_user systemctl --user daemon-reload >/dev/null 2>&1 || true
 fi
 
+# Remove a migrate-created ~/.config unit that still points at the package
+# binary, AS THE USER (not root): the unit is under the user's own $HOME, so a
+# root `rm` could follow a planted symlink (TOCTOU). Dropped to '$u' a symlink
+# can only delete that user's own files. Path passed as argv ($1), never
+# interpolated, so a hostile path can't inject.
 unit="${home}/.config/systemd/user/mtroamd.service"
-if [ -n "$home" ] && [ -e "$unit" ] && grep -q 'ExecStart=/usr/bin/mtroamd ' "$unit" 2>/dev/null; then
-	rm -f "$unit"
-	echo "mtroamd: removed --user unit for '$u'"
+if [ -n "$home" ]; then
+	if run_user sh -c '
+		p=$1
+		[ -e "$p" ] && grep -q "ExecStart=/usr/bin/mtroamd " "$p" 2>/dev/null && rm -f "$p"
+	' sh "$unit" 2>/dev/null; then
+		echo "mtroamd: removed --user unit for '$u'"
+	fi
 fi
 exit 0

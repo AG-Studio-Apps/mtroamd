@@ -37,15 +37,32 @@ fi
 
 # Remove a migrate-created ~/.config unit that still points at the package
 # binary (never disturb one re-pointed elsewhere, e.g. back to ~/.local/bin).
+# Do the check + delete AS THE USER, not as root: the unit lives under the
+# user's own $HOME, so a root `rm` here could be steered by a planted symlink
+# (TOCTOU). Dropped to '$u', the worst a symlink can do is delete that user's
+# own files — which they could do anyway. The path is passed as an argv arg
+# ($1), never interpolated into the shell, so a hostile path can't inject.
 unit="${home}/.config/systemd/user/mtroamd.service"
-if [ -n "$home" ] && [ -e "$unit" ] && grep -q 'ExecStart=/usr/bin/mtroamd ' "$unit" 2>/dev/null; then
-	rm -f "$unit"
-	echo "mtroamd: removed --user unit for '$u'"
+if [ -n "$home" ]; then
+	if run_user sh -c '
+		p=$1
+		[ -e "$p" ] && grep -q "ExecStart=/usr/bin/mtroamd " "$p" 2>/dev/null && rm -f "$p"
+	' sh "$unit" 2>/dev/null; then
+		echo "mtroamd: removed --user unit for '$u'"
+	fi
 fi
 
-# purge → wipe user state for a full clean removal.
+# purge → wipe user state for a full clean removal. Again as the user: a root
+# `rm -rf` walking a user-owned tree is a symlink/TOCTOU footgun, whereas as
+# '$u' the worst case is the user deleting their own files. (Dropping the
+# privilege is the fix; no `! -L` guard needed — `rm` never follows a symlink
+# for the unlink, and we mirror the prior unconditional wipe.)
 if [ "$action" = "purge" ] && [ -n "$home" ]; then
-	rm -rf "${home}/.local/share/mtroamd"
-	echo "mtroamd: purged state dir for '$u' (cert + sessions removed)"
+	if run_user sh -c '
+		d=$1
+		[ -e "$d" ] && rm -rf "$d"
+	' sh "${home}/.local/share/mtroamd" 2>/dev/null; then
+		echo "mtroamd: purged state dir for '$u' (cert + sessions removed)"
+	fi
 fi
 exit 0

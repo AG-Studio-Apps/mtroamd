@@ -5,8 +5,9 @@
 #   1 = fresh install,  >=2 = upgrade.
 #
 # Mirrors the .deb postinstall: flag dev builds, migrate a prior ~/.local/bin
-# install for $SUDO_USER, and on upgrade restart that user's already-running
-# --user service. Never creates a system user/unit or auto-enables a service.
+# install for $SUDO_USER, fully set up the --user service on a fresh install
+# (enable-linger + enable --now), and on upgrade cycle that user's already-
+# running service onto the new binary. Never creates a system user/unit.
 set -eu
 
 BIN=/usr/bin/mtroamd
@@ -53,31 +54,63 @@ if [ -e "$old_bin" ] || [ -e "$old_unit" ]; then
 	exit 0
 fi
 
-# No prior ~/.local/bin install. The package never auto-enables (opt-in only).
-# $1: 1 = fresh install, >=2 = upgrade.
+# No prior ~/.local/bin install. $1: 1 = fresh install, >=2 = upgrade.
 #   - upgrade: silently cycle the already-running --user service onto the new
-#     binary (try-restart is a no-op if it isn't running).
-#   - fresh:   print the exact paste-able command to start it, tailored to
-#     whether the user bus is reachable (a session-less user also needs
-#     enable-linger). Without this a fresh install left no next step.
+#     binary (try-restart is a no-op if it isn't running). We never change a
+#     user's opt-in/linger state on upgrade.
+#   - fresh:   fully set the service up (below).
 if [ "${1:-1}" -ge 2 ] 2>/dev/null; then
 	if bus_ok; then
 		run_user systemctl --user daemon-reload >/dev/null 2>&1 || true
 		run_user systemctl --user try-restart mtroamd.service >/dev/null 2>&1 || true
 	fi
-elif bus_ok; then
+	exit 0
+fi
+
+# Fresh install. mtroamd is a roaming daemon meant to outlive SSH logout +
+# reboot, so set it up completely for '$u' — no paste-and-run step left behind.
+
+# Skip the systemd dance entirely on hosts without it (containers, chroots,
+# minimal images) — no point enabling linger or polling for a user bus that
+# can never appear, and it avoids a pointless 5s wait + misleading hint.
+if ! command -v systemctl >/dev/null 2>&1; then
+	echo "mtroamd: installed at $BIN. No systemd here — start it with whatever"
+	echo "  supervisor this host uses (or: mtroamd serve)."
+	exit 0
+fi
+
+# Enable linger first, as root: unlike a user enabling their own linger this
+# needs no polkit prompt, and it spins up user@<uid>.service, which CREATES
+# /run/user/<uid>/bus — so even a session-less / headless user becomes
+# reachable here. Best-effort: a linger failure must never fail the install.
+loginctl enable-linger "$u" >/dev/null 2>&1 || true
+
+# enable-linger brings the user manager up asynchronously; wait briefly (≤5s)
+# for the bus socket before driving `systemctl --user`. (Fractional `sleep` is
+# a GNU/busybox coreutils extension, not POSIX, but both Debian and Fedora
+# ship it.)
+i=0
+while [ "$i" -lt 25 ] && ! bus_ok; do
+	sleep 0.2
+	i=$((i + 1))
+done
+
+if bus_ok; then
 	run_user systemctl --user daemon-reload >/dev/null 2>&1 || true
-	cat <<EOF
-mtroamd: installed at $BIN. To start it now and on boot, run as '$u':
-
-    systemctl --user enable --now mtroamd
-
-  Check status any time with:  mtroamd doctor
+	if run_user systemctl --user enable --now mtroamd.service >/dev/null 2>&1; then
+		cat <<EOF
+mtroamd: installed at $BIN and started for '$u' — enabled on boot and set to
+  survive logout (linger). Check status any time with:  mtroamd doctor
 EOF
-else
-	cat <<EOF
-mtroamd: installed at $BIN — but '$u' has no active systemd --user session,
-  so the service isn't running yet. Enable it (survives logout + reboot):
+		exit 0
+	fi
+fi
+
+# Bus never came up, or enable failed — never leave the user stranded; print
+# the manual steps as a fallback.
+cat <<EOF
+mtroamd: installed at $BIN, but couldn't auto-start the --user service for '$u'.
+  Enable it manually (survives logout + reboot):
 
     sudo loginctl enable-linger $u
     sudo -u $u env XDG_RUNTIME_DIR=/run/user/$uid systemctl --user enable --now mtroamd
@@ -85,5 +118,4 @@ mtroamd: installed at $BIN — but '$u' has no active systemd --user session,
   Verify with: mtroamd doctor
   Or open this host in the meshTerm iOS app and choose "Reuse system binary".
 EOF
-fi
 exit 0

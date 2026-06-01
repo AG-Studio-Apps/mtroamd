@@ -20,8 +20,11 @@ gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
 sudo dnf install mtroamd
-# then, as your login user:
-systemctl --user enable --now mtroamd
+# That's it — the package enables + starts the daemon for your login user and
+# turns on linger so it survives logout + reboot. Check with: mtroamd doctor
+#
+# Installed as root / non-interactively (no $SUDO_USER)? Finish as your user:
+#   sudo loginctl enable-linger "$USER" && systemctl --user enable --now mtroamd
 ```
 
 Every dev install/upgrade prints a `⚠ DEVELOPMENT build` warning, and

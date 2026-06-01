@@ -16,10 +16,13 @@
 #   MTROAMD_GOARCH=amd64 MTROAMD_PKG_ARCH=x86_64 … nfpm package -f … -p rpm -t dist/
 #
 # Per-user service model: the package installs the binaries + a systemd
-# **--user** unit template; it never creates a system user, installs a system
-# unit, or auto-enables a service. deb scriptlets: packaging/nfpm/postinstall.sh
-# + postremove.sh; rpm scriptlets (numeric %post/%postun args) are supplied via
-# `overrides.rpm.scripts` below.
+# **--user** unit template; it never creates a system user or installs a
+# system-wide unit. On a FRESH install the postinstall scriptlet sets the
+# service up for the installing user ($SUDO_USER) — enable-linger + enable
+# --now — so it works with no manual step and survives logout + reboot; on an
+# upgrade it only cycles an already-running service. deb scriptlets:
+# packaging/nfpm/postinstall.sh + postremove.sh; rpm scriptlets (numeric
+# %post/%postun args) are supplied via `overrides.rpm.scripts` below.
 
 name: mtroamd
 arch: ${MTROAMD_PKG_ARCH}
@@ -51,7 +54,8 @@ contents:
 
   # systemd --user unit template (generated in CI via `mtroamd unit print
   # --bin=/usr/bin/mtroamd`). Installed to the standard packaged-user-unit
-  # location; NOT auto-enabled — each user opts in with `systemctl --user`.
+  # location; the postinstall scriptlet enables + starts it for the installing
+  # user on a fresh install (see the per-user service model note above).
   - src: dist/mtroamd.service
     dst: /usr/lib/systemd/user/mtroamd.service
     file_info: { mode: 0644 }
