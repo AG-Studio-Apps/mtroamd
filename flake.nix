@@ -80,7 +80,7 @@
           checks = {
             mtroamd = mtroamd;
           } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-            nixos-module = pkgs.nixosTest {
+            nixos-module = pkgs.testers.nixosTest {
               name = "mtroamd-nixos-module";
               nodes.machine = { ... }: {
                 imports = [ self.nixosModules.default ];
