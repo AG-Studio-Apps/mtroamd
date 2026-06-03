@@ -2,6 +2,11 @@ module github.com/AG-Studio-Apps/mtroamd
 
 go 1.26.3
 
+// Patched toolchain: GO-2026-5039 (net/textproto) + GO-2026-5037
+// (crypto/x509), both fixed in go1.26.4. The `go` directive stays at
+// the language minimum so GOTOOLCHAIN=local builds (Nix) keep working.
+toolchain go1.26.4
+
 require (
 	github.com/creack/pty v1.1.24
 	github.com/fxamacker/cbor/v2 v2.9.2
