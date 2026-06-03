@@ -87,6 +87,27 @@ jobs:
           echo "$PIN" > /tmp/pin
           echo "iOS pin (force-keep): ${PIN}"
 
+          # --- Daemon Channel pin (force-keep). The iOS fleet's *effective*
+          # pin can be moved past the compiled constant by the signed
+          # ios-channel.json manifest (publish-ios-channel workflow), so the
+          # release IT points at must survive pruning too. Same fail-safe
+          # posture as the compiled pin: if the channel-ios release EXISTS
+          # but its manifest pin can't be read, ABORT all deletions. An
+          # absent channel-ios release (never published) is fine — nothing
+          # extra to keep. The channel-ios release itself is not a `v*` tag
+          # and is therefore never a prune candidate.
+          CH_PIN=""
+          if gh release view channel-ios --json name >/dev/null 2>&1; then
+            if gh release download channel-ios -p ios-channel.json -O /tmp/ch.json 2>/dev/null; then
+              CH_PIN="$(jq -r '.pin // empty' /tmp/ch.json || true)"
+            fi
+            if [ -z "$CH_PIN" ]; then
+              echo "::warning::channel-ios exists but its manifest pin is unreadable — ABORTING deletions (fail-safe)"
+              echo "ABORT=1" >> "$GITHUB_ENV"; exit 0
+            fi
+            echo "channel pin (force-keep): ${CH_PIN}"
+          fi
+
           # --- Which channel(s) to prune. Channel-scoped so a release only
           # touches its OWN line — a dev rc never chews into stable history,
           # and a stable release never churns dev.
@@ -106,7 +127,7 @@ jobs:
           fi
           echo "$CHANNELS" > /tmp/channels
           echo "## Prune plan" >> "$GITHUB_STEP_SUMMARY"
-          echo "- channels: ${CHANNELS} · iOS pin: ${PIN}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- channels: ${CHANNELS} · iOS pin: ${PIN} · channel pin: ${CH_PIN:-none}" >> "$GITHUB_STEP_SUMMARY"
 
           # --- Per-channel keep-list: last N of that channel + the pin iff it
           # belongs to that channel. Written to /tmp/keep-<ch>.txt for the
@@ -123,6 +144,9 @@ jobs:
               *-*) [ "$ch" = "dev" ]    && KEEP+=("$PIN");;
               *)   [ "$ch" = "stable" ] && KEEP+=("$PIN");;
             esac
+            # Channel pins are always clean stable tags (the publish
+            # workflow enforces vX.Y.Z on main-ancestry).
+            if [ -n "$CH_PIN" ] && [ "$ch" = "stable" ]; then KEEP+=("$CH_PIN"); fi
             printf '%s\n' "${KEEP[@]}" | sort -uV > "/tmp/keep-$ch.txt"
             echo "[$ch] keep: $(paste -sd' ' "/tmp/keep-$ch.txt")"
             echo "- $ch keeps: $(paste -sd' ' "/tmp/keep-$ch.txt")" >> "$GITHUB_STEP_SUMMARY"
