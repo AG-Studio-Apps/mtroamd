@@ -63,9 +63,19 @@ jobs:
           set -euo pipefail
           # Monotonic across publishes: read the live manifest and add 1.
           # First publish (no channel-ios release yet) starts at 1.
+          #
+          # HARD-FAIL when the release exists but its manifest/serial is
+          # unreadable: silently restarting at 1 would make every device
+          # reject new manifests as stale serials until the counter
+          # caught back up — fail-safe for the fleet, but a silent
+          # publishing footgun.
           SERIAL=1
-          if gh release download channel-ios -p ios-channel.json -O /tmp/prev.json 2>/dev/null; then
-            PREV="$(jq -r '.serial // 0' /tmp/prev.json)"
+          if gh release view channel-ios --json name >/dev/null 2>&1; then
+            gh release download channel-ios -p ios-channel.json -O /tmp/prev.json --clobber || {
+              echo "::error::channel-ios exists but ios-channel.json could not be downloaded"; exit 1; }
+            PREV="$(jq -r '.serial // empty' /tmp/prev.json || true)"
+            [[ "$PREV" =~ ^[0-9]+$ ]] || {
+              echo "::error::previous manifest serial unreadable ('${PREV}') — refusing to restart numbering"; exit 1; }
             SERIAL=$((PREV + 1))
           fi
           echo "SERIAL=$SERIAL" >> "$GITHUB_ENV"

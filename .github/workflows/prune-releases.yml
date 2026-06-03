@@ -98,7 +98,7 @@ jobs:
           # and is therefore never a prune candidate.
           CH_PIN=""
           if gh release view channel-ios --json name >/dev/null 2>&1; then
-            if gh release download channel-ios -p ios-channel.json -O /tmp/ch.json 2>/dev/null; then
+            if gh release download channel-ios -p ios-channel.json -O /tmp/ch.json --clobber 2>/dev/null; then
               CH_PIN="$(jq -r '.pin // empty' /tmp/ch.json || true)"
             fi
             if [ -z "$CH_PIN" ]; then
