@@ -10,7 +10,7 @@
 # every upstream tag.
 
 pkgname=mtroamd-bin
-pkgver=0.3.1
+pkgver=1.4.11
 pkgrel=1
 pkgdesc="Persistent terminal daemon over QUIC — mosh+tmux in one daemon, with multi-client handoff (pre-built)"
 arch=('x86_64' 'aarch64' 'armv7h')
@@ -68,13 +68,46 @@ source_armv7h=(
 # SHA256SUMS after every upstream release. Do NOT publish the
 # PKGBUILD with SKIP — defeats the point of per-arch hashes.
 sha256sums_x86_64=(
-    'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+    'fe1bec0fbbffa43f4eca8ce453941d96605ec41eb56465285f66677286308b6a'
+    'd59f4e726888443244423bb14b70329fcc63e5943c3746dfc747ca8e584bc86e'
+    '3529e8dae5dccc3e13f9d4320aab3bacf3e9a1488d42465930fd85809bc7a980'
+    '6bd5e5030a79eb681e1c0c5eba45d28aeafa089d57a8e9f00712f55a6ad94e6b'
+    '94456aa9549f507040d2c779011533159a05eb485b7f64be388d2ddb5aaa68c0'
+    'b41207e58dd6bf8b25f0946e2223b28f02a94336cd9193afdab51da63213872d'
+    '0457f311f1ffb879bf9bf3e4a903eb66485a5e406952eae3e840ea7684e516c5'
+    '2d640081dc377d4f96e0c1f4baefc80c3229b1a9907194af3a1171080413a547'
+    'e276cb4df31249474a3ea69aaabc6ce1a66d93c3fff951b17252949f8c06eed9'
+    '28718aaac4e7b6eb5b2f33228438a43a9a1cd700b796420f2485b36d27990688'
+    '3ca2b4fdddb7e702f6c3a695dcf447580805549cacef75c93babf9a6870eff36'
+    'd32a77244b77488c5906d3552bbcd9c03e7914a1ab5321073bb2709209c5251c'
 )
 sha256sums_aarch64=(
-    'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+    'e48414966abf944f415a6239444f174672270768ff27ef2de77ef128a5dd407a'
+    'eb265f3b94938fa58af40596c2b9413fca1b812ca26dbfc2e1ff3f37c823a6ba'
+    '3529e8dae5dccc3e13f9d4320aab3bacf3e9a1488d42465930fd85809bc7a980'
+    '6bd5e5030a79eb681e1c0c5eba45d28aeafa089d57a8e9f00712f55a6ad94e6b'
+    '94456aa9549f507040d2c779011533159a05eb485b7f64be388d2ddb5aaa68c0'
+    'b41207e58dd6bf8b25f0946e2223b28f02a94336cd9193afdab51da63213872d'
+    '0457f311f1ffb879bf9bf3e4a903eb66485a5e406952eae3e840ea7684e516c5'
+    '2d640081dc377d4f96e0c1f4baefc80c3229b1a9907194af3a1171080413a547'
+    'e276cb4df31249474a3ea69aaabc6ce1a66d93c3fff951b17252949f8c06eed9'
+    '28718aaac4e7b6eb5b2f33228438a43a9a1cd700b796420f2485b36d27990688'
+    '3ca2b4fdddb7e702f6c3a695dcf447580805549cacef75c93babf9a6870eff36'
+    'd32a77244b77488c5906d3552bbcd9c03e7914a1ab5321073bb2709209c5251c'
 )
 sha256sums_armv7h=(
-    'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP'
+    'f410e0a854968526681a36252f205c066df1f170dea262e86a21c52c23e71221'
+    '1dfd9d0088eb43f9d914658e1d6bd485bffeb6ec29764a4c87e6587f3bb3e489'
+    '3529e8dae5dccc3e13f9d4320aab3bacf3e9a1488d42465930fd85809bc7a980'
+    '6bd5e5030a79eb681e1c0c5eba45d28aeafa089d57a8e9f00712f55a6ad94e6b'
+    '94456aa9549f507040d2c779011533159a05eb485b7f64be388d2ddb5aaa68c0'
+    'b41207e58dd6bf8b25f0946e2223b28f02a94336cd9193afdab51da63213872d'
+    '0457f311f1ffb879bf9bf3e4a903eb66485a5e406952eae3e840ea7684e516c5'
+    '2d640081dc377d4f96e0c1f4baefc80c3229b1a9907194af3a1171080413a547'
+    'e276cb4df31249474a3ea69aaabc6ce1a66d93c3fff951b17252949f8c06eed9'
+    '28718aaac4e7b6eb5b2f33228438a43a9a1cd700b796420f2485b36d27990688'
+    '3ca2b4fdddb7e702f6c3a695dcf447580805549cacef75c93babf9a6870eff36'
+    'd32a77244b77488c5906d3552bbcd9c03e7914a1ab5321073bb2709209c5251c'
 )
 
 # Optional but recommended: minisign-verify the signed manifest
