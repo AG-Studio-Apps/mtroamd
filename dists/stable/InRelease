@@ -5,44 +5,44 @@ Origin: mtroamd
 Label: mtroamd
 Suite: stable
 Codename: stable
-Date: Wed, 03 Jun 2026 20:41:49 UTC
+Date: Wed, 03 Jun 2026 21:48:43 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (stable — production, matches the App Store app)
 MD5Sum:
- b704cdd2faefe2a0d1408327beb6782b 835 main/binary-amd64/Packages
- 7794a593d7f2da757c4da862716780fa 566 main/binary-amd64/Packages.gz
+ 3223758ea718566f7f1db54480e104f4 835 main/binary-amd64/Packages
+ 73716a3c1f3b86382ed26197462054c2 563 main/binary-amd64/Packages.gz
  f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
- fd273ec0de05e0bb409adcd4b8872017 835 main/binary-arm64/Packages
- 5d2ff78ba9fb4fa178bad3bb41d03356 564 main/binary-arm64/Packages.gz
+ ef4244d7aa74e98cc7d6965e16201570 835 main/binary-arm64/Packages
+ 10d606e1b15f68792e9d5fe10cd241d5 566 main/binary-arm64/Packages.gz
  adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
- 55260aa8d94e5c1ed661996246e5449a 835 main/binary-armhf/Packages
- f6d905b79bfba8a52df4acdf7c3f7971 565 main/binary-armhf/Packages.gz
+ 4a09aec5359ee4ddb35a8b3b54579e43 835 main/binary-armhf/Packages
+ 9ef488aa03d3b3d3d5c086a089803cab 565 main/binary-armhf/Packages.gz
  f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
 SHA1:
- 509a1283906ca6604da822b1fbd3c1e04e5dfc9d 835 main/binary-amd64/Packages
- ddfb997957f0dba96e06607afcdf769eb5440130 566 main/binary-amd64/Packages.gz
+ f268396bc086ee8df735cbe5c74c84cd5afbf0c9 835 main/binary-amd64/Packages
+ 1532cc17b6413701a8dba0036840331694a9d887 563 main/binary-amd64/Packages.gz
  d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
- c0e1882c8f1af392ace215d74e175326775f6ff8 835 main/binary-arm64/Packages
- ff4388c6093561491e6ac960d3efd442b8b5ea3d 564 main/binary-arm64/Packages.gz
+ db37d3b23615feb30ea3220eee1397bd043129f6 835 main/binary-arm64/Packages
+ ce27ec2d399b5bc55565e965707664746ffe1dca 566 main/binary-arm64/Packages.gz
  347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
- c8b1592dce289674ee553c6c0a76691279f69c45 835 main/binary-armhf/Packages
- 22f81f4fb1ff68395156d576303658400c979de6 565 main/binary-armhf/Packages.gz
+ 4ad0001bd4c6bc8f2402a6b61e9c3262f7855ddd 835 main/binary-armhf/Packages
+ dc675498d0af49fb9173111fb84a4ff51bc31cd6 565 main/binary-armhf/Packages.gz
  6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
 SHA256:
- 29f51b7e3f3281e89bae512d0e8b7ce11c6ed1e1cfdb1c3a1166a17d1310d8ed 835 main/binary-amd64/Packages
- b830d580824c658306cb3238220604b18ef2498e167834789888272cf29f4867 566 main/binary-amd64/Packages.gz
+ 00deaff5f9c4ebf7505f0c6d3f4155adab9c280e2a8e174acaa6a6d820f10e91 835 main/binary-amd64/Packages
+ 7c8bb2e4cc1544ff455fd1a4471b8b5ff30792ddee826e191296917896939fd7 563 main/binary-amd64/Packages.gz
  44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
- bebc7a031c67fa979ff8a5a84dc4bdad0381adef83115046c36962d1aac600d6 835 main/binary-arm64/Packages
- e92b9db24531bcabb41e09b7852942c90899ed3f89c84cf6decf55898158ac2d 564 main/binary-arm64/Packages.gz
+ 25548d518be4fc0bd12d2366b798640ded3522dc3b2a7f8778fb60676cc1c6a8 835 main/binary-arm64/Packages
+ 6323a518f2dc0b15016e24238e102d58fafa8b1a1ca94a4569c7e51f5d088b03 566 main/binary-arm64/Packages.gz
  ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
- 079442caa5c1963a4c7d8f8551708bf3252bb49a7769d95b4b7ce45a6e116851 835 main/binary-armhf/Packages
- 55bd180b1faa3f752731c0731456a5526f436c98a76a241bfe75552d886afe17 565 main/binary-armhf/Packages.gz
+ 7325299df73a80c8b1383545889dd6f1215ff8bcb239b762869a39c5468e1a75 835 main/binary-armhf/Packages
+ 9a751e1cccd02d2f176f2a1bd313b9c4edd1a26700ffa72a9c6253cd9ead3032 565 main/binary-armhf/Packages.gz
  e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiCRjQAKCRBQfbpy8DxF
-wiT4AQDh4nAfmx8RxnWuE/SCrGYoRvEjhTwxlgighY2Gxj7bTAEA2SyHxTQV8GPy
-eeWeuE9HFqmllCCgE10zBQVFATCGLQU=
-=qfx6
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiChOwAKCRBQfbpy8DxF
+whuRAPkBPDxvZd64HPIPeJZK8DbaAT9IENrJHYUenYoJQN+VyQEAyKXeuE3WZfgn
+V0988VIoV7PUsLgHDkUhAfkcoDw3cgI=
+=gK1P
 -----END PGP SIGNATURE-----
