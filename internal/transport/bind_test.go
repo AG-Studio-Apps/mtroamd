@@ -161,9 +161,17 @@ func TestBindUDPWithFallbackPropagatesNonEADDRINUSE(t *testing.T) {
 		t.Skip("running as root — can't test EACCES surfacing")
 	}
 	dir := t.TempDir()
-	_, err := bindUDPWithFallback("127.0.0.1:80", dir)
+	conn, err := bindUDPWithFallback("127.0.0.1:80", dir)
 	if err == nil {
-		t.Fatal("expected error binding to port 80 as non-root")
+		// Not a bind-loop bug: containers commonly allow unprivileged
+		// low-port binds (Docker sets
+		// net.ipv4.ip_unprivileged_port_start=0 by default; ditto
+		// CAP_NET_BIND_SERVICE). The EACCES path isn't reachable in
+		// such an environment, so skip rather than fail — this bit the
+		// AUR source-package check() when built inside Docker
+		// (2026-06-03).
+		conn.Close()
+		t.Skip("environment allows unprivileged low-port binds (container?)")
 	}
 	if errors.Is(err, syscall.EADDRINUSE) {
 		t.Errorf("got EADDRINUSE, want a non-EADDRINUSE error")

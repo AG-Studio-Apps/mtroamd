@@ -9,7 +9,7 @@
 # upstream releases.
 
 pkgname=mtroamd
-pkgver=0.3.1
+pkgver=1.4.11
 pkgrel=1
 pkgdesc="Persistent terminal daemon over QUIC — mosh+tmux in one daemon, with multi-client handoff"
 arch=('x86_64' 'aarch64' 'armv7h')
@@ -28,7 +28,18 @@ build() {
 
 check() {
     cd "${srcdir}/${pkgname}"
-    make test
+    # Plain test run, NOT `make test` (which adds -race): the race
+    # detector is upstream CI's gate; on the user's machine it needs
+    # cgo and roughly doubles test runtime without adding install-
+    # validation value.
+    #
+    # Container note: through v1.4.11, one transport test asserts
+    # that unprivileged low-port binds fail, which is untrue inside
+    # Docker (ip_unprivileged_port_start=0) — building this package
+    # in a container needs `--sysctl net.ipv4.ip_unprivileged_port_start=1024`
+    # (or `makepkg --nocheck`). Fixed upstream after v1.4.11; real
+    # Arch hosts are unaffected.
+    go test ./... -count=1
 }
 
 package() {
