@@ -5,44 +5,44 @@ Origin: mtroamd
 Label: mtroamd
 Suite: stable
 Codename: stable
-Date: Mon, 01 Jun 2026 19:12:54 UTC
+Date: Wed, 03 Jun 2026 20:41:49 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (stable — production, matches the App Store app)
 MD5Sum:
- 32fc70743dc97f120042bec091459567 837 main/binary-amd64/Packages
- f33a4716ee4839611f89dbcddf6855a4 567 main/binary-amd64/Packages.gz
+ b704cdd2faefe2a0d1408327beb6782b 835 main/binary-amd64/Packages
+ 7794a593d7f2da757c4da862716780fa 566 main/binary-amd64/Packages.gz
  f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
- 49bc6d4714a1bf4a85380f310de354ab 837 main/binary-arm64/Packages
- 444e99eb26cb39634220ecb41d306f3f 568 main/binary-arm64/Packages.gz
+ fd273ec0de05e0bb409adcd4b8872017 835 main/binary-arm64/Packages
+ 5d2ff78ba9fb4fa178bad3bb41d03356 564 main/binary-arm64/Packages.gz
  adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
- ba32023f83ef90e97ba332b33fba90e9 837 main/binary-armhf/Packages
- f72d70bdee97385af1e3a6586615e4bd 563 main/binary-armhf/Packages.gz
+ 55260aa8d94e5c1ed661996246e5449a 835 main/binary-armhf/Packages
+ f6d905b79bfba8a52df4acdf7c3f7971 565 main/binary-armhf/Packages.gz
  f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
 SHA1:
- 22481a6aba64b8fcfd4589d35efa7b80e37b1510 837 main/binary-amd64/Packages
- 8f548d7cada256bf0b401892b8069f587066deeb 567 main/binary-amd64/Packages.gz
+ 509a1283906ca6604da822b1fbd3c1e04e5dfc9d 835 main/binary-amd64/Packages
+ ddfb997957f0dba96e06607afcdf769eb5440130 566 main/binary-amd64/Packages.gz
  d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
- a2886422db088cb4bfff3000a8e395e7bdc54f3b 837 main/binary-arm64/Packages
- 72aa666caa033145a1afdbec6d28365f38adbc6c 568 main/binary-arm64/Packages.gz
+ c0e1882c8f1af392ace215d74e175326775f6ff8 835 main/binary-arm64/Packages
+ ff4388c6093561491e6ac960d3efd442b8b5ea3d 564 main/binary-arm64/Packages.gz
  347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
- 7c6489358f953b141f12a8d9967c2df6c457c965 837 main/binary-armhf/Packages
- 5d0c2338d6d5e0fa9f53f4a5d57343f20814ea0e 563 main/binary-armhf/Packages.gz
+ c8b1592dce289674ee553c6c0a76691279f69c45 835 main/binary-armhf/Packages
+ 22f81f4fb1ff68395156d576303658400c979de6 565 main/binary-armhf/Packages.gz
  6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
 SHA256:
- d5e9d4eb1e609556a98cec6a5e577d949717239a6a52729b3e81cd46799c1da0 837 main/binary-amd64/Packages
- de9dc37bbb162187bfa334fc98c3b4f79fadcb552e2c5590bea28000aae3f488 567 main/binary-amd64/Packages.gz
+ 29f51b7e3f3281e89bae512d0e8b7ce11c6ed1e1cfdb1c3a1166a17d1310d8ed 835 main/binary-amd64/Packages
+ b830d580824c658306cb3238220604b18ef2498e167834789888272cf29f4867 566 main/binary-amd64/Packages.gz
  44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
- 43e83c5e448aaaf3d81997ab5451f9a722bed82fdb1d64a8904e126ed5be7e4f 837 main/binary-arm64/Packages
- dfedb110bb649981b99485a1484268f8adf12cd797303bcaa00836660d3614f9 568 main/binary-arm64/Packages.gz
+ bebc7a031c67fa979ff8a5a84dc4bdad0381adef83115046c36962d1aac600d6 835 main/binary-arm64/Packages
+ e92b9db24531bcabb41e09b7852942c90899ed3f89c84cf6decf55898158ac2d 564 main/binary-arm64/Packages.gz
  ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
- 619cad82ddeb0a40f085900d1769286836d67227c01047d7619d5e49ad2fda85 837 main/binary-armhf/Packages
- 59f4c24e08cc749041aa4e863809c9f8a4bab59661eb5bb7b3011cdbf56d18e4 563 main/binary-armhf/Packages.gz
+ 079442caa5c1963a4c7d8f8551708bf3252bb49a7769d95b4b7ce45a6e116851 835 main/binary-armhf/Packages
+ 55bd180b1faa3f752731c0731456a5526f436c98a76a241bfe75552d886afe17 565 main/binary-armhf/Packages.gz
  e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCah3ZtgAKCRBQfbpy8DxF
-wtfBAPwIwPitswRCAfjQ7MigKXq7eZBhpE7w9RbloLzm1ULivwEAw/l4W1VV8OcN
-onT1t/Jr3M94r0tU1tdCWK/2KVFcGwA=
-=HzCl
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiCRjQAKCRBQfbpy8DxF
+wiT4AQDh4nAfmx8RxnWuE/SCrGYoRvEjhTwxlgighY2Gxj7bTAEA2SyHxTQV8GPy
+eeWeuE9HFqmllCCgE10zBQVFATCGLQU=
+=qfx6
 -----END PGP SIGNATURE-----
