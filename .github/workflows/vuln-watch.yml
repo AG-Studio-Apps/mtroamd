@@ -1,0 +1,47 @@
+# Daily reachability-aware vulnerability sweep. govulncheck fails only
+# when code in this repo actually CALLS a vulnerable symbol (unlike
+# dependency-level alerts), which is exactly how GO-2026-5039/5037
+# surfaced on 2026-06-03. Runs against both lines: main (released) and
+# develop (in-flight), so a vuln introduced on develop is caught before
+# it rides into a release.
+#
+# Paired with an external 06:30 UTC triage routine that reads this
+# workflow's result, prepares the toolchain/dependency bump PR on
+# failure, and alerts James. This job is detection only.
+#
+# Note: scheduled workflows execute from the default branch (main);
+# the matrix checks out each ref explicitly.
+
+name: vuln-watch
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # daily 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck (${{ matrix.ref }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ref: [main, develop]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.ref }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: govulncheck
+        run: govulncheck ./...
