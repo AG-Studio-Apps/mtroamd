@@ -1,0 +1,108 @@
+# Publishes the signed iOS Daemon Channel manifest (ios-channel.json +
+# ios-channel.json.minisig) to the rolling `channel-ios` release. The
+# meshTerm iOS app fetches this to learn which daemon tag to
+# install/recommend — patch-level floats within the app's compiled
+# MAJOR.MINOR — verified with the same minisign keys that sign
+# releases, replay-protected by a monotonic serial, and falling back
+# silently to the app's compiled pin on any failure. Full design:
+# the iOS repo's docs/daemon-channel-pin.md.
+#
+# Manual only:
+#
+#   gh workflow run publish-ios-channel -f pin=v1.4.12
+#
+# Notes:
+#   * `channel-ios` is a rolling release — assets are replaced in
+#     place (--clobber). It is created with --latest=false so it can
+#     NEVER become `releases/latest` (the daemon's self-updater
+#     resolves that), and it is NOT a prerelease (the iOS dev-channel
+#     picker selects the newest prerelease). prune-releases.yml only
+#     considers `v*` tags, so channel-ios is never a prune candidate.
+#   * The pin must be an existing **stable** release: clean vX.Y.Z
+#     tag on main's ancestry — the same routing rule release.yml uses
+#     to separate stable from dev builds.
+
+name: publish-ios-channel
+
+on:
+  workflow_dispatch:
+    inputs:
+      pin:
+        description: "Stable daemon tag the iOS fleet should pin (e.g. v1.4.12)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PIN: ${{ inputs.pin }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate pin is an existing stable release
+        run: |
+          set -euo pipefail
+          [[ "$PIN" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::pin '$PIN' is not a clean stable tag (vX.Y.Z)"; exit 1; }
+          git fetch --quiet origin main
+          TAG_SHA="$(git rev-list -n1 "refs/tags/$PIN" 2>/dev/null || true)"
+          [ -n "$TAG_SHA" ] || { echo "::error::tag $PIN does not exist"; exit 1; }
+          git merge-base --is-ancestor "$TAG_SHA" origin/main || {
+            echo "::error::tag $PIN is not on main's ancestry (not a stable release)"; exit 1; }
+          gh release view "$PIN" --json name >/dev/null || {
+            echo "::error::no GitHub release exists for $PIN"; exit 1; }
+
+      - name: Compute next serial
+        run: |
+          set -euo pipefail
+          # Monotonic across publishes: read the live manifest and add 1.
+          # First publish (no channel-ios release yet) starts at 1.
+          SERIAL=1
+          if gh release download channel-ios -p ios-channel.json -O /tmp/prev.json 2>/dev/null; then
+            PREV="$(jq -r '.serial // 0' /tmp/prev.json)"
+            SERIAL=$((PREV + 1))
+          fi
+          echo "SERIAL=$SERIAL" >> "$GITHUB_ENV"
+          echo "serial: $SERIAL"
+
+      - name: Write + sign manifest
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "$MINISIGN_KEY" ] || { echo "::error::MINISIGN_KEY secret missing"; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          printf '{"schema":1,"serial":%d,"pin":"%s"}\n' "$SERIAL" "$PIN" > ios-channel.json
+          jq . ios-channel.json   # syntax sanity before signing
+          echo "$MINISIGN_KEY" > /tmp/minisign.key
+          chmod 600 /tmp/minisign.key
+          # Trusted comment binds the signature to this artifact's
+          # semantics; the iOS app reconciles it against the JSON
+          # (same pattern as the installer's SHA256SUMS tag binding).
+          echo "$MINISIGN_PASSWORD" | minisign -S \
+            -s /tmp/minisign.key \
+            -t "mtroamd ios-channel serial $SERIAL pin $PIN" \
+            -m ios-channel.json
+          rm /tmp/minisign.key
+
+      - name: Publish to rolling channel-ios release
+        run: |
+          set -euo pipefail
+          gh release view channel-ios >/dev/null 2>&1 || \
+            gh release create channel-ios \
+              --title "iOS Daemon Channel" \
+              --notes "Rolling signed manifest read by the meshTerm iOS app (Daemon Channel). Do not delete — assets are replaced in place by the publish-ios-channel workflow." \
+              --latest=false
+          gh release upload channel-ios ios-channel.json ios-channel.json.minisig --clobber
+          {
+            echo "## iOS channel published"
+            echo "- pin: \`$PIN\`"
+            echo "- serial: \`$SERIAL\`"
+          } >> "$GITHUB_STEP_SUMMARY"
