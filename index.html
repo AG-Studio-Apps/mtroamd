@@ -59,9 +59,9 @@
 
 <h2>Debian / Ubuntu (apt)</h2>
 
-<h3>Stable<span class="badge soon">from v2.0</span></h3>
-<p class="note">Production channel — tracks the App Store app's pinned version. Live when
-  meshTerm 2.0 ships; until then this reports no package.</p>
+<h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version
+  (currently v1.5.x).</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
@@ -87,8 +87,9 @@ sudo apt update && sudo apt install mtroamd</pre></div>
 
 <h2>Fedora (dnf)</h2>
 
-<h3>Stable<span class="badge soon">from v2.0</span></h3>
-<p class="note">Live when meshTerm 2.0 ships; until then this reports no package.</p>
+<h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version
+  (currently v1.5.x).</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>sudo tee /etc/yum.repos.d/mtroamd.repo <<'EOF'
 [mtroamd]
@@ -120,7 +121,7 @@ sudo dnf install mtroamd</pre></div>
 <h2>Alpine (apk)</h2>
 
 <h3>Development<span class="badge live">live · x86_64</span></h3>
-<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight. aarch64 / armv7 coming soon; stable lands with v2.0.</div>
+<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight. aarch64 / armv7 and a stable channel coming soon.</div>
 <p class="note">Alpine has no systemd, so mtroamd runs as an <strong>OpenRC</strong> service under <code class="inline">MTROAMD_USER</code> — set it in <code class="inline">/etc/conf.d/mtroamd</code> (the daemon spawns your shells as that user). Run as root.</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>wget -qO /etc/apk/keys/mtroamd-apk.rsa.pub \
@@ -134,7 +135,7 @@ rc-update add mtroamd && rc-service mtroamd start</pre></div>
 <h2>NixOS / Nix</h2>
 
 <h3>Development<span class="badge live">live · from develop</span></h3>
-<div class="warn-box">⚠ <strong>Unstable.</strong> Tracks the <code class="inline">develop</code> branch; pairs with TestFlight. The stable flake on the default branch lands with v2.0.</div>
+<div class="warn-box">⚠ <strong>Unstable.</strong> Tracks the <code class="inline">develop</code> branch; pairs with TestFlight. The stable flake lives on the default branch: <code class="inline">github:AG-Studio-Apps/mtroamd</code> (from v1.5.0).</div>
 <p class="note">Try it: <code class="inline">nix run github:AG-Studio-Apps/mtroamd/develop -- version</code></p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre># flake.nix
