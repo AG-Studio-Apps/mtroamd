@@ -16,7 +16,7 @@ name: vuln-watch
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # daily 06:00 UTC
+    - cron: "30 4 * * *"   # daily 04:30 UTC (routine triages at 05:30)
   workflow_dispatch:
 
 permissions:
