@@ -45,8 +45,14 @@ bus_ok() { [ -n "$uid" ] && [ -S "${rundir}/bus" ]; }
 old_bin="${home}/.local/bin/mtroamd"
 old_unit="${home}/.config/systemd/user/mtroamd.service"
 
-# (b) Prior ~/.local/bin install → migrate onto the package binary.
-if [ -e "$old_bin" ] || [ -e "$old_unit" ]; then
+# (b) Prior ~/.local/bin install → migrate onto the package binary. Trigger
+# ONLY when there is genuinely something to migrate: the old binary still
+# exists, OR the active unit still launches mtroamd from ~/.local/bin. The
+# unit FILE lives at $old_unit for package installs too, so its mere presence
+# is NOT a migration signal — keying on it re-ran a no-op `migrate` on every
+# upgrade and exited before the restart in (c), leaving the new binary on disk
+# while the old one kept running (until a manual `mtroamd restart`).
+if [ -f "$old_bin" ] || { [ -e "$old_unit" ] && grep -q 'ExecStart=.*/\.local/bin/mtroamd ' "$old_unit" 2>/dev/null; }; then
 	if bus_ok; then
 		echo "mtroamd: migrating existing ~/.local/bin install for '$u' onto $BIN…"
 		if ! run_user "$BIN" migrate --yes; then
