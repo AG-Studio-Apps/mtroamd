@@ -519,6 +519,11 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer, src
 	// pattern and it costs us nothing.
 	sid := sess.ID()
 	if subtle.ConstantTimeCompare(att.SessionID, sid[:]) != 1 {
+		// Reaching here means a valid single-use token was consumed but
+		// the supplied session id doesn't match it — anomalous for a
+		// legitimate client. Strike it like the sibling bad-token paths
+		// so the accept limiter accounts for every malformed attach.
+		h.Limiter.RecordBadToken(srcIP)
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
 			V:   1,
 			Err: protocol.AttachErrUnknownSession,
