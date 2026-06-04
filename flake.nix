@@ -11,7 +11,7 @@
       # Bump per release (mirrors packaging/aur/*/PKGBUILD pkgver). The
       # build date is pinned, not stamped from the clock, so the derivation
       # stays reproducible; Commit comes from the flake's own git rev.
-      version = "1.4.10";
+      version = "1.5.2";
 
       # ── per-system outputs (package, app, devShell, checks) ──────────────
       perSystem = flake-utils.lib.eachDefaultSystem (system:
@@ -26,7 +26,7 @@
             # No vendor/ dir in-tree → buildGoModule fetches deps and pins
             # them by hash. Re-lock (fakeHash → build → paste "got:") whenever
             # go.mod/go.sum change.
-            vendorHash = "sha256-9RRP1j8TKHkyKXASymnkyB9xFh9xKIOvpSiOmBry1iY=";
+            vendorHash = "sha256-fduT6WJNxD4xb727S8ubpb6aymjxCcaUgRGxFI0mijI=";
 
             subPackages = [ "cmd/mtroamd" "cmd/mtroam" ];
 

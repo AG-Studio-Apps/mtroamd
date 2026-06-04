@@ -10,7 +10,7 @@ toolchain go1.26.4
 require (
 	github.com/creack/pty v1.1.24
 	github.com/fxamacker/cbor/v2 v2.9.2
-	github.com/quic-go/quic-go v0.59.0
+	github.com/quic-go/quic-go v0.59.1
 	golang.org/x/crypto v0.52.0
 	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.43.0
