@@ -52,9 +52,11 @@
   <p class="lead">Server-side daemon for the
     <a href="https://github.com/AG-Studio-Apps/mtroamd">meshTerm</a> iOS app —
     persistent terminal sessions over QUIC, plus the <code class="inline">mtroam</code> CLI.
-    Signed <code class="inline">apt</code> + <code class="inline">dnf</code> repos for
+    Signed <code class="inline">apt</code> + <code class="inline">dnf</code> +
+    <code class="inline">apk</code> repos for
     <code class="inline">amd64/x86_64</code>, <code class="inline">arm64/aarch64</code>
-    (<code class="inline">armhf</code> on apt).</p>
+    (<code class="inline">armhf</code> on apt; apk is
+    <code class="inline">x86_64</code>-only for now), plus a Nix flake.</p>
 </header>
 
 <h2>Debian / Ubuntu (apt)</h2>
@@ -120,9 +122,21 @@ sudo dnf install mtroamd</pre></div>
 
 <h2>Alpine (apk)</h2>
 
-<h3>Development<span class="badge live">live · x86_64</span></h3>
-<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight. aarch64 / armv7 and a stable channel coming soon.</div>
+<h3>Stable<span class="badge live">live · x86_64 · from v1.5.4</span></h3>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version
+  (currently v1.5.x). aarch64 / armv7 coming soon.</p>
 <p class="note">Alpine has no systemd, so mtroamd runs as an <strong>OpenRC</strong> service under <code class="inline">MTROAMD_USER</code> — set it in <code class="inline">/etc/conf.d/mtroamd</code> (the daemon spawns your shells as that user). Run as root.</p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>wget -qO /etc/apk/keys/mtroamd-apk.rsa.pub \
+  https://ag-studio-apps.github.io/mtroamd/mtroamd-apk.rsa.pub
+
+echo "https://ag-studio-apps.github.io/mtroamd/apk/stable" >> /etc/apk/repositories
+
+apk update && apk add mtroamd
+rc-update add mtroamd && rc-service mtroamd start</pre></div>
+
+<h3>Development<span class="badge live">live · x86_64</span></h3>
+<div class="warn-box">⚠ <strong>Unstable — may break your system.</strong> Pre-release builds; pairs with TestFlight.</div>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>wget -qO /etc/apk/keys/mtroamd-apk.rsa.pub \
   https://ag-studio-apps.github.io/mtroamd/mtroamd-apk.rsa.pub
@@ -134,12 +148,13 @@ rc-update add mtroamd && rc-service mtroamd start</pre></div>
 
 <h2>NixOS / Nix</h2>
 
-<h3>Development<span class="badge live">live · from develop</span></h3>
-<div class="warn-box">⚠ <strong>Unstable.</strong> Tracks the <code class="inline">develop</code> branch; pairs with TestFlight. The stable flake lives on the default branch: <code class="inline">github:AG-Studio-Apps/mtroamd</code> (from v1.5.0).</div>
-<p class="note">Try it: <code class="inline">nix run github:AG-Studio-Apps/mtroamd/develop -- version</code></p>
+<h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
+<p class="note">Production channel — the flake on the default branch tracks the App Store
+  app's pinned daemon version (currently v1.5.x). Try it:
+  <code class="inline">nix run github:AG-Studio-Apps/mtroamd -- version</code></p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre># flake.nix
-inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";
+inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd";
 
 # NixOS — declarative systemd --user service + linger:
 #   imports = [ mtroamd.nixosModules.default ];
@@ -148,6 +163,13 @@ inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";
 # home-manager (set users.&lt;you&gt;.linger = true at the system level):
 #   imports = [ mtroamd.homeManagerModules.default ];
 #   services.mtroamd.enable = true;</pre></div>
+
+<h3>Development<span class="badge live">live · from develop</span></h3>
+<div class="warn-box">⚠ <strong>Unstable.</strong> Tracks the <code class="inline">develop</code> branch; pairs with TestFlight.</div>
+<p class="note">Try it: <code class="inline">nix run github:AG-Studio-Apps/mtroamd/develop -- version</code></p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre># flake.nix — same modules as stable, just pin the develop branch:
+inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";</pre></div>
 
 <h2>Uninstall</h2>
 
