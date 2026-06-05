@@ -5,18 +5,23 @@
 # develop (in-flight), so a vuln introduced on develop is caught before
 # it rides into a release.
 #
-# Paired with an external 06:30 UTC triage routine that reads this
-# workflow's result, prepares the toolchain/dependency bump PR on
-# failure, and alerts James. This job is detection only.
+# Dispatch-only by design: the daily 05:00 UTC triage routine
+# (claude.ai/code/routines, govulncheck-triage) dispatches this workflow,
+# watches it, and triages the result — it prepares the toolchain/dependency
+# bump PR on failure and alerts James. This job is detection only.
 #
-# Note: scheduled workflows execute from the default branch (main);
-# the matrix checks out each ref explicitly.
+# A `schedule:` cron was removed 2026-06-05: GitHub's scheduler never
+# delivered a single schedule event in two days of trying (a known
+# silent-failure mode for new cron workflows), so the routine is the
+# scheduler of record. Do not re-add a cron without also rethinking the
+# routine's STEP 0, or some days will get two runs and others one.
+#
+# Note: the matrix checks out each ref explicitly, so dispatching from
+# main still scans both lines.
 
 name: vuln-watch
 
 on:
-  schedule:
-    - cron: "30 4 * * *"   # daily 04:30 UTC (routine triages at 05:30)
   workflow_dispatch:
 
 permissions:

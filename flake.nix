@@ -11,7 +11,7 @@
       # Bump per release (mirrors packaging/aur/*/PKGBUILD pkgver). The
       # build date is pinned, not stamped from the clock, so the derivation
       # stays reproducible; Commit comes from the flake's own git rev.
-      version = "1.5.3";
+      version = "1.5.4";
 
       # ── per-system outputs (package, app, devShell, checks) ──────────────
       perSystem = flake-utils.lib.eachDefaultSystem (system:
