@@ -216,6 +216,18 @@ type Attach struct {
 	// posture; the server doesn't fail closed on a future mode it
 	// doesn't recognise.
 	Mode string `cbor:"mode,omitempty"`
+	// ReplayBudget caps how many bytes of ring-buffer history the
+	// server replays on attach, counted back from the buffer head.
+	// 0/missing = no cap (full replay from ack/tail — pre-v1.6.0
+	// behavior, and what `mtroam attach`/`tail` want). Clients with
+	// a bounded display (iOS derives this from the user's scrollback
+	// setting) send it so a full 4 MiB ring isn't shipped and parsed
+	// for ~200 KiB of displayable history. When the session's alt
+	// screen is active the server clamps harder still (see
+	// AltScreenReplayCap) — the alt screen has no scrollback, so
+	// only the final frame matters. v1.6.0+ field; same additive-
+	// compat posture as Mode.
+	ReplayBudget uint64 `cbor:"replay_budget,omitempty"`
 }
 
 // AttachAck is the server's response to Attach.

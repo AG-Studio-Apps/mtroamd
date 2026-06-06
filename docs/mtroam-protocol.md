@@ -206,7 +206,8 @@ A maximum frame length of 64 KiB is enforced. Exceeding it is a fatal protocol v
   "ack": 0,                        // last_ack_seq; 0 for fresh attach
   "rows": 24,                      // initial PTY rows
   "cols": 80,                      // initial PTY cols
-  "mode": "exclusive"              // optional: "exclusive" (default) or "readonly"
+  "mode": "exclusive",             // optional: "exclusive" (default) or "readonly"
+  "replay_budget": 307200          // optional (v1.6.0+): max replay bytes, counted back from buffer head
 }
 ```
 
@@ -216,6 +217,8 @@ A maximum frame length of 64 KiB is enforced. Exceeding it is a fatal protocol v
 - `"readonly"`: the client receives output only. Stdin frames from a readonly client are silently dropped by the daemon (NOT a protocol violation — a misbehaving keystroke shouldn't tear the connection down). Resize frames are also dropped: the exclusive client owns the geometry. Multiple readonly clients can coexist with each other AND with one exclusive client.
 
 The pre-`mode` field client posture is preserved exactly: an Attach with no `mode` field is treated as exclusive, identical to v0 behaviour.
+
+**Replay budget** (the `replay_budget` field, v1.6.0+): bounded-display clients (iOS derives it from the user's scrollback setting) cap how much ring-buffer history the server replays — without it, a fresh attach (`ack: 0`) to a long-lived session replays the full ring (4 MiB default), most of which the client cannot display. Semantics (see § 11.5): the replay window never starts more than `replay_budget` bytes behind the buffer head; while the session's **alt screen is active** (and a budget was supplied — the tighten never applies on its own) the server tightens the cap to `AltScreenReplayCap` (128 KiB) since the alt screen has no scrollback and only the final frame matters. The budget never widens a window (a small-gap resume still replays just the gap); when it narrows one, `trunc: true` is set. Missing/zero = no cap — pre-v1.6.0 behaviour, and what `mtroam attach`/`tail` rely on. Same additive-compat posture as `mode`: older daemons ignore the unknown key.
 
 ### 7.3 `AttachAck` (server → client, response to Attach)
 
@@ -370,6 +373,8 @@ Default capacity 4 MiB. When full, oldest bytes are dropped (FIFO). The daemon t
 
 - If `N >= tail_seq`: replay from `N`, no truncation
 - If `N < tail_seq`: replay from `tail_seq`, set `trunc = true` in AttachAck
+
+When the Attach carried `replay_budget > 0` (v1.6.0+, § 7.2), a final cap is applied on top of the base cases: the window may start no more than `cap` bytes behind `head_seq`, where `cap = replay_budget`, tightened to `AltScreenReplayCap` (128 KiB) while the session's alt screen is active. If the cap moves the start forward, `trunc = true`. The cap never moves a start backward — a resume whose gap is already smaller than the cap replays exactly the gap. `replay_budget` absent/0 skips this step entirely (full pre-v1.6.0 replay; the `mtroam` CLI's contract).
 
 ### 11.6 Persistence across daemon restart (v0.5.0+)
 

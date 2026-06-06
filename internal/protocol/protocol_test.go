@@ -285,3 +285,59 @@ func TestSpecConstantsHaveExpectedNames(t *testing.T) {
 		}
 	}
 }
+
+// TestAttachDecodeIgnoresUnknownFields locks in the additive-compat
+// posture the wire format depends on: a NEWER client sending fields
+// this daemon doesn't know (e.g. v1.6.0's replay_budget arriving at
+// a v1.5.x daemon, or whatever comes after) must decode cleanly with
+// the unknown keys ignored. iOS sends new optional fields
+// unconditionally on the strength of this guarantee — if this test
+// ever fails, client-side version gating becomes mandatory.
+func TestAttachDecodeIgnoresUnknownFields(t *testing.T) {
+	t.Parallel()
+	raw, err := cborMarshal(map[string]any{
+		"t":    TypeAttach,
+		"v":    uint32(1),
+		"tok":  []byte{0x01},
+		"sid":  []byte{0x02},
+		"ack":  uint64(7),
+		"rows": uint16(24),
+		"cols": uint16(80),
+		"field_from_the_future": uint64(123456),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Attach
+	if err := StrictDecMode.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode with unknown field: %v", err)
+	}
+	if got.AckSeq != 7 || got.Rows != 24 || got.Cols != 80 {
+		t.Errorf("known fields lost around unknown key: %+v", got)
+	}
+}
+
+// TestAttachReplayBudgetRoundTrip — the v1.6.0 field survives the
+// wire and is genuinely optional (omitted when zero).
+func TestAttachReplayBudgetRoundTrip(t *testing.T) {
+	t.Parallel()
+	b, err := MarshalAttach(Attach{V: 1, ReplayBudget: 300 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Attach
+	if err := StrictDecMode.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ReplayBudget != 300*1024 {
+		t.Errorf("ReplayBudget = %d, want %d", got.ReplayBudget, 300*1024)
+	}
+
+	zero, err := MarshalAttach(Attach{V: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(zero, []byte("replay_budget")) {
+		t.Error("zero ReplayBudget should be omitted from the wire (omitempty)")
+	}
+}
