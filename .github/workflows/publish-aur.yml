@@ -223,16 +223,21 @@ jobs:
           [ -n "$AUR_SSH_PRIVATE_KEY" ] || {
             echo "::error::AUR_SSH_PRIVATE_KEY secret missing"; exit 1; }
 
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
+          # Absolute paths only: in a job container the shell's $HOME is
+          # /github/home but ssh expands `~` from the passwd entry
+          # (/root), so tilde paths silently point ssh at the wrong dir
+          # (burned the first publish run with "No ED25519 host key is
+          # known" despite a written known_hosts).
+          SSH_DIR="$(mktemp -d)"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$SSH_DIR/aur"
+          chmod 600 "$SSH_DIR/aur"
           # Pinned host key (no TOFU in CI) — the published ed25519 key
           # from https://aur.archlinux.org (footer → SSH fingerprints).
           # A mismatch fails the push closed; update here if AUR rotates.
-          cat > ~/.ssh/known_hosts <<'EOF'
+          cat > "$SSH_DIR/known_hosts" <<'EOF'
           aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
           EOF
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          export GIT_SSH_COMMAND="ssh -i $SSH_DIR/aur -o UserKnownHostsFile=$SSH_DIR/known_hosts -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes"
 
           git config --global user.name  "JBetchGH"
           git config --global user.email "JBetchGH@users.noreply.github.com"
