@@ -87,25 +87,38 @@ jobs:
           echo "$PIN" > /tmp/pin
           echo "iOS pin (force-keep): ${PIN}"
 
-          # --- Daemon Channel pin (force-keep). The iOS fleet's *effective*
-          # pin can be moved past the compiled constant by the signed
-          # ios-channel.json manifest (publish-ios-channel workflow), so the
-          # release IT points at must survive pruning too. Same fail-safe
-          # posture as the compiled pin: if the channel-ios release EXISTS
-          # but its manifest pin can't be read, ABORT all deletions. An
-          # absent channel-ios release (never published) is fine — nothing
-          # extra to keep. The channel-ios release itself is not a `v*` tag
-          # and is therefore never a prune candidate.
-          CH_PIN=""
+          # --- Daemon Channel pins (force-keep, ALL series). Each app
+          # generation reads its own version-scoped manifest
+          # (ios-channel.json for the 1.5-and-earlier series,
+          # ios-channel-<MAJ>-<MIN>.json after — see
+          # publish-ios-channel.yml), so EVERY channel file's pin must
+          # survive pruning for as long as its file exists. Retiring an
+          # app generation = deleting its channel asset; its pin then
+          # drops out of force-keep naturally. Same fail-safe posture as
+          # the compiled pin: if the channel-ios release exists but ANY
+          # manifest pin can't be read, ABORT all deletions. An absent
+          # channel-ios release (never published) is fine. The
+          # channel-ios release itself is not a `v*` tag and is
+          # therefore never a prune candidate.
+          CH_PINS=""
           if gh release view channel-ios --json name >/dev/null 2>&1; then
-            if gh release download channel-ios -p ios-channel.json -O /tmp/ch.json --clobber 2>/dev/null; then
-              CH_PIN="$(jq -r '.pin // empty' /tmp/ch.json || true)"
-            fi
-            if [ -z "$CH_PIN" ]; then
-              echo "::warning::channel-ios exists but its manifest pin is unreadable — ABORTING deletions (fail-safe)"
+            MANIFESTS="$(gh release view channel-ios --json assets               --jq '.assets[].name' | grep -E '^ios-channel(-[0-9]+-[0-9]+)?\.json$' || true)"
+            if [ -z "$MANIFESTS" ]; then
+              echo "::warning::channel-ios exists but lists no channel manifests — ABORTING deletions (fail-safe)"
               echo "ABORT=1" >> "$GITHUB_ENV"; exit 0
             fi
-            echo "channel pin (force-keep): ${CH_PIN}"
+            for M in $MANIFESTS; do
+              CH_PIN=""
+              if gh release download channel-ios -p "$M" -O /tmp/ch.json --clobber 2>/dev/null; then
+                CH_PIN="$(jq -r '.pin // empty' /tmp/ch.json || true)"
+              fi
+              if [ -z "$CH_PIN" ]; then
+                echo "::warning::channel manifest $M pin unreadable — ABORTING deletions (fail-safe)"
+                echo "ABORT=1" >> "$GITHUB_ENV"; exit 0
+              fi
+              echo "channel pin (force-keep, $M): ${CH_PIN}"
+              CH_PINS="$CH_PINS $CH_PIN"
+            done
           fi
 
           # --- Which channel(s) to prune. Channel-scoped so a release only
@@ -127,7 +140,7 @@ jobs:
           fi
           echo "$CHANNELS" > /tmp/channels
           echo "## Prune plan" >> "$GITHUB_STEP_SUMMARY"
-          echo "- channels: ${CHANNELS} · iOS pin: ${PIN} · channel pin: ${CH_PIN:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- channels: ${CHANNELS} · iOS pin: ${PIN} · channel pins: ${CH_PINS:-none}" >> "$GITHUB_STEP_SUMMARY"
 
           # --- Per-channel keep-list: last N of that channel + the pin iff it
           # belongs to that channel. Written to /tmp/keep-<ch>.txt for the
@@ -146,7 +159,10 @@ jobs:
             esac
             # Channel pins are always clean stable tags (the publish
             # workflow enforces vX.Y.Z on main-ancestry).
-            if [ -n "$CH_PIN" ] && [ "$ch" = "stable" ]; then KEEP+=("$CH_PIN"); fi
+            # Word-splitting intended: CH_PINS is a space-separated
+            # list of vX.Y.Z tags (one per channel manifest).
+            # shellcheck disable=SC2206
+            if [ -n "$CH_PINS" ] && [ "$ch" = "stable" ]; then KEEP+=($CH_PINS); fi
             printf '%s\n' "${KEEP[@]}" | sort -uV > "/tmp/keep-$ch.txt"
             echo "[$ch] keep: $(paste -sd' ' "/tmp/keep-$ch.txt")"
             echo "- $ch keeps: $(paste -sd' ' "/tmp/keep-$ch.txt")" >> "$GITHUB_STEP_SUMMARY"
