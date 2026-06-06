@@ -1,0 +1,253 @@
+# Publishes both AUR packages (mtroamd source + mtroamd-bin) for a
+# stable release tag. Exists because the dev box cannot reach
+# aur.archlinux.org:22 (tailscale-locked egress; AUR is SSH-22-only) —
+# so the publish runs here, where the AUR_SSH_PRIVATE_KEY secret lives.
+#
+# Manual only:
+#
+#   gh workflow run publish-aur -f tag=v1.5.4 -f dry_run=true   # rehearse
+#   gh workflow run publish-aur -f tag=v1.5.4 -f dry_run=false  # publish
+#
+# What it does (all prep happens HERE, against the live release assets,
+# at publish time — which kills the prune-stale-sums trap where PKGBUILDs
+# prepped against a release went stale when prune-releases.yml deleted it):
+#   1. Validate the tag is a clean stable vX.Y.Z on main's ancestry with
+#      a published GitHub release (same routing rule as release.yml).
+#   2. In an archlinux container: bump pkgver (make aur-prep), download
+#      the release assets, minisign-verify SHA256SUMS and cross-check
+#      every asset against it, regenerate the per-arch sha256sums_*
+#      arrays (makepkg -g) and both .SRCINFOs (makepkg --printsrcinfo).
+#   3. Smoke-test both packages: makepkg-build mtroamd-bin, pacman -U it,
+#      assert `mtroamd version` == the tag; then full source build of
+#      mtroamd (build + check + package — check() runs the Go test suite).
+#   4. dry_run=true (default): upload the prepped {PKGBUILD,.SRCINFO}
+#      pairs as an artifact and stop. dry_run=false: push each pair to
+#      its AUR repo (ssh://aur@aur.archlinux.org/<pkg>.git, branch
+#      master) with a pinned known_hosts entry.
+#
+# Notes:
+#   * Hand-rolled instead of the KSXGitHub publish action — same
+#     SHA-pin / no-third-party-action posture as the rest of CI.
+#   * The prepped PKGBUILDs are NOT committed back to this repo; the
+#     in-tree copies are templates. The AUR repos are the published
+#     source of truth (this matches AUR convention — the AUR git repo
+#     is the package).
+#   * First publish to a fresh AUR package name auto-creates the repo
+#     on push; an empty clone is normal.
+
+name: publish-aur
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Stable release tag to publish to AUR (e.g. v1.5.4)"
+        required: true
+      dry_run:
+        description: "Rehearse only — prep + smoke + artifact, no AUR push"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate tag is a published stable release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::tag '$TAG' is not a clean stable tag (vX.Y.Z)"; exit 1; }
+          git fetch --quiet origin main
+          TAG_SHA="$(git rev-list -n1 "refs/tags/$TAG" 2>/dev/null || true)"
+          [ -n "$TAG_SHA" ] || { echo "::error::tag $TAG does not exist"; exit 1; }
+          git merge-base --is-ancestor "$TAG_SHA" origin/main || {
+            echo "::error::tag $TAG is not on main's ancestry (not a stable release)"; exit 1; }
+          gh release view "$TAG" --json name >/dev/null || {
+            echo "::error::no GitHub release exists for $TAG"; exit 1; }
+
+  publish:
+    name: Prep + smoke + publish (archlinux)
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: archlinux:latest
+    env:
+      TAG: ${{ inputs.tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Install toolchain
+        run: |
+          set -euo pipefail
+          # base-devel: makepkg/fakeroot; go+pandoc: mtroamd source build;
+          # minisign: SHA256SUMS verification; openssh: AUR push.
+          pacman -Syu --noconfirm --needed \
+            base-devel git go pandoc minisign openssh python
+
+      - uses: actions/checkout@v6
+
+      - name: Prep PKGBUILDs against the live release
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          # makepkg refuses to run as root (like abuild) — do everything
+          # package-shaped as an unprivileged builder user.
+          useradd -m builder
+          chown -R builder: .
+
+          # 1. pkgver bump in both PKGBUILDs (this is ALL aur-prep does;
+          #    sums + .SRCINFO are regenerated below).
+          make aur-prep VERSION="$TAG"
+
+          # 2. Pre-download every release asset the -bin package sources,
+          #    into the package dir — makepkg -g then uses the local
+          #    copies instead of re-downloading per arch.
+          cd packaging/aur/mtroamd-bin
+          base="https://github.com/AG-Studio-Apps/mtroamd/releases/download/$TAG"
+          assets="SHA256SUMS SHA256SUMS.minisig mtroamd.8 mtroam.1
+                  mtroamd.bash mtroam.bash mtroamd.zsh mtroam.zsh
+                  mtroamd.fish mtroam.fish
+                  mtroamd-linux-amd64 mtroam-linux-amd64
+                  mtroamd-linux-arm64 mtroam-linux-arm64
+                  mtroamd-linux-armv7 mtroam-linux-armv7"
+          for a in $assets; do
+            curl -fsSL --retry 3 -o "$a" "$base/$a"
+          done
+
+          # 3. Integrity: the signed manifest must verify, and every
+          #    BINARY must match its manifest entry — catches a tampered/
+          #    mis-uploaded binary before any sum lands in a PKGBUILD.
+          #    (SHA256SUMS covers binaries only; man pages + completions
+          #    get their integrity from the PKGBUILD sums computed below,
+          #    pinned at prep time like SHA256SUMS itself.)
+          minisign -V -p "$GITHUB_WORKSPACE/docs/release-public-key.txt" -m SHA256SUMS
+          for a in mtroamd-linux-amd64 mtroam-linux-amd64 \
+                   mtroamd-linux-arm64 mtroam-linux-arm64 \
+                   mtroamd-linux-armv7 mtroam-linux-armv7; do
+            grep -E "  $a\$" SHA256SUMS | sha256sum -c - >/dev/null || {
+              echo "::error::$a does not match the signed SHA256SUMS"; exit 1; }
+          done
+          chown -R builder: .
+
+          # 4. Regenerate the per-arch sums arrays from the verified
+          #    files, in source-array order. NOT via `makepkg -g`:
+          #    /etc/makepkg.conf sets CARCH unconditionally, so an env
+          #    override is clobbered and -g emits the build host's arch
+          #    three times (caught in local rehearsal). The files are
+          #    already on disk and verified — hash them directly.
+          python - <<'PY'
+          import re, hashlib
+          p = 'PKGBUILD'
+          src = open(p).read()
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, 'rb') as fp:
+                  for chunk in iter(lambda: fp.read(1 << 20), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+          for arch in ('x86_64', 'aarch64', 'armv7h'):
+              m = re.search(rf'source_{arch}=\(([^)]*)\)', src)
+              assert m, f'source_{arch} array not found in PKGBUILD'
+              files = [e.strip().strip('"\'').rsplit('/', 1)[-1]
+                       for e in m.group(1).split() if e.strip()]
+              assert len(files) == 12, f'{arch}: expected 12 sources, got {files}'
+              new = (f'sha256sums_{arch}=('
+                     + '\n    '.join(f"'{sha256(f)}'" for f in files) + ')')
+              src, n = re.subn(rf'sha256sums_{arch}=\([^)]*\)', new, src, count=1)
+              assert n == 1, f'sha256sums_{arch} array not found in PKGBUILD'
+          open(p, 'w').write(src)
+          print('sums arrays rewritten for all 3 arches')
+          PY
+
+          # 5. .SRCINFOs — always via real makepkg, never by hand.
+          su builder -c "makepkg --printsrcinfo" > .SRCINFO
+          cd ../mtroamd
+          su builder -c "makepkg --printsrcinfo" > .SRCINFO
+
+          git -C "$GITHUB_WORKSPACE" diff --stat -- packaging/aur/ | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test mtroamd-bin (build + install + version)
+        run: |
+          set -euo pipefail
+          cd packaging/aur/mtroamd-bin
+          su builder -c "makepkg --noconfirm"
+          pacman -U --noconfirm mtroamd-bin-*.pkg.tar.*
+          got_d="$(mtroamd version)"; got_c="$(mtroam version)"
+          echo "mtroamd: $got_d | mtroam: $got_c"
+          case "$got_d" in *"$TAG"*) ;; *)
+            echo "::error::installed mtroamd reports '$got_d', expected $TAG"; exit 1 ;; esac
+          # systemd-user unit must have been generated from the binary.
+          test -s /usr/lib/systemd/user/mtroamd.service
+          pacman -R --noconfirm mtroamd-bin   # clears conflicts= for the source pkg
+
+      - name: Smoke-test mtroamd (full source build + check)
+        run: |
+          set -euo pipefail
+          cd packaging/aur/mtroamd
+          # check() runs the upstream Go test suite — the heavyweight
+          # gate. (The container low-port bind() trap only affected tags
+          # <= v1.4.11; everything publishable now carries the fix.)
+          su builder -c "makepkg --noconfirm"
+          pacman -U --noconfirm mtroamd-[0-9]*.pkg.tar.*
+          mtroamd version
+          pacman -R --noconfirm mtroamd
+
+      - name: Upload prepped packaging (inspection artifact)
+        uses: actions/upload-artifact@v7
+        with:
+          name: aur-${{ inputs.tag }}
+          path: |
+            packaging/aur/mtroamd/PKGBUILD
+            packaging/aur/mtroamd/.SRCINFO
+            packaging/aur/mtroamd-bin/PKGBUILD
+            packaging/aur/mtroamd-bin/.SRCINFO
+
+      - name: Push to AUR
+        if: ${{ !inputs.dry_run }}
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$AUR_SSH_PRIVATE_KEY" ] || {
+            echo "::error::AUR_SSH_PRIVATE_KEY secret missing"; exit 1; }
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          # Pinned host key (no TOFU in CI) — the published ed25519 key
+          # from https://aur.archlinux.org (footer → SSH fingerprints).
+          # A mismatch fails the push closed; update here if AUR rotates.
+          cat > ~/.ssh/known_hosts <<'EOF'
+          aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+          EOF
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o UserKnownHostsFile=~/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+
+          git config --global user.name  "JBetchGH"
+          git config --global user.email "JBetchGH@users.noreply.github.com"
+
+          for pkg in mtroamd mtroamd-bin; do
+            git clone "ssh://aur@aur.archlinux.org/${pkg}.git" "/tmp/aur-${pkg}"
+            cp "packaging/aur/${pkg}/PKGBUILD" "packaging/aur/${pkg}/.SRCINFO" "/tmp/aur-${pkg}/"
+            cd "/tmp/aur-${pkg}"
+            git add PKGBUILD .SRCINFO
+            if git diff --cached --quiet; then
+              echo "${pkg}: already at ${TAG}, nothing to push"
+            else
+              git commit -m "Update to ${TAG}"
+              git push origin HEAD:master
+              echo "${pkg}: pushed ${TAG}" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            cd "$GITHUB_WORKSPACE"
+          done
