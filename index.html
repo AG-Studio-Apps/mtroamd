@@ -56,7 +56,8 @@
     <code class="inline">apk</code> repos for
     <code class="inline">amd64/x86_64</code>, <code class="inline">arm64/aarch64</code>
     (<code class="inline">armhf</code> on apt; apk is
-    <code class="inline">x86_64</code>-only for now), plus a Nix flake.</p>
+    <code class="inline">x86_64</code>-only for now), plus a Nix flake and
+    AUR packages (<code class="inline">mtroamd</code> / <code class="inline">mtroamd-bin</code>).</p>
 </header>
 
 <h2>Debian / Ubuntu (apt)</h2>
@@ -171,6 +172,24 @@ inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd";
 <pre># flake.nix — same modules as stable, just pin the develop branch:
 inputs.mtroamd.url = "github:AG-Studio-Apps/mtroamd/develop";</pre></div>
 
+<h2>Arch Linux (AUR)</h2>
+
+<h3>Stable<span class="badge live">live · from v1.5.4</span></h3>
+<p class="note">Two AUR packages, pick one:
+  <a href="https://aur.archlinux.org/packages/mtroamd-bin"><code class="inline">mtroamd-bin</code></a>
+  (pre-built release binaries, fast) or
+  <a href="https://aur.archlinux.org/packages/mtroamd"><code class="inline">mtroamd</code></a>
+  (build from source, needs <code class="inline">go</code> + <code class="inline">pandoc</code>).
+  They <code class="inline">provides=</code>/<code class="inline">conflicts=</code> each other.</p>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre># with an AUR helper:
+yay -S mtroamd-bin          # or: paru -S mtroamd-bin
+
+# or by hand:
+git clone https://aur.archlinux.org/mtroamd-bin.git
+cd mtroamd-bin && makepkg -si</pre></div>
+<p class="note">Then enable for your login user: <code class="inline">sudo loginctl enable-linger "$USER" &amp;&amp; systemctl --user enable --now mtroamd</code> (check with <code class="inline">mtroamd doctor</code>).</p>
+
 <h2>Uninstall</h2>
 
 <h3>Debian / Ubuntu</h3>
@@ -189,6 +208,11 @@ apk del mtroamd             # state in ~/.local/share/mtroamd is kept</pre></div
 
 <h3>NixOS / Nix</h3>
 <p class="note">Declarative — remove <code class="inline">services.mtroamd</code> (or the module import) from your config and rebuild. For an ad-hoc profile install: <code class="inline">nix profile remove mtroamd</code>.</p>
+
+<h3>Arch Linux</h3>
+<div class="codeblock"><button class="copy">Copy</button>
+<pre>systemctl --user disable --now mtroamd
+sudo pacman -R mtroamd-bin   # or mtroamd; state in ~/.local/share/mtroamd is kept</pre></div>
 
 <footer>
   Packages are GPG-signed (ed25519). Key fingerprint
