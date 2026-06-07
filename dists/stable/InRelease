@@ -5,44 +5,44 @@ Origin: mtroamd
 Label: mtroamd
 Suite: stable
 Codename: stable
-Date: Sun, 07 Jun 2026 10:32:34 UTC
+Date: Sun, 07 Jun 2026 23:21:59 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (stable — production, matches the App Store app)
 MD5Sum:
- 47b46b1dc713c8b0ad1acd2be19f4f6c 835 main/binary-amd64/Packages
- 253031eeec3b4f63f2362015ae5032eb 567 main/binary-amd64/Packages.gz
+ 6b00d3b5cf3bc531ad40e6951725ff74 835 main/binary-amd64/Packages
+ 130f80215a89d955dcbe954550fadfe3 564 main/binary-amd64/Packages.gz
  f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
- b974ad9ffdc3c283d542f6fbfe9a4edf 835 main/binary-arm64/Packages
- e8dfe1d6eb08f5d60657ca2c8ecbb3d3 567 main/binary-arm64/Packages.gz
+ 8c5f9d5f7e1042b6d1a980479d55ca46 835 main/binary-arm64/Packages
+ 128dda112b4786593f0423347946accb 566 main/binary-arm64/Packages.gz
  adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
- 35549d8271d1ca2922122de70e92b16e 835 main/binary-armhf/Packages
- 07996f35ca0f79e7fad8c0392663ebb2 568 main/binary-armhf/Packages.gz
+ 51541dca7c7aae7dc730c7bc12355003 835 main/binary-armhf/Packages
+ 9a48ea3ed7ec1fd43972cfa016459ac7 568 main/binary-armhf/Packages.gz
  f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
 SHA1:
- 890194ac11dd3fa5e8cfe52959591ab27d5d3f74 835 main/binary-amd64/Packages
- 891ec3cb931dfb6a0d9b99062e171588b8ed0d61 567 main/binary-amd64/Packages.gz
+ 397a1d2ea1ec42a02bf337a006dc4ebbab1950c3 835 main/binary-amd64/Packages
+ 7729f20c415d36dc792ea6acd7a60fb453d4d991 564 main/binary-amd64/Packages.gz
  d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
- 4a59440de53886104a465264c5657f0da080fcf1 835 main/binary-arm64/Packages
- d8a46d3767cc2b48a9e5b04246704cd5d1317dbe 567 main/binary-arm64/Packages.gz
+ b189d7d7e1bde1d22a3bf41db57f356262bb3b1f 835 main/binary-arm64/Packages
+ 3055bc19c58682d3cac8bf548d7e582726b77be6 566 main/binary-arm64/Packages.gz
  347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
- 0062558b269e05318ce1bae98da543bfae2f2d1f 835 main/binary-armhf/Packages
- 5bb70344840d1e45a10ec68faddad3349a1a64b5 568 main/binary-armhf/Packages.gz
+ 38f700541961c0cd035146607eec1650f0fb9311 835 main/binary-armhf/Packages
+ 901db9acc0d12ad99dc8bfa4a7062ed861b0f666 568 main/binary-armhf/Packages.gz
  6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
 SHA256:
- 5123055ca6635b61111a988f380fb555e4fe0be592689d8c2b14456c88dbb961 835 main/binary-amd64/Packages
- 96be92f8ee19506438d247766162d61c9ddfeaf08b61f05c848bc841d088fdd1 567 main/binary-amd64/Packages.gz
+ b992d032dcc3ac1edc2823a99c2b1cc859c3d4b93af8ec1a1c01a505e01cedea 835 main/binary-amd64/Packages
+ a8c3b683c947ccb30ee30dce9bf0273981a72e68b6bcf93f51f53259fe8c374f 564 main/binary-amd64/Packages.gz
  44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
- 4891dc35a207e6c26e68b27c622ceaba6e8e3e901483c29c8f5dcda68308924e 835 main/binary-arm64/Packages
- d05803bf4195b5783653dc279d9322bd12cfb69975b410ae6e6f85a679f2e0b4 567 main/binary-arm64/Packages.gz
+ 00394d62d5a8ee0e4dd56781b76fba317b7b7b0df905b84017b8eec8d634e4d1 835 main/binary-arm64/Packages
+ 92c7b3733546dfc296cfdc6ebe8f5814a65a72c52632358d0e2d4fea22b8fa81 566 main/binary-arm64/Packages.gz
  ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
- c6c3f8037b3d9e4cfe756575cac1958b0f34ecedd64b07ed3baf1f88857abfd7 835 main/binary-armhf/Packages
- a6b64c7b83239dd3689e4e53c9e83a4aca804f6d50466444e04f9b8df5130eb3 568 main/binary-armhf/Packages.gz
+ db204a34e824159fd43e8bb08722614e4e5c6fed217fadbabd490444e1af0817 835 main/binary-armhf/Packages
+ 2be5f770798aa5f3d78394d34d70ea9942d7fd0207ec04f2755f742c9029b4ce 568 main/binary-armhf/Packages.gz
  e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHQEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiVIwgAKCRBQfbpy8DxF
-wuItAP96nSC6DCZIpRqqDUVWp1IjdRwOytN9zxeaUyqAgf1i/AD41ilCTRe2Qy78
-HloUqjGL4f//uwrFkVZflm5Qk2P+Dg==
-=jaX+
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiX9FwAKCRBQfbpy8DxF
+ws5kAP9MzW5XB1UdYgIi3bJYkzNiVSyjUmlBp7pmjlcdb/3pjAEAraYEy6doaTzv
+vr+wjtXVLd9tO9UmYek4x5vLGViaGQ4=
+=YO3G
 -----END PGP SIGNATURE-----
