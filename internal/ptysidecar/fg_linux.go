@@ -23,10 +23,30 @@ import (
 // leader already exited, or /proc unreadable. Privacy: this reads
 // process NAMES only — never arguments beyond the argv[0] basename,
 // never terminal content.
-func foregroundComm(master *os.File) string {
+//
+// sessionPid is the sidecar's shell child — the controlling-terminal
+// session leader (creack/pty starts it with Setsid+Setctty). It
+// confines the /proc read to this PTY's own session: between
+// TIOCGPGRP and the /proc read the foreground pgid could exit and be
+// recycled by an unrelated process, and a bare /proc/<pgid>/comm
+// would then leak that stranger's name to the client. Verifying
+// getsid(pgid) == sessionPid rejects any recycled pid outside our
+// session — the legitimate foreground groups all share the shell's
+// session id by construction. A zero sessionPid disables the check
+// (no child pid available) — degrades to prior behaviour, never
+// stricter than the caller can support.
+func foregroundComm(master *os.File, sessionPid int) string {
 	pgid, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
 	if err != nil || pgid <= 0 {
 		return ""
+	}
+	// Confine to our PTY's session (see doc): reject a pgid that
+	// isn't part of the shell child's session — the pid-reuse race
+	// window otherwise reads an arbitrary process's comm.
+	if sessionPid > 0 {
+		if sid, serr := unix.Getsid(pgid); serr != nil || sid != sessionPid {
+			return ""
+		}
 	}
 	// Group leader's pid == pgid under shell job control. If the
 	// leader is gone (group survives leaderless), report "" rather

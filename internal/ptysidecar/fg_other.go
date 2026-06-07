@@ -8,4 +8,4 @@ import "os"
 // platforms report "" — the poller then never observes a change and
 // FrameFgState is never emitted (zero cost, field simply absent).
 // macOS/BSD support would use libproc/sysctl equivalents.
-func foregroundComm(_ *os.File) string { return "" }
+func foregroundComm(_ *os.File, _ int) string { return "" }

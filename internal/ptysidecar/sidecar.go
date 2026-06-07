@@ -70,11 +70,13 @@ func Run(ctx context.Context, cfg Config) error {
 	//    the env in this process's memory; leaving the file around
 	//    after fork is a needless creds-on-disk window.
 	env, err := loadEnvFile(cfg.EnvFile, cfg.AllowInheritedEnv)
-	if err != nil {
-		return fmt.Errorf("load env-file %q: %w", cfg.EnvFile, err)
-	}
+	// Remove the env-file regardless of load outcome — a failed/partial
+	// load must not leave credentials lingering on disk.
 	if cfg.EnvFile != "" {
 		_ = os.Remove(cfg.EnvFile)
+	}
+	if err != nil {
+		return fmt.Errorf("load env-file %q: %w", cfg.EnvFile, err)
 	}
 
 	// 3. Resolve shell, spawn child + PTY.
@@ -100,7 +102,18 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	// 4. Bind listener. Remove any stale socket from a previous
-	//    crashed sidecar at the same path.
+	//    crashed sidecar at the same path. Refuse if the path is a
+	//    symlink: the parent dir is 0700 uid-private so this isn't a
+	//    cross-user vector, but mirror the IPC server's posture and
+	//    never remove/bind through a symlink we didn't create.
+	if fi, lerr := os.Lstat(cfg.SocketPath); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		_ = master.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGHUP)
+			_, _ = cmd.Process.Wait()
+		}
+		return fmt.Errorf("refusing to bind sidecar socket: %s is a symlink", cfg.SocketPath)
+	}
 	_ = os.Remove(cfg.SocketPath)
 	lis, err := net.Listen("unix", cfg.SocketPath)
 	if err != nil {
@@ -386,7 +399,11 @@ func (s *supervisor) run(connCh <-chan net.Conn) exitReason {
 			// the regular pumps take over.
 			peekResumeOrDispatch(c, s.master, s.ring, s.log)
 			s.log.Info("sidecar.client_attached")
-			active = startClientPumps(c, s.master, s.ring, s.log)
+			childPID := 0
+			if s.cmd != nil && s.cmd.Process != nil {
+				childPID = s.cmd.Process.Pid
+			}
+			active = startClientPumps(c, s.master, childPID, s.ring, s.log)
 			// Eager drain so the reconnecting daemon doesn't wait for
 			// the next ring notification to receive buffered output.
 			active.drainRing(s.ring)
@@ -516,7 +533,7 @@ func (cp *clientPumps) drainRingAndSendExit(ring *Ring, info childExit) {
 // always runs the default.
 var fgPollInterval = 5 * time.Second
 
-func startClientPumps(conn net.Conn, master *os.File, ring *Ring, log *slog.Logger) *clientPumps {
+func startClientPumps(conn net.Conn, master *os.File, childPID int, ring *Ring, log *slog.Logger) *clientPumps {
 	cp := &clientPumps{
 		conn:   conn,
 		done:   make(chan struct{}),
@@ -545,7 +562,7 @@ func startClientPumps(conn net.Conn, master *os.File, ring *Ring, log *slog.Logg
 			case <-readerDone:
 				return
 			case <-ticker.C:
-				comm := foregroundComm(master)
+				comm := foregroundComm(master, childPID)
 				if comm == last && sentOnce {
 					continue
 				}

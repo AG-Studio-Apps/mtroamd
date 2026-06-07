@@ -223,6 +223,16 @@ func (s *TCPServer) Serve(ctx context.Context) error {
 		case s.inflight <- struct{}{}:
 			go func(nc net.Conn) {
 				defer func() { <-s.inflight }()
+				// Contain a panic to this one connection so a single
+				// malformed peer can't crash the daemon (and every
+				// other live session) via the decode/index path.
+				defer func() {
+					if r := recover(); r != nil {
+						s.logger.ErrorContext(ctx, "tcp: recovered panic serving connection",
+							"panic", r, "remote", nc.RemoteAddr().String())
+						_ = nc.Close()
+					}
+				}()
 				// Pre-auth deadline kicks in before any bytes are
 				// read. The handler clears it once the Attach frame
 				// has been consumed; until then, an idle client

@@ -104,6 +104,28 @@ func TestOSCTitleTrackerLengthCap(t *testing.T) {
 	}
 }
 
+// TestOSCTitleSanitizesControlBytes: a title carrying C0 control
+// bytes / DEL is stripped before storage, so it can't be replayed
+// into the client's terminal emulator as live escape fragments.
+func TestOSCTitleSanitizesControlBytes(t *testing.T) {
+	t.Parallel()
+	tracker := &oscTitleTracker{}
+	// OSC 2 body with an embedded backspace (0x08) and DEL (0x7F)
+	// amid printable text, terminated by BEL. (A bare ESC would
+	// terminate the OSC, so it's tested via the byte filter below.)
+	tracker.feed([]byte("\x1b]2;ab\x08c\x7fd\x07"))
+	if got := tracker.Title(); got != "abcd" {
+		t.Fatalf("control bytes not stripped: got %q, want %q", got, "abcd")
+	}
+	// Multibyte UTF-8 must survive (filtering <0x20 can't touch lead/
+	// continuation bytes, which are all >=0x80).
+	tracker2 := &oscTitleTracker{}
+	tracker2.feed([]byte("\x1b]2;café→\x07"))
+	if got := tracker2.Title(); got != "café→" {
+		t.Fatalf("multibyte mangled: got %q, want %q", got, "café→")
+	}
+}
+
 func TestOSCTitleTrackerSetTitle(t *testing.T) {
 	t.Parallel()
 	tracker := &oscTitleTracker{}

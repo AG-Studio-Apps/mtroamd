@@ -454,6 +454,40 @@ func TestAcquirePassiveCapEnforced(t *testing.T) {
 	}
 }
 
+// TestAcquireReadonlyCapEnforced: MaxReadonlyPerSession concurrent
+// read-only attaches succeed; the next returns ErrReadonlyCapacity,
+// and releasing one frees a slot.
+func TestAcquireReadonlyCapEnforced(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	gens := make([]uint64, 0, MaxReadonlyPerSession)
+	for i := 0; i < MaxReadonlyPerSession; i++ {
+		_, g, err := s.Acquire(context.Background(), AttachReadonly)
+		if err != nil {
+			t.Fatalf("readonly #%d unexpectedly failed: %v", i, err)
+		}
+		gens = append(gens, g)
+	}
+	if _, _, err := s.Acquire(context.Background(), AttachReadonly); !errors.Is(err, ErrReadonlyCapacity) {
+		t.Errorf("readonly overflow err = %v, want ErrReadonlyCapacity", err)
+	}
+	// An exclusive attach is NOT a read-only client and must still be
+	// admitted at the read-only cap (it lives in the same slice but is
+	// bounded by displacement, not the read-only count).
+	if _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Errorf("exclusive at readonly cap unexpectedly failed: %v", err)
+	}
+	// Releasing a read-only client frees a read-only slot.
+	s.Release(gens[0])
+	if _, _, err := s.Acquire(context.Background(), AttachReadonly); err != nil {
+		t.Errorf("readonly after release unexpectedly failed: %v", err)
+	}
+}
+
 // TestExclusiveDoesNotDisplacePassive: replacing the exclusive client
 // must leave passive watchers intact (they're invisible by design;
 // turnover invisibility cuts both ways).

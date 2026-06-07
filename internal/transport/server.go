@@ -287,6 +287,21 @@ func (s *Server) Serve(ctx context.Context) error {
 		case s.inflight <- struct{}{}:
 			go func(conn *quic.Conn) {
 				defer func() { <-s.inflight }()
+				// Contain a panic to this one connection. An
+				// unrecovered panic in any goroutine takes down the
+				// whole process — and with it every other live
+				// session. The serving path decodes and indexes over
+				// attacker-influenced wire bytes, so a single
+				// malformed peer must not be able to crash the daemon
+				// for everyone. (0x111 = arbitrary app error code,
+				// peer-opaque.)
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("transport: recovered panic serving QUIC connection",
+							"panic", r, "remote", conn.RemoteAddr().String())
+						_ = conn.CloseWithError(0x111, "internal error")
+					}
+				}()
 				// Accept the single client-initiated bidi stream
 				// out here (was inside ProtocolHandler before the
 				// transport-abstraction refactor). The whole
@@ -294,7 +309,18 @@ func (s *Server) Serve(ctx context.Context) error {
 				// tagged-frame envelopes — Handler doesn't see
 				// quic.* types, so the protocol layer is symmetric
 				// between QUIC and TCP.
-				stream, err := conn.AcceptStream(ctx)
+				//
+				// Bound the post-handshake wait for that stream,
+				// mirroring the TCP pre-auth read deadline. Without it
+				// a peer that completes the handshake (taking an
+				// inflight slot) but never opens the stream holds the
+				// slot until MaxIdleTimeout (30s) — 6x the TCP budget
+				// — so a patient flood can shed all legitimate clients
+				// while sitting in AcceptStream. The handler installs
+				// its own deadlines once the stream is up.
+				acceptCtx, cancel := context.WithTimeout(ctx, defaultPreAuthReadDeadline)
+				stream, err := conn.AcceptStream(acceptCtx)
+				cancel()
 				if err != nil {
 					_ = conn.CloseWithError(0x10E, "accept stream")
 					return

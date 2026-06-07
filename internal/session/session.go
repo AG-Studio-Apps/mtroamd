@@ -52,6 +52,16 @@ const (
 // `mtroam tail` loop.
 const MaxPassivePerSession = 8
 
+// MaxReadonlyPerSession caps concurrent read-only attachers per
+// session, mirroring MaxPassivePerSession. Read-only attaches are
+// token-gated (only the SSH-authenticated control path can mint an
+// attach token), so this is not an unauthenticated-DoS bound — it
+// caps the amplification a compromised or buggy authenticated client
+// can drive (each attach spawns ~6 goroutines + a ring waiter).
+// Generous relative to passive since read-only is a deliberate
+// multi-viewer mode.
+const MaxReadonlyPerSession = 16
+
 // String returns the wire form of an AttachMode for logging /
 // AttachAck.Mode echo. Mirrors protocol.AttachMode* constants.
 func (m AttachMode) String() string {
@@ -826,6 +836,20 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			}
 		}()
 	}
+	if mode == AttachReadonly {
+		// Cap read-only fan-out (see MaxReadonlyPerSession). Counts
+		// only read-only entries; the single exclusive client lives in
+		// the same slice but is bounded by displacement above.
+		n := 0
+		for _, c := range s.clients {
+			if c.mode == AttachReadonly {
+				n++
+			}
+		}
+		if n >= MaxReadonlyPerSession {
+			return nil, 0, ErrReadonlyCapacity
+		}
+	}
 	s.nextGen++
 	gen := s.nextGen
 	ctx, cancel := context.WithCancel(parent)
@@ -1272,3 +1296,7 @@ var ErrSessionClosed = errors.New("session is closed")
 // session already has MaxPassivePerSession passive watchers. Transport
 // layer maps this to AttachAck.Err = AttachErrCapacity on the wire.
 var ErrPassiveCapacity = errors.New("session passive-attach capacity reached")
+
+// ErrReadonlyCapacity is returned by Acquire when a session already
+// has MaxReadonlyPerSession read-only attachers.
+var ErrReadonlyCapacity = errors.New("session read-only-attach capacity reached")

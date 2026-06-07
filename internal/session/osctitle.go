@@ -1,6 +1,9 @@
 package session
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // oscTitleTracker watches the PTY byte stream for OSC (Operating
 // System Command) sequences that set the terminal title:
@@ -149,16 +152,30 @@ func (o *oscTitleTracker) commitLocked() {
 	if !o.capture {
 		return
 	}
-	// Trust the byte stream to be valid UTF-8 — Go's string(...)
-	// conversion preserves bytes verbatim. SwiftTerm on the client
-	// side will likewise process the bytes as UTF-8 once we re-
-	// emit them via the OSC 2 inject. If a non-UTF-8 sequence
-	// slipped in, the worst case is a mojibake title on the iOS
-	// side, which is no worse than the pre-fix "no title at all"
-	// state.
-	o.title = string(o.collect)
+	// Sanitize before storing: this title is replayed verbatim into
+	// the client's terminal emulator (re-emitted as `ESC]2;<title>BEL`
+	// on every attach), so a process inside the session must not be
+	// able to smuggle C0 control bytes / stray escape fragments
+	// through the title into the client's parser. Strip C0 controls
+	// (0x00-0x1F) and DEL, then coerce to valid UTF-8 (mirrors the fg
+	// comm sanitization). Filtering bytes < 0x20 is UTF-8-safe — lead
+	// and continuation bytes are all >= 0x80 — so multibyte runes
+	// survive intact.
+	o.title = sanitizeTitle(o.collect)
 	o.collect = o.collect[:0]
 	o.capture = false
+}
+
+// sanitizeTitle drops C0 control bytes + DEL and returns valid UTF-8.
+func sanitizeTitle(b []byte) string {
+	out := make([]byte, 0, len(b))
+	for _, c := range b {
+		if c < 0x20 || c == 0x7F {
+			continue
+		}
+		out = append(out, c)
+	}
+	return strings.ToValidUTF8(string(out), "")
 }
 
 // Title returns the most recently observed title, or an empty

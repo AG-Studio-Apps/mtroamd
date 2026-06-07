@@ -162,7 +162,8 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	attachCtx, attachGen, err := sess.Acquire(ctx, attachMode)
 	if err != nil {
 		ackErr := protocol.AttachErrUnknownSession
-		if errors.Is(err, session.ErrPassiveCapacity) {
+		if errors.Is(err, session.ErrPassiveCapacity) ||
+			errors.Is(err, session.ErrReadonlyCapacity) {
 			ackErr = protocol.AttachErrCapacity
 		}
 		_ = sendAttachAck(ctrl, protocol.AttachAck{
@@ -336,6 +337,21 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	pumpsCtx, pumpsCancel := context.WithCancel(attachCtx)
 	defer pumpsCancel()
 
+	// recoverPump contains a panic to a single per-attach goroutine.
+	// Each pump runs on its own goroutine, so the connection-level
+	// recover in the accept loop can't catch them — an unrecovered
+	// panic in any pump would crash the whole daemon and every other
+	// live session. On panic: log, cancel the pump group so the
+	// siblings exit and the connection tears down cleanly, then let
+	// the deferred wg.Done fire.
+	recoverPump := func(name string) {
+		if r := recover(); r != nil {
+			log.ErrorContext(ctx, "transport: recovered panic in pump",
+				"pump", name, "session", sess.ID().String(), "panic", r)
+			pumpsCancel()
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(4)
 
@@ -346,6 +362,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// and the per-client cost is one syscall + one frame every 5s.
 	go func() {
 		defer wg.Done()
+		defer recoverPump("rtt+fg")
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		// Foreground-command change detection (v1.6.1+) rides the
@@ -387,6 +404,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	go func() {
 		defer wg.Done()
 		defer pumpsCancel()
+		defer recoverPump("output")
 		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start); err != nil && !errors.Is(err, context.Canceled) {
 			log.DebugContext(pumpsCtx, "output pump exit", "err", err)
 		}
@@ -399,6 +417,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	go func() {
 		defer wg.Done()
 		defer pumpsCancel()
+		defer recoverPump("read")
 		if err := readPump(pumpsCtx, sess, ctrl, writeFrame, attachMode); err != nil &&
 			!errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 			log.DebugContext(pumpsCtx, "read pump exit", "err", err)
@@ -414,6 +433,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// doesn't support tcgetattr (e.g., the pipe-backed test PTY).
 	go func() {
 		defer wg.Done()
+		defer recoverPump("echo")
 		sess.WatchTermios(pumpsCtx, session.DefaultEchoPollInterval, func(s session.TermiosSnapshot) {
 			body, err := protocol.MarshalEchoConfirm(protocol.EchoConfirm{
 				EchoState: string(s.Echo),
