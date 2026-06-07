@@ -511,6 +511,11 @@ func (cp *clientPumps) drainRingAndSendExit(ring *Ring, info childExit) {
 	_ = cp.writeFrame(FrameChildExit, EncodeChildExit(info.code, info.signal))
 }
 
+// fgPollInterval is the foreground-command sample cadence. Package
+// var (not const) so the sidecar e2e test can shrink it; production
+// always runs the default.
+var fgPollInterval = 5 * time.Second
+
 func startClientPumps(conn net.Conn, master *os.File, ring *Ring, log *slog.Logger) *clientPumps {
 	cp := &clientPumps{
 		conn:   conn,
@@ -519,9 +524,39 @@ func startClientPumps(conn net.Conn, master *os.File, ring *Ring, log *slog.Logg
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	readerDone := make(chan struct{})
+
+	// Foreground-command poller (v1.6.1+): every 5s, sample the
+	// PTY's foreground process group's command name and push a
+	// FrameFgState when it changes. One syscall + one small /proc
+	// read per tick; never emits on non-Linux (foregroundComm is
+	// always ""). The first tick always sends, so a freshly
+	// connected daemon learns the value within ~5s.
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(fgPollInterval)
+		defer ticker.Stop()
+		last := ""
+		sentOnce := false
+		for {
+			select {
+			case <-readerDone:
+				return
+			case <-ticker.C:
+				comm := foregroundComm(master)
+				if comm == last && sentOnce {
+					continue
+				}
+				last = comm
+				sentOnce = true
+				if err := cp.writeFrame(FrameFgState, []byte(comm)); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	go func() {
 		defer wg.Done()

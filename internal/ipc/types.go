@@ -152,6 +152,14 @@ type SessionInfo struct {
 	Rows           uint16   `cbor:"rows,omitempty" json:"rows,omitempty"`
 	Cols           uint16   `cbor:"cols,omitempty" json:"cols,omitempty"`
 
+	// Fg is the session PTY's current foreground command name
+	// ("claude", "codex", "vim", …) — kernel truth from the sidecar's
+	// tcgetpgrp poller, ≤5s fresh. v1.6.1+ field, optional so older
+	// daemons/clients round-trip cleanly. Empty/absent = unknown.
+	// Raw process NAME only (no arguments) — agent taxonomy stays
+	// client-side.
+	Fg string `cbor:"fg,omitempty" json:"fg,omitempty"`
+
 	// Wedge-watcher cumulative counters. Optional so older daemon
 	// builds (pre-v0.9.4) can round-trip with newer mtroam clients
 	// without protocol breakage. Populated for every live session;

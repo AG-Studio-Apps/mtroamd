@@ -32,6 +32,11 @@ func newFakePTY() *fakePTY {
 	return p
 }
 
+// ForegroundComm conforms fakePTY to session.ForegroundReporter so
+// attach tests can assert AttachAck.Fg plumbing without a real
+// sidecar.
+func (p *fakePTY) ForegroundComm() string { return "fakecmd" }
+
 func (p *fakePTY) Read(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -463,5 +468,27 @@ func TestProtocolHandlerHonorsReplayBudget(t *testing.T) {
 	}
 	if !ack.Trunc {
 		t.Error("AttachAck.Trunc = false, want true (budget skipped output)")
+	}
+}
+
+
+// TestProtocolHandlerAttachAckCarriesFg — the foreground command
+// reaches the wire at attach time (v1.6.1+). The harness fakePTY
+// reports a canned value.
+func TestProtocolHandlerAttachAckCarriesFg(t *testing.T) {
+	t.Parallel()
+	h := newHandlerHarness(t)
+	defer h.cleanup()
+
+	tok, _ := h.reg.IssueAttachToken(h.sess.ID())
+	conn, stream, ack := dialAndAttach(t, h, h.sess.ID(), tok)
+	defer conn.CloseWithError(0, "")
+	defer stream.Close()
+
+	if !ack.OK {
+		t.Fatalf("attach failed: %s %s", ack.Err, ack.Msg)
+	}
+	if ack.Fg != "fakecmd" {
+		t.Errorf("AttachAck.Fg = %q, want %q", ack.Fg, "fakecmd")
 	}
 }

@@ -744,6 +744,7 @@ func (d *Daemon) HandleListSessions(ctx context.Context, _ ipc.ListSessionsReque
 			IdleTimeoutNs:           int64(sess.IdleTimeout()),
 			Rows:                    rows,
 			Cols:                    cols,
+			Fg:                      sess.ForegroundComm(),
 			WedgeTotalOutBytes:      totalOut,
 			WedgeResizesObserved:    resizes,
 			WedgeSilentWedges:       silent,

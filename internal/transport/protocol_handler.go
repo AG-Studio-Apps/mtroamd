@@ -277,6 +277,10 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// sessions arrive with the flag already false (LoadPersisted
 	// path) so a restore reports Restored=true, FreshlyCreated=false.
 	freshlyCreated := sess.ConsumeFirstAttach()
+	// One fg read shared by the AttachAck, the attach log, and the
+	// ticker's change-detection seed — separate reads could disagree
+	// (a change in the gap would then never be notified).
+	attachFg := sess.ForegroundComm()
 	ackBody, err := protocol.MarshalAttachAck(protocol.AttachAck{
 		V:               1,
 		OK:              true,
@@ -291,6 +295,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		RTTNanos:        rttNanosFor(ctrl),
 		AltScreenActive: sess.WedgeAltScreenActive(),
 		LastTitle:       sess.LastTitle(),
+		Fg:              attachFg,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "marshal AttachAck", "err", err)
@@ -315,6 +320,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		"replay_truncated", trunc,
 		"replay_budget", att.ReplayBudget,
 		"replay_bytes", head-start,
+		"fg", attachFg,
 	)
 	log.DebugContext(ctx, "session.attach.name",
 		"session", sess.ID().String(),
@@ -342,11 +348,24 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		defer wg.Done()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
+		// Foreground-command change detection (v1.6.1+) rides the
+		// same tick. Seeded from the AttachAck's value so the first
+		// AgentNotify only fires on a genuine post-attach change.
+		// Unlike RTTNotify this is NOT rtt-gated — TCP/tsnet clients
+		// (which never receive RTTNotify) still get fg updates.
+		lastFg := attachFg
 		for {
 			select {
 			case <-pumpsCtx.Done():
 				return
 			case <-ticker.C:
+				if fg := sess.ForegroundComm(); fg != lastFg {
+					lastFg = fg
+					if body, err := protocol.MarshalAgentNotify(protocol.AgentNotify{Fg: fg}); err == nil {
+						// Best-effort, same posture as RTTNotify.
+						_ = writeFrame(protocol.FrameTypeControl, body)
+					}
+				}
 				rtt := rttNanosFor(ctrl)
 				if rtt <= 0 {
 					continue // handshake hasn't seeded the smoothing window

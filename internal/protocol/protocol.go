@@ -99,6 +99,7 @@ const (
 	TypeGoodbye     = "Goodbye"
 	TypeEchoConfirm = "EchoConfirm"
 	TypeRTTNotify   = "RTTNotify"
+	TypeAgentNotify = "AgentNotify"
 
 	// TypeWedgeDetected (server → client) is emitted by the daemon
 	// when its per-session wedge watcher raises a candidate event
@@ -321,6 +322,18 @@ type AttachAck struct {
 	// SwiftTerm.terminalTitle — without it the pill loses Claude's
 	// orange styling on long-running sessions.
 	LastTitle string `cbor:"last_title,omitempty"`
+
+	// Fg is the bare command name of the session PTY's current
+	// foreground process group ("claude", "codex", "vim", …) —
+	// kernel truth via the sidecar's tcgetpgrp poller, ≤5s fresh at
+	// attach time. v1.6.1+ field; older clients ignore it. Empty /
+	// absent = unknown (pre-fg sidecar, non-Linux host, restored
+	// session before lazy spawn, or unresolvable). RAW name by
+	// design: agent taxonomy (Claude/Codex badges, recovery copy)
+	// stays client-side, so new agents cost no protocol change.
+	// Process NAME only — never arguments or terminal content.
+	// Ongoing changes flow via AgentNotify on the 5-second ticker.
+	Fg string `cbor:"fg,omitempty"`
 }
 
 // Ack reports the highest output sequence number the client has
@@ -466,6 +479,21 @@ func MarshalPing(m Ping) ([]byte, error)             { m.T = TypePing; return cb
 func MarshalPong(m Pong) ([]byte, error)             { m.T = TypePong; return cborMarshal(m) }
 func MarshalGoodbye(m Goodbye) ([]byte, error)       { m.T = TypeGoodbye; return cborMarshal(m) }
 func MarshalRTTNotify(m RTTNotify) ([]byte, error) { m.T = TypeRTTNotify; return cborMarshal(m) }
+
+// AgentNotify (server → client, v1.6.1+) reports a change in the
+// session's foreground command (see AttachAck.Fg for semantics).
+// Emitted on the per-attach 5-second ticker only when the value
+// changes — including to "" (foreground became unresolvable).
+// Pre-v1.6.1 clients ignore the unknown message type.
+type AgentNotify struct {
+	T  string `cbor:"t"`
+	Fg string `cbor:"fg"`
+}
+
+func MarshalAgentNotify(m AgentNotify) ([]byte, error) {
+	m.T = TypeAgentNotify
+	return cborMarshal(m)
+}
 func MarshalWedgeDetected(m WedgeDetected) ([]byte, error) {
 	m.T = TypeWedgeDetected
 	return cborMarshal(m)
