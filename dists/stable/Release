@@ -2,37 +2,37 @@ Origin: mtroamd
 Label: mtroamd
 Suite: stable
 Codename: stable
-Date: Sun, 07 Jun 2026 00:14:11 UTC
+Date: Sun, 07 Jun 2026 10:32:34 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (stable — production, matches the App Store app)
 MD5Sum:
- e1c7a0f0baf34525ffa191fe6a55e692 835 main/binary-amd64/Packages
- 1cf9892e1c40829c4551665fef188f7f 567 main/binary-amd64/Packages.gz
+ 47b46b1dc713c8b0ad1acd2be19f4f6c 835 main/binary-amd64/Packages
+ 253031eeec3b4f63f2362015ae5032eb 567 main/binary-amd64/Packages.gz
  f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
- 07d279ee3f259782c1505b9b2aec0121 835 main/binary-arm64/Packages
- f929d0e912b491c0401c34e6822df054 567 main/binary-arm64/Packages.gz
+ b974ad9ffdc3c283d542f6fbfe9a4edf 835 main/binary-arm64/Packages
+ e8dfe1d6eb08f5d60657ca2c8ecbb3d3 567 main/binary-arm64/Packages.gz
  adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
- b72f496fd9c7ef8002c0edc6dc10ef67 835 main/binary-armhf/Packages
- 21bd1d4b2cf84441f609fdbc5cd64455 566 main/binary-armhf/Packages.gz
+ 35549d8271d1ca2922122de70e92b16e 835 main/binary-armhf/Packages
+ 07996f35ca0f79e7fad8c0392663ebb2 568 main/binary-armhf/Packages.gz
  f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
 SHA1:
- 1df9e6dd98a49d0ee472aa6c3158c9db48b57cd7 835 main/binary-amd64/Packages
- 823281737b527022b433019ac6df88e9dc590d0d 567 main/binary-amd64/Packages.gz
+ 890194ac11dd3fa5e8cfe52959591ab27d5d3f74 835 main/binary-amd64/Packages
+ 891ec3cb931dfb6a0d9b99062e171588b8ed0d61 567 main/binary-amd64/Packages.gz
  d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
- 47be0a084cd7cd18feaecf3d18fd6059205011b1 835 main/binary-arm64/Packages
- 94054072bbc96a74feaccdd44eb563c6eea6354d 567 main/binary-arm64/Packages.gz
+ 4a59440de53886104a465264c5657f0da080fcf1 835 main/binary-arm64/Packages
+ d8a46d3767cc2b48a9e5b04246704cd5d1317dbe 567 main/binary-arm64/Packages.gz
  347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
- cd0a97ddefdfcc88273889266a019f416b0000f3 835 main/binary-armhf/Packages
- 1ef78bfe8838296e72fc91a8adf12ac99517ca36 566 main/binary-armhf/Packages.gz
+ 0062558b269e05318ce1bae98da543bfae2f2d1f 835 main/binary-armhf/Packages
+ 5bb70344840d1e45a10ec68faddad3349a1a64b5 568 main/binary-armhf/Packages.gz
  6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
 SHA256:
- e51cff5f5fbbae517f2a8228e91b273f03a8b072af9cec5b7c6e68e9ad1edcf7 835 main/binary-amd64/Packages
- 0869f21bf56ec7ffa52f80ca9cfc9cfa759e819305dc8fa49daa6b30954f9e60 567 main/binary-amd64/Packages.gz
+ 5123055ca6635b61111a988f380fb555e4fe0be592689d8c2b14456c88dbb961 835 main/binary-amd64/Packages
+ 96be92f8ee19506438d247766162d61c9ddfeaf08b61f05c848bc841d088fdd1 567 main/binary-amd64/Packages.gz
  44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
- 5e4136558268183f84f11017e833173aaf6d81e2d5684bc4d0264415933daca6 835 main/binary-arm64/Packages
- d6bc51eae2dd2a3df49cc760486222d81466a5a244e13b2bbd5dfb65d601437e 567 main/binary-arm64/Packages.gz
+ 4891dc35a207e6c26e68b27c622ceaba6e8e3e901483c29c8f5dcda68308924e 835 main/binary-arm64/Packages
+ d05803bf4195b5783653dc279d9322bd12cfb69975b410ae6e6f85a679f2e0b4 567 main/binary-arm64/Packages.gz
  ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
- 58c7ce82b0f89c19fdbf246e90d558809371a8bf2cb9ffdcb2e69a082b8df3cd 835 main/binary-armhf/Packages
- a4ee08b5a4fd9eca6aa679c3400d1ef75ab08843b55e466288fca5c7873c7e19 566 main/binary-armhf/Packages.gz
+ c6c3f8037b3d9e4cfe756575cac1958b0f34ecedd64b07ed3baf1f88857abfd7 835 main/binary-armhf/Packages
+ a6b64c7b83239dd3689e4e53c9e83a4aca804f6d50466444e04f9b8df5130eb3 568 main/binary-armhf/Packages.gz
  e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
