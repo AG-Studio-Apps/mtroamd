@@ -48,7 +48,8 @@ func ValidateTag(tag string) error {
 // pre-release identifier, so a post-tag dev build keeps the SAME
 // pre-release as its base tag (e.g. "v1.6.2-rc1-3-gabc" → pre "rc1")
 // while a genuine release tag's "-rc1" is preserved. Anchored at end.
-var describeTrailer = regexp.MustCompile(`-[0-9]+-g[0-9a-f]+$`)
+// (hash class is case-insensitive defensively; git emits lowercase.)
+var describeTrailer = regexp.MustCompile(`-[0-9]+-g[0-9a-fA-F]+$`)
 
 // splitVersion decomposes a version string into its MAJOR.MINOR.PATCH
 // triplet and its pre-release identifier ("" for a final release),

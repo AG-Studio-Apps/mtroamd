@@ -76,20 +76,26 @@ func runUpdate(args []string) int {
 	fmt.Printf("current:    %s\n", current)
 	fmt.Printf("available:  %s\n", target)
 
-	if release.VersionsMatch(current, target) && !*force {
-		fmt.Println("✓ already on this version")
-		return 0
+	if release.VersionsMatch(current, target) {
+		if !*force {
+			fmt.Println("✓ already on this version")
+			return 0
+		}
+		fmt.Printf("▸ --force: reinstalling %s (already on this version)\n", target)
 	}
 
 	// --force bypasses the ordering checks (not the crypto verification
 	// below); --allow-downgrade narrowly permits a downgrade.
 	cmp, ok := release.CompareSemver(target, current)
-	if ok && cmp < 0 && !*allowDowngrade && !*force {
-		fmt.Fprintf(os.Stderr,
-			"update: refusing to downgrade %s → %s. "+
-				"Re-run with --allow-downgrade if this is intentional.\n",
-			current, target)
-		return 3
+	if ok && cmp < 0 {
+		if !*allowDowngrade && !*force {
+			fmt.Fprintf(os.Stderr,
+				"update: refusing to downgrade %s → %s. "+
+					"Re-run with --allow-downgrade if this is intentional.\n",
+				current, target)
+			return 3
+		}
+		fmt.Printf("▸ downgrading %s → %s (forced)\n", current, target)
 	}
 
 	if *checkOnly {
