@@ -202,7 +202,12 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		return
 	}
 
-	start, head, trunc := computeReplayWindow(buf, att.AckSeq)
+	// Alt-screen state only matters when a budget came (the clamp is
+	// budget-gated) — skip the two mutex hops for budget-less CLI
+	// attaches.
+	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
+	start, head, trunc := computeReplayWindow(
+		buf, att.AckSeq, att.ReplayBudget, altActive)
 
 	// Sync writes on the single stream — outputPump and the read
 	// pump's control responses (Pong, AttachAck etc.) both call
@@ -308,6 +313,8 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		"peers", len(sess.PeerModes(attachGen)),
 		"replay_start", start,
 		"replay_truncated", trunc,
+		"replay_budget", att.ReplayBudget,
+		"replay_bytes", head-start,
 	)
 	log.DebugContext(ctx, "session.attach.name",
 		"session", sess.ID().String(),
@@ -618,15 +625,34 @@ func closeMsgFor(code uint64) string {
 	}
 }
 
+// AltScreenReplayCap bounds replay when the session's alt screen is
+// active AND the client supplied a ReplayBudget: the alt screen has
+// no scrollback, so anything beyond the final frame repaint is
+// parsed and discarded by the client — a full ring of TUI repaints
+// is pure attach latency (observed: 4.5–6.7s blank console on iOS
+// against a long-lived Claude session). 128 KiB ≫ one worst-case
+// styled frame (84×44 iPad is tens of KiB). Tunable during the
+// v1.6.0 RC. Budget-less clients (mtroam attach/tail) are never
+// clamped — full replay stays their contract.
+const AltScreenReplayCap = 128 * 1024
+
 // computeReplayWindow figures out where on the buffer the replay
-// stream should start, given the client's last-acked seq. Three
-// cases per docs/mtroam-protocol.md § 7.3 and § 11.5:
+// stream should start, given the client's last-acked seq and its
+// optional replay budget. Base cases per docs/mtroam-protocol.md
+// § 7.3 and § 11.5:
 //
-//   1. ack >= tail: replay from ack, no truncation
-//   2. ack <  tail: replay from tail, truncated=true (some output lost)
-//   3. ack >  head: nothing to replay (client claims to have seen
-//      bytes we never sent — bug, treat as ack=head)
-func computeReplayWindow(buf *session.RingBuffer, ack uint64) (start, head uint64, trunc bool) {
+//  1. ack >= tail: replay from ack, no truncation
+//  2. ack <  tail: replay from tail, truncated=true (some output lost)
+//  3. ack >  head: nothing to replay (client claims to have seen
+//     bytes we never sent — bug, treat as ack=head)
+//
+// When budget > 0 (v1.6.0+ clients), the window is additionally
+// capped at `budget` bytes back from head — tightened to
+// AltScreenReplayCap while the alt screen is active. The cap never
+// EXTENDS a window (a small-gap resume replays just the gap); when
+// it shrinks one, trunc=true so the client knows output was
+// skipped. budget == 0 (missing field) keeps pre-v1.6.0 behavior.
+func computeReplayWindow(buf *session.RingBuffer, ack, budget uint64, altActive bool) (start, head uint64, trunc bool) {
 	tail := buf.TailSeq()
 	head = buf.HeadSeq()
 	start = ack
@@ -636,6 +662,16 @@ func computeReplayWindow(buf *session.RingBuffer, ack uint64) (start, head uint6
 	}
 	if start > head {
 		start = head
+	}
+	if budget > 0 {
+		capBytes := budget
+		if altActive {
+			capBytes = min(capBytes, AltScreenReplayCap)
+		}
+		if head-start > capBytes {
+			start = head - capBytes
+			trunc = true
+		}
 	}
 	return start, head, trunc
 }

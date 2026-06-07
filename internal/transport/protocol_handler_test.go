@@ -138,6 +138,19 @@ func newHandlerHarness(t *testing.T) *harness {
 // from the daemon, control responses — flows over the same stream.
 func dialAndAttach(t *testing.T, h *harness, sid session.SessionID, token session.AttachToken) (*quic.Conn, *quic.Stream, protocol.AttachAck) {
 	t.Helper()
+	return dialAndAttachFrame(t, h, protocol.Attach{
+		V:         1,
+		Token:     token[:],
+		SessionID: sid[:],
+		Rows:      24,
+		Cols:      80,
+	})
+}
+
+// dialAndAttachFrame is dialAndAttach with a caller-supplied Attach
+// frame, for tests exercising optional fields (Mode, ReplayBudget).
+func dialAndAttachFrame(t *testing.T, h *harness, att protocol.Attach) (*quic.Conn, *quic.Stream, protocol.AttachAck) {
+	t.Helper()
 	var fp [32]byte
 	copy(fp[:], h.fp)
 
@@ -155,13 +168,7 @@ func dialAndAttach(t *testing.T, h *harness, sid session.SessionID, token sessio
 		t.Fatalf("open stream: %v", err)
 	}
 
-	body, err := protocol.MarshalAttach(protocol.Attach{
-		V:         1,
-		Token:     token[:],
-		SessionID: sid[:],
-		Rows:      24,
-		Cols:      80,
-	})
+	body, err := protocol.MarshalAttach(att)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,5 +356,112 @@ func TestProtocolHandlerReplaysBufferedOutputOnReattach(t *testing.T) {
 	}
 	if !bytes.Contains(got, missed) {
 		t.Errorf("replay missing %q; got %q", missed, got)
+	}
+}
+
+// TestComputeReplayWindow covers the v1.6.0 budget + alt-screen
+// clamp matrix on top of the original three ack cases. Uses a real
+// RingBuffer so the seq arithmetic (monotonic byte offsets, tail =
+// head-capacity once wrapped) is the genuine article.
+func TestComputeReplayWindow(t *testing.T) {
+	t.Parallel()
+
+	// 100-byte ring with 250 bytes written: head=250, tail=150.
+	wrapped, err := session.NewRingBuffer(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wrapped.Write(make([]byte, 250)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Big ring for the alt-screen cap cases: head = cap + 200_000,
+	// nothing dropped (tail=0).
+	big, err := session.NewRingBuffer(AltScreenReplayCap + 300_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bigHead := uint64(AltScreenReplayCap + 200_000)
+	if _, err := big.Write(make([]byte, bigHead)); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name      string
+		buf       *session.RingBuffer
+		ack       uint64
+		budget    uint64
+		altActive bool
+		wantStart uint64
+		wantTrunc bool
+	}{
+		// Pre-v1.6.0 behavior: budget 0 never clamps.
+		{"no-budget fresh attach replays from tail", wrapped, 0, 0, false, 150, true},
+		{"no-budget resume from ack", wrapped, 200, 0, false, 200, false},
+		{"no-budget ack beyond head clamps to head", wrapped, 999, 0, false, 250, false},
+		{"no-budget alt-screen alone never clamps", big, 0, 0, true, 0, false},
+
+		// Budget on the primary screen.
+		{"budget wider than window is a no-op", wrapped, 0, 1000, false, 150, true},
+		{"budget narrows fresh attach and marks trunc", wrapped, 0, 30, false, 220, true},
+		{"budget never extends a small-gap resume", wrapped, 240, 30, false, 240, false},
+		{"budget narrows a large-gap resume", wrapped, 160, 30, false, 220, true},
+
+		// Alt screen tightens the cap — but only when a budget came.
+		{"alt clamp wins over a large budget", big, 0, bigHead, true, bigHead - AltScreenReplayCap, true},
+		{"smaller budget wins over alt cap", big, 0, 1000, true, bigHead - 1000, true},
+		{"alt clamp ignored on primary screen", big, 0, bigHead, false, 0, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			start, head, trunc := computeReplayWindow(tc.buf, tc.ack, tc.budget, tc.altActive)
+			if start != tc.wantStart {
+				t.Errorf("start = %d, want %d", start, tc.wantStart)
+			}
+			if head != tc.buf.HeadSeq() {
+				t.Errorf("head = %d, want %d", head, tc.buf.HeadSeq())
+			}
+			if trunc != tc.wantTrunc {
+				t.Errorf("trunc = %v, want %v", trunc, tc.wantTrunc)
+			}
+		})
+	}
+}
+
+// TestProtocolHandlerHonorsReplayBudget drives the budget through
+// the real attach handshake: fill the buffer past the budget, attach
+// with ReplayBudget set, and assert the server starts the replay
+// budget-bytes back from head with Trunc set.
+func TestProtocolHandlerHonorsReplayBudget(t *testing.T) {
+	t.Parallel()
+	h := newHandlerHarness(t)
+	defer h.cleanup()
+
+	// 1 KiB of pre-attach output; ask for the last 100 bytes only.
+	h.pty.push(bytes.Repeat([]byte("x"), 1024))
+	time.Sleep(20 * time.Millisecond)
+
+	tok, _ := h.reg.IssueAttachToken(h.sess.ID())
+	conn, stream, ack := dialAndAttachFrame(t, h, protocol.Attach{
+		V:            1,
+		Token:        tok[:],
+		SessionID:    h.sess.ID().Bytes(),
+		Rows:         24,
+		Cols:         80,
+		ReplayBudget: 100,
+	})
+	defer conn.CloseWithError(0, "")
+	defer stream.Close()
+
+	if !ack.OK {
+		t.Fatalf("attach failed: %s %s", ack.Err, ack.Msg)
+	}
+	if want := ack.BufSeq - 100; ack.Start != want {
+		t.Errorf("AttachAck.Start = %d, want %d (head %d - budget 100)", ack.Start, want, ack.BufSeq)
+	}
+	if !ack.Trunc {
+		t.Error("AttachAck.Trunc = false, want true (budget skipped output)")
 	}
 }

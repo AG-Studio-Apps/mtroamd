@@ -7,6 +7,15 @@
 # silently to the app's compiled pin on any failure. Full design:
 # the iOS repo's docs/daemon-channel-pin.md.
 #
+# Version-scoped channels (2026-06-06): each daemon MAJOR.MINOR series
+# has its own manifest so a stable release never steers app versions
+# built against an older series (their compiled-pin guard would reject
+# it and regress them to the baked floor). The asset name derives from
+# the pin: the 1.5-and-earlier series keeps the legacy name
+# `ios-channel.json` (burned into shipped 2.0.x apps); later series
+# use `ios-channel-<MAJOR>-<MINOR>.json`. Serials are monotonic PER
+# CHANNEL FILE. prune-releases force-keeps every channel file's pin.
+#
 # Manual only:
 #
 #   gh workflow run publish-ios-channel -f pin=v1.4.12
@@ -58,25 +67,46 @@ jobs:
           gh release view "$PIN" --json name >/dev/null || {
             echo "::error::no GitHub release exists for $PIN"; exit 1; }
 
+      - name: Derive channel file from the pin's series
+        run: |
+          set -euo pipefail
+          MAJOR="$(echo "$PIN" | sed -E 's/^v([0-9]+)\..*/\1/')"
+          MINOR="$(echo "$PIN" | sed -E 's/^v[0-9]+\.([0-9]+)\..*/\1/')"
+          # 1.5-and-earlier keep the legacy bare name — it's compiled
+          # into the shipped 2.0.x apps and can never be renamed.
+          if [ "$MAJOR" -eq 1 ] && [ "$MINOR" -le 5 ]; then
+            CHANNEL="ios-channel"
+          else
+            CHANNEL="ios-channel-${MAJOR}-${MINOR}"
+          fi
+          echo "CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          echo "ASSET=${CHANNEL}.json" >> "$GITHUB_ENV"
+          echo "channel file: ${CHANNEL}.json"
+
       - name: Compute next serial
         run: |
           set -euo pipefail
-          # Monotonic across publishes: read the live manifest and add 1.
-          # First publish (no channel-ios release yet) starts at 1.
+          # Monotonic PER CHANNEL FILE: read the live manifest for THIS
+          # series and add 1. A series' first publish starts at 1 —
+          # detected by the asset being absent from the release's asset
+          # list (NOT by a failed download, which could be transient).
           #
-          # HARD-FAIL when the release exists but its manifest/serial is
+          # HARD-FAIL when the asset exists but its serial is
           # unreadable: silently restarting at 1 would make every device
-          # reject new manifests as stale serials until the counter
-          # caught back up — fail-safe for the fleet, but a silent
-          # publishing footgun.
+          # on this series reject new manifests as stale serials until
+          # the counter caught back up — fail-safe for the fleet, but a
+          # silent publishing footgun.
           SERIAL=1
           if gh release view channel-ios --json name >/dev/null 2>&1; then
-            gh release download channel-ios -p ios-channel.json -O /tmp/prev.json --clobber || {
-              echo "::error::channel-ios exists but ios-channel.json could not be downloaded"; exit 1; }
-            PREV="$(jq -r '.serial // empty' /tmp/prev.json || true)"
-            [[ "$PREV" =~ ^[0-9]+$ ]] || {
-              echo "::error::previous manifest serial unreadable ('${PREV}') — refusing to restart numbering"; exit 1; }
-            SERIAL=$((PREV + 1))
+            HAVE="$(gh release view channel-ios --json assets --jq '.assets[].name' | grep -cFx "$ASSET" || true)"
+            if [ "$HAVE" -gt 0 ]; then
+              gh release download channel-ios -p "$ASSET" -O /tmp/prev.json --clobber || {
+                echo "::error::channel-ios lists $ASSET but it could not be downloaded"; exit 1; }
+              PREV="$(jq -r '.serial // empty' /tmp/prev.json || true)"
+              [[ "$PREV" =~ ^[0-9]+$ ]] || {
+                echo "::error::previous $ASSET serial unreadable ('${PREV}') — refusing to restart numbering"; exit 1; }
+              SERIAL=$((PREV + 1))
+            fi
           fi
           echo "SERIAL=$SERIAL" >> "$GITHUB_ENV"
           echo "serial: $SERIAL"
@@ -89,17 +119,19 @@ jobs:
           set -euo pipefail
           [ -n "$MINISIGN_KEY" ] || { echo "::error::MINISIGN_KEY secret missing"; exit 1; }
           sudo apt-get update -qq && sudo apt-get install -y -qq minisign
-          printf '{"schema":1,"serial":%d,"pin":"%s"}\n' "$SERIAL" "$PIN" > ios-channel.json
-          jq . ios-channel.json   # syntax sanity before signing
+          printf '{"schema":1,"serial":%d,"pin":"%s"}\n' "$SERIAL" "$PIN" > "$ASSET"
+          jq . "$ASSET"   # syntax sanity before signing
           echo "$MINISIGN_KEY" > /tmp/minisign.key
           chmod 600 /tmp/minisign.key
           # Trusted comment binds the signature to this artifact's
-          # semantics; the iOS app reconciles it against the JSON
-          # (same pattern as the installer's SHA256SUMS tag binding).
+          # semantics INCLUDING the channel name — a validly-signed
+          # manifest for one series can't be replayed as another's.
+          # Bash twin of DaemonChannel.expectedTrustedComment (iOS);
+          # format drift freezes the channel (fail-safe, but a footgun).
           echo "$MINISIGN_PASSWORD" | minisign -S \
             -s /tmp/minisign.key \
-            -t "mtroamd ios-channel serial $SERIAL pin $PIN" \
-            -m ios-channel.json
+            -t "mtroamd $CHANNEL serial $SERIAL pin $PIN" \
+            -m "$ASSET"
           rm /tmp/minisign.key
 
       - name: Publish to rolling channel-ios release
@@ -110,9 +142,10 @@ jobs:
               --title "iOS Daemon Channel" \
               --notes "Rolling signed manifest read by the meshTerm iOS app (Daemon Channel). Do not delete — assets are replaced in place by the publish-ios-channel workflow." \
               --latest=false
-          gh release upload channel-ios ios-channel.json ios-channel.json.minisig --clobber
+          gh release upload channel-ios "$ASSET" "$ASSET.minisig" --clobber
           {
             echo "## iOS channel published"
+            echo "- channel: \`$ASSET\`"
             echo "- pin: \`$PIN\`"
             echo "- serial: \`$SERIAL\`"
           } >> "$GITHUB_STEP_SUMMARY"
