@@ -139,7 +139,11 @@ func reattachOne(ctx context.Context, sess *session.Session, sessionDir string, 
 		return false, fmt.Errorf("process alive but socket dial failed: %w", derr)
 	}
 
-	conn := newConn(sess.ID().String(), sock, logger)
+	// Pass the pidfile pid so the daemon-side fg fallback poller can
+	// resolve fg from /proc for this reconnected sidecar (the common
+	// 1.5.x→1.6.x upgrade case: a pre-1.6.x sidecar that never emits
+	// FrameFgState).
+	conn := newConn(sess.ID().String(), sock, pid, logger)
 
 	// Send FrameResume(lastSidecarSeq) BEFORE AssignPTY + Pump start.
 	// The sidecar's peekResumeOrDispatch consumes the frame with a

@@ -201,7 +201,7 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 	// that's fine.
 	_ = os.Remove(envPath)
 
-	return newConn(cfg.SessionID, sock, logger), nil
+	return newConn(cfg.SessionID, sock, sidecarPID, logger), nil
 }
 
 // dialWithBackoff polls the socket path until it's connectable or

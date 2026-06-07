@@ -18,7 +18,7 @@ import (
 func pipePair(t *testing.T) (*Conn, net.Conn) {
 	t.Helper()
 	clientSide, sidecarSide := net.Pipe()
-	conn := newConn("testsess", clientSide, nil)
+	conn := newConn("testsess", clientSide, 0, nil)
 	t.Cleanup(func() {
 		_ = conn.Close()
 		_ = sidecarSide.Close()

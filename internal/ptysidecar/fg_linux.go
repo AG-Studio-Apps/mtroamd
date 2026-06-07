@@ -40,9 +40,24 @@ func foregroundComm(master *os.File, sessionPid int) string {
 	if err != nil || pgid <= 0 {
 		return ""
 	}
-	// Confine to our PTY's session (see doc): reject a pgid that
-	// isn't part of the shell child's session — the pid-reuse race
-	// window otherwise reads an arbitrary process's comm.
+	return ResolveForegroundComm(pgid, sessionPid)
+}
+
+// ResolveForegroundComm turns a foreground process-group id into a
+// bare command name, getsid-confined to sessionPid and UTF-8-capped.
+// Shared by two callers that obtain the pgid differently: the sidecar
+// via tcgetpgrp on the PTY master (foregroundComm above), and the
+// DAEMON via /proc/<shell>/stat tpgid (the carryover-session fallback
+// for pre-1.6.x sidecars that never emit FrameFgState). Keeping one
+// resolver means the confinement + sanitization can't drift between
+// the two paths. sessionPid<=0 disables the getsid confinement.
+func ResolveForegroundComm(pgid, sessionPid int) string {
+	if pgid <= 0 {
+		return ""
+	}
+	// Confine to the expected session (see doc): reject a pgid that
+	// isn't part of the shell's session — the pid-reuse race window
+	// otherwise reads an arbitrary process's comm.
 	if sessionPid > 0 {
 		if sid, serr := unix.Getsid(pgid); serr != nil || sid != sessionPid {
 			return ""

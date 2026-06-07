@@ -87,8 +87,23 @@ type Conn struct {
 	// Older sidecars never send the frame so this stays "" (=
 	// unknown) — same graceful posture as the termios cache's
 	// Unknown initial state.
-	fgMu  sync.Mutex
-	fgVal string
+	//
+	// fgCapable flips true on the first FrameFgState, marking the
+	// sidecar as a self-reporting (1.6.x) build. The daemon-side
+	// fallback poller (runFgFallbackPoller, Linux only) stands down
+	// once this is set, so a current sidecar always wins and a
+	// pre-1.6.x sidecar's carried-over session still gets fg resolved
+	// from /proc — without anyone killing the session.
+	fgMu      sync.Mutex
+	fgVal     string
+	fgCapable bool
+	// sidecarPID is the sidecar process (captured at spawn, or read
+	// from the pidfile on reconnect). 0 = unknown → fallback poller
+	// disabled. shellPID caches the sidecar's child shell (resolved
+	// once via /proc by the poller; the shell is stable for the
+	// session's life).
+	sidecarPID int
+	shellPID   int
 
 	// Child-exit metadata (captured for diagnostics; not surfaced via
 	// the PTY interface today). Set by runFrameReader on FrameChildExit
@@ -112,8 +127,10 @@ type ChildExit struct {
 // newConn wraps a connected Unix socket as a *Conn. The caller has
 // already dialed (and optionally sent any handshake — there is none
 // today). The returned Conn starts its frame-reader goroutine
-// immediately.
-func newConn(sessionID string, sock net.Conn, logger *slog.Logger) *Conn {
+// immediately. sidecarPID identifies the sidecar process (0 if
+// unknown) and enables the daemon-side fg fallback poller for
+// pre-1.6.x sidecars that never self-report.
+func newConn(sessionID string, sock net.Conn, sidecarPID int, logger *slog.Logger) *Conn {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
@@ -124,9 +141,11 @@ func newConn(sessionID string, sock net.Conn, logger *slog.Logger) *Conn {
 		readerDone: make(chan struct{}),
 		echoVal:    ptysidecar.EchoUnknown,
 		canonVal:   ptysidecar.CanonUnknown,
+		sidecarPID: sidecarPID,
 	}
 	c.readCond = sync.NewCond(&c.readMu)
 	go c.runFrameReader()
+	go c.runFgFallbackPoller()
 	return c
 }
 
@@ -311,6 +330,9 @@ func (c *Conn) runFrameReader() {
 			}
 			c.fgMu.Lock()
 			c.fgVal = comm
+			// The sidecar self-reports → it's a 1.6.x build; the
+			// daemon-side fallback poller stands down (sidecar wins).
+			c.fgCapable = true
 			c.fgMu.Unlock()
 		case ptysidecar.FrameChildExit:
 			code, sig, derr := ptysidecar.DecodeChildExit(body)
