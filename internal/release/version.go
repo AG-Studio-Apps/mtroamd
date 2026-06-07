@@ -42,68 +42,180 @@ func ValidateTag(tag string) error {
 	return nil
 }
 
+// describeTrailer matches the suffix `git describe --tags` appends past
+// a tag when the build is ahead of it: "-<commits>-g<shorthash>".
+// Stripped (along with a trailing "-dirty") BEFORE we read the
+// pre-release identifier, so a post-tag dev build keeps the SAME
+// pre-release as its base tag (e.g. "v1.6.2-rc1-3-gabc" → pre "rc1")
+// while a genuine release tag's "-rc1" is preserved. Anchored at end.
+var describeTrailer = regexp.MustCompile(`-[0-9]+-g[0-9a-f]+$`)
+
+// splitVersion decomposes a version string into its MAJOR.MINOR.PATCH
+// triplet and its pre-release identifier ("" for a final release),
+// after removing git-describe trailers ("-dirty", "-<n>-g<hash>").
+// ok is false if the triplet doesn't parse.
+//
+//	"v1.6.2-rc1"            → ([1 6 2], "rc1")
+//	"v1.6.2"               → ([1 6 2], "")
+//	"v1.6.2-rc1-3-gabc123" → ([1 6 2], "rc1")   // dev build off rc1
+//	"v1.6.2-3-gabc123"     → ([1 6 2], "")       // dev build off final
+//	"v1.6.2-rc1-dirty"     → ([1 6 2], "rc1")
+func splitVersion(s string) (triplet [3]int, prerelease string, ok bool) {
+	v := strings.TrimPrefix(s, "v")
+	v = strings.TrimSuffix(v, "-dirty")
+	v = describeTrailer.ReplaceAllString(v, "")
+	base := v
+	if i := strings.Index(v, "-"); i != -1 {
+		base = v[:i]
+		prerelease = v[i+1:]
+	}
+	parts := strings.SplitN(base, ".", 4)
+	if len(parts) < 3 {
+		return [3]int{}, "", false
+	}
+	for i := 0; i < 3; i++ {
+		n, err := strconv.Atoi(parts[i])
+		if err != nil || n < 0 {
+			return [3]int{}, "", false
+		}
+		triplet[i] = n
+	}
+	return triplet, prerelease, true
+}
+
 // VersionsMatch returns true if `current` and `target` refer to the
-// same version. The build stamp is whatever `git describe --tags
-// --dirty --always` printed (e.g. "v0.1.1", "v0.1.1-3-gabc1234",
-// "v0.1.1-dirty"); the target is typically a clean "vMAJ.MIN.PATCH"
-// tag. We compare on the leading version prefix so a dirty / post-
-// tag build cleanly matches its base tag.
+// same version — same triplet AND same pre-release. The build stamp is
+// whatever `git describe --tags --dirty --always` printed (e.g.
+// "v1.6.2", "v1.6.2-rc1", "v1.6.2-rc1-3-gabc1234", "v1.6.2-dirty");
+// the target is typically a clean tag. git-describe trailers are
+// stripped first, so a dirty / post-tag build still matches its base
+// tag, but a real pre-release is distinguished: v1.6.2-rc1 ≠ v1.6.2-rc2
+// and v1.6.2-rc1 ≠ v1.6.2 (so an rc can be replaced by the next rc or
+// by the final release — the bug this fixes).
 func VersionsMatch(current, target string) bool {
-	c, ok1 := ParseSemver(current)
-	t, ok2 := ParseSemver(target)
+	ct, cp, ok1 := splitVersion(current)
+	tt, tp, ok2 := splitVersion(target)
 	if !ok1 || !ok2 {
 		return BaseTag(current) == BaseTag(target)
 	}
-	return c == t
+	return ct == tt && cp == tp
 }
 
-// CompareSemver returns (-1, 0, +1) comparing a vs b on their
-// MAJOR.MINOR.PATCH triplets, or (0, false) if either side doesn't
-// parse. Anything after the first '-' (pre-release / metadata) is
-// IGNORED for ordering — a "vX.Y.Z-rc1" is treated as equal to
-// "vX.Y.Z" here. Deliberate coarse rule: we don't rank rc1 vs rc2,
-// and our release pipeline only signs final tags. Anti-rollback
-// uses strict ordering, so coarse-equality is the conservative side.
+// CompareSemver returns (-1, 0, +1) comparing a vs b, or (0, false) if
+// either side doesn't parse. Triplets compare first; on a tie, semver
+// pre-release precedence applies: a final release outranks any
+// pre-release of the same triplet, and two pre-releases compare
+// naturally (so rc2 < rc10, not lexical). Drives anti-rollback —
+// rc1→rc2 and rc→final are upgrades; rc2→rc1 a downgrade.
 func CompareSemver(a, b string) (int, bool) {
-	av, ok1 := ParseSemver(a)
-	bv, ok2 := ParseSemver(b)
+	at, ap, ok1 := splitVersion(a)
+	bt, bp, ok2 := splitVersion(b)
 	if !ok1 || !ok2 {
 		return 0, false
 	}
 	for i := 0; i < 3; i++ {
 		switch {
-		case av[i] < bv[i]:
+		case at[i] < bt[i]:
 			return -1, true
-		case av[i] > bv[i]:
+		case at[i] > bt[i]:
 			return +1, true
 		}
 	}
-	return 0, true
+	return comparePrerelease(ap, bp), true
 }
 
-// ParseSemver extracts MAJOR.MINOR.PATCH ints from a version string
-// of the form "vMAJOR.MINOR.PATCH" (with optional "v" prefix and
-// optional "-suffix"). Returns the triplet plus an ok flag; ok is
-// false if any field doesn't parse as a non-negative integer.
-func ParseSemver(s string) ([3]int, bool) {
-	base := BaseTag(s)
-	parts := strings.SplitN(base, ".", 4)
-	if len(parts) < 3 {
-		return [3]int{}, false
+// comparePrerelease orders two pre-release identifiers of an otherwise
+// equal triplet. An empty identifier (a final release) ranks ABOVE any
+// pre-release (semver §11). Two non-empty identifiers compare
+// naturally so numeric runs order numerically (rc2 < rc10).
+func comparePrerelease(a, b string) int {
+	switch {
+	case a == b:
+		return 0
+	case a == "":
+		return +1 // final > pre-release
+	case b == "":
+		return -1
+	default:
+		return naturalCompare(a, b)
 	}
-	out := [3]int{}
-	for i := 0; i < 3; i++ {
-		n, err := strconv.Atoi(parts[i])
-		if err != nil || n < 0 {
-			return [3]int{}, false
+}
+
+// naturalCompare compares two strings treating maximal digit runs as
+// numbers ("rc2" < "rc10"); non-digit runs compare bytewise. Numeric
+// runs are compared as strings (leading-zero-trimmed length, then
+// lexical) so arbitrarily long runs can't overflow.
+func naturalCompare(a, b string) int {
+	for len(a) > 0 && len(b) > 0 {
+		aDigit := a[0] >= '0' && a[0] <= '9'
+		bDigit := b[0] >= '0' && b[0] <= '9'
+		if aDigit && bDigit {
+			ar, arest := digitRun(a)
+			br, brest := digitRun(b)
+			if c := compareNumericRun(ar, br); c != 0 {
+				return c
+			}
+			a, b = arest, brest
+			continue
 		}
-		out[i] = n
+		if a[0] != b[0] {
+			if a[0] < b[0] {
+				return -1
+			}
+			return +1
+		}
+		a, b = a[1:], b[1:]
 	}
-	return out, true
+	switch {
+	case len(a) == len(b):
+		return 0
+	case len(a) < len(b):
+		return -1
+	default:
+		return +1
+	}
+}
+
+// digitRun splits a leading run of ASCII digits off s.
+func digitRun(s string) (run, rest string) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	return s[:i], s[i:]
+}
+
+// compareNumericRun orders two ASCII-digit strings as numbers without
+// parsing (overflow-proof): strip leading zeros, then the shorter is
+// the smaller magnitude, ties broken lexically.
+func compareNumericRun(a, b string) int {
+	a = strings.TrimLeft(a, "0")
+	b = strings.TrimLeft(b, "0")
+	switch {
+	case len(a) != len(b):
+		if len(a) < len(b) {
+			return -1
+		}
+		return +1
+	case a < b:
+		return -1
+	case a > b:
+		return +1
+	default:
+		return 0
+	}
+}
+
+// ParseSemver extracts MAJOR.MINOR.PATCH ints from a version string of
+// the form "vMAJOR.MINOR.PATCH" (optional "v" prefix and "-suffix").
+func ParseSemver(s string) ([3]int, bool) {
+	t, _, ok := splitVersion(s)
+	return t, ok
 }
 
 // BaseTag strips a leading "v" and a trailing "-anything" so we get
-// the bare "X.Y.Z" form.
+// the bare "X.Y.Z" form. Used as the VersionsMatch fallback for
+// strings that don't parse as a triplet.
 func BaseTag(s string) string {
 	s = strings.TrimPrefix(s, "v")
 	if i := strings.Index(s, "-"); i != -1 {

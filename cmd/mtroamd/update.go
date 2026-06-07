@@ -48,6 +48,11 @@ func runUpdate(args []string) int {
 			"By default a downgrade refuses to proceed — even with --tag — "+
 			"so an accidental or attacker-induced 'latest' rollback can't "+
 			"silently install a known-vulnerable older signed build.")
+	force := fs.Bool("force", false,
+		"reinstall the target tag even if it matches/precedes the running "+
+			"version (bypasses the version checks; signature + checksum "+
+			"verification still apply). Useful to re-pull a re-cut tag or to "+
+			"move between same-base prereleases.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd update [flags]\n\n")
 		fs.PrintDefaults()
@@ -91,7 +96,7 @@ func runUpdate(args []string) int {
 	fmt.Printf("current:    %s\n", current)
 	fmt.Printf("available:  %s\n", target)
 
-	if release.VersionsMatch(current, target) {
+	if release.VersionsMatch(current, target) && !*force {
 		fmt.Println("✓ already on this version")
 		return 0
 	}
@@ -101,8 +106,10 @@ func runUpdate(args []string) int {
 	// still valid (it was signed at the time) — so without this check
 	// a flipped GitHub "latest" pointer, a malicious mirror, or a
 	// typoed `--tag` could downgrade us into a known-bad build.
+	// --force bypasses this ordering check (crypto verification below
+	// is NOT bypassed); --allow-downgrade narrowly permits a downgrade.
 	cmp, ok := release.CompareSemver(target, current)
-	if ok && cmp < 0 && !*allowDowngrade {
+	if ok && cmp < 0 && !*allowDowngrade && !*force {
 		fmt.Fprintf(os.Stderr,
 			"update: refusing to downgrade %s → %s. "+
 				"Re-run with --allow-downgrade if this is intentional.\n",
