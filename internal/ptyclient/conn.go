@@ -90,10 +90,10 @@ type Conn struct {
 	//
 	// fgCapable flips true on the first FrameFgState, marking the
 	// sidecar as a self-reporting (1.6.x) build. The daemon-side
-	// fallback poller (runFgFallbackPoller, Linux only) stands down
-	// once this is set, so a current sidecar always wins and a
-	// pre-1.6.x sidecar's carried-over session still gets fg resolved
-	// from /proc — without anyone killing the session.
+	// fallback poller (runFgFallbackPoller; Linux /proc + macOS
+	// sysctl, no-op elsewhere) stands down once this is set, so a
+	// current sidecar always wins and a pre-1.6.x sidecar's carried-
+	// over session still gets fg resolved — without anyone killing it.
 	fgMu      sync.Mutex
 	fgVal     string
 	fgCapable bool
