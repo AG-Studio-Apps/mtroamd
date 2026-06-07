@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 //   - stops any running daemon
 //   - removes the systemd unit / launchd plist
 //   - removes the binary at ~/.local/bin/mtroamd
+//   - removes the sibling CLI at ~/.local/bin/mtroam (the installer lays
+//     down both; this command used to orphan the CLI)
 //   - LEAVES the state dir (~/.local/share/mtroamd) alone so a
 //     reinstall keeps the same cert and iOS's pinned fingerprint
 //     still matches
@@ -99,6 +102,23 @@ func runUninstall(args []string) int {
 		}
 	} else {
 		fmt.Printf("▸ No binary at %s (already removed?)\n", binPath)
+	}
+
+	// 1b. Remove the sibling `mtroam` CLI from the same bin dir. The iOS
+	//     installer lays down BOTH `mtroamd` and `mtroam`, but this command
+	//     historically removed only the daemon, orphaning the CLI. Safe to
+	//     delete here: the package-managed guard above (`return 2`) already
+	//     guaranteed binPath is the user-local ~/.local/bin copy, so its
+	//     directory is user-owned. Best-effort + idempotent (quiet when
+	//     absent — e.g. a reuse-mode install never wrote a private CLI).
+	mtroamPath := filepath.Join(filepath.Dir(binPath), "mtroam")
+	if fileExists(mtroamPath) {
+		if err := os.Remove(mtroamPath); err != nil {
+			fmt.Fprintf(os.Stderr, "  ✘ remove CLI %s: %v\n", mtroamPath, err)
+			stragglers++
+		} else {
+			fmt.Printf("▸ Removed CLI at %s\n", mtroamPath)
+		}
 	}
 
 	// 2. Stop + remove the supervisor record.
