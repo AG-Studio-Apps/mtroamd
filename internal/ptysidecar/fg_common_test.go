@@ -70,6 +70,22 @@ func TestParseProcArgs(t *testing.T) {
 	}
 }
 
+// FuzzParseProcArgs asserts the KERN_PROCARGS2 decoder never panics on
+// arbitrary input — it decodes an attacker-influenceable kernel buffer,
+// and gosec/govulncheck can't reason about slice bounds. Seed with a
+// well-formed buffer; the fuzzer mutates toward truncation/garbage.
+// (Re-run on any change to parseProcArgs — the table test is necessary
+// but not sufficient.)
+func FuzzParseProcArgs(f *testing.F) {
+	f.Add(makeProcArgs(2, "/usr/local/bin/node", 3,
+		[]string{"node", "/usr/local/bin/claude"}, []string{"PATH=/usr/bin"}))
+	f.Add([]byte{})
+	f.Add([]byte{1, 2, 3})
+	f.Fuzz(func(_ *testing.T, buf []byte) {
+		_ = parseProcArgs(buf) // must not panic / OOB / hang
+	})
+}
+
 func TestCommFromArgs(t *testing.T) {
 	t.Parallel()
 	bb := func(ss ...string) [][]byte {
