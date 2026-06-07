@@ -60,6 +60,7 @@ func (c *Conn) runFgFallbackPoller() {
 
 	ticker := time.NewTicker(fgFallbackInterval)
 	defer ticker.Stop()
+	logged := false // log the first successful resolution once (triage).
 	for {
 		if c.fgIsCapable() {
 			return // a FrameFgState arrived late — sidecar takes over.
@@ -72,6 +73,11 @@ func (c *Conn) runFgFallbackPoller() {
 				c.fgVal = comm
 			}
 			c.fgMu.Unlock()
+			if !logged {
+				logged = true
+				c.logger.Debug("fg-fallback: resolved fg from /proc",
+					"shell_pid", c.shellPID, "fg", comm)
+			}
 		}
 		select {
 		case <-c.readerDone:
@@ -89,6 +95,8 @@ func (c *Conn) fgIsCapable() bool {
 
 // foregroundFromProc reads the cached shell's tpgid and resolves it
 // through the SAME getsid-confined resolver the sidecar uses.
+// c.shellPID is touched only by the single poller goroutine
+// (write-once before the loop, read-only here), so no lock is needed.
 func (c *Conn) foregroundFromProc() string {
 	tpgid, ok := tpgidOf(c.shellPID)
 	if !ok {
@@ -99,6 +107,10 @@ func (c *Conn) foregroundFromProc() string {
 
 // sessionShellPID finds the sidecar's direct child (the shell) by
 // scanning /proc for ppid==sidecarPID. Called once per session.
+// Relies on the sidecar having exactly one direct child (the shell
+// from cpty.StartWithSize); returns the first match. If the sidecar
+// ever forks additional direct children this would need to
+// disambiguate by comm.
 func sessionShellPID(sidecarPID int) (int, bool) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
