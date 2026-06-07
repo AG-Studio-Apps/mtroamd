@@ -233,7 +233,8 @@ The pre-`mode` field client posture is preserved exactly: an Attach with no `mod
   "trunc": false,                  // true iff the requested ack point is older than the buffer's tail (replay was truncated)
   "mode": "exclusive",             // the role the daemon resolved (echoes Attach.mode; "exclusive" if unrecognised)
   "peers": ["readonly"],           // modes of OTHER clients currently attached, excluding this one. Empty when sole attach.
-  "r": false                       // restored (optional, omitempty): see § 7.3.1
+  "r": false,                      // restored (optional, omitempty): see § 7.3.1
+  "fg": "codex"                    // optional (v1.6.1+): the PTY's current foreground command name
 }
 ```
 
@@ -248,6 +249,28 @@ If `trunc = true`, the client should display a one-line "[…some output lost du
 `r: true` indicates the session this attach is connecting to was **reconstructed from on-disk state** at the daemon's most-recent startup — its scrollback was hydrated from a previous daemon run's snapshot, and the shell process the client is now attached to was lazily spawned on this attach (the prior shell died with the prior daemon). Set on the first attach after a daemon restart; subsequent reattaches within the same daemon run see `r: false` (or the field absent — CBOR omitempty).
 
 Clients SHOULD surface a transient "Restored from previous session" banner so users understand the scrollback above the current prompt is replayed history, not output from a still-running command.
+
+#### 7.3.2 Foreground command (`fg`, v1.6.1+)
+
+`fg` is the bare command name of the session PTY's current foreground process
+group ("claude", "codex", "vim", …) — kernel truth (tcgetpgrp → `/proc/<pgid>/comm`)
+sampled by the session's sidecar every 5 seconds. Raw NAME by design: agent
+taxonomy (badges, recovery copy) stays client-side, so new agents need no
+protocol change. Process names only — never arguments or terminal content.
+Empty/absent = unknown (pre-v1.6.1 sidecar, non-Linux host, restored session
+before lazy spawn, or unresolvable). Ongoing changes flow via `AgentNotify`.
+
+#### 7.3.3 `AgentNotify` (server → client, v1.6.1+)
+
+```cbor
+{ "t": "AgentNotify", "fg": "codex" }
+```
+
+Emitted on the per-attach 5-second ticker only when the session's foreground
+command changes (including to `""`). Unlike `RTTNotify` it is sent on every
+transport (TCP included). Clients MUST ignore unknown message types, so
+pre-v1.6.1 clients drop it harmlessly. The same value appears in
+`SessionInfo.fg` on the list surface (`mtroam list --json`).
 
 Forward-compat: pre-persistence clients ignore the field; `omitempty` keeps the wire form unchanged in the common non-restored case.
 

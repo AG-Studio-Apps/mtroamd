@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -80,6 +81,14 @@ type Conn struct {
 	echoVal     byte // ptysidecar.EchoOff / EchoOn / EchoUnknown
 	canonVal    byte // ptysidecar.CanonOff / CanonOn / CanonUnknown
 	echoValid   bool // false until first FrameEchoState arrives
+
+	// Foreground-command cache (v1.6.1+). Last FrameFgState body
+	// from the sidecar's poller; ForegroundComm() reads under fgMu.
+	// Older sidecars never send the frame so this stays "" (=
+	// unknown) — same graceful posture as the termios cache's
+	// Unknown initial state.
+	fgMu  sync.Mutex
+	fgVal string
 
 	// Child-exit metadata (captured for diagnostics; not surfaced via
 	// the PTY interface today). Set by runFrameReader on FrameChildExit
@@ -199,6 +208,16 @@ func (c *Conn) TermiosState() (echo, canon, ok bool) {
 	return c.echoVal == ptysidecar.EchoOn, c.canonVal == ptysidecar.CanonOn, true
 }
 
+// ForegroundComm returns the PTY's last-known foreground command
+// name (v1.6.1+ sidecar poller, ≤5s fresh). "" = unknown: pre-fg
+// sidecar, non-Linux host, or no resolvable foreground process. Pure
+// cache read — the sidecar pushes on change, no query round-trip.
+func (c *Conn) ForegroundComm() string {
+	c.fgMu.Lock()
+	defer c.fgMu.Unlock()
+	return c.fgVal
+}
+
 // Close shuts the socket; the sidecar sees EOF and enters its grace
 // timer (default 30 s) waiting for a daemon reconnect. Idempotent.
 // Use Kill() for `mtroam kill` semantics — that path sends die_now
@@ -280,6 +299,19 @@ func (c *Conn) runFrameReader() {
 				}
 				c.storeTermios(body[0], canon)
 			}
+		case ptysidecar.FrameFgState:
+			// v1.6.1+ sidecar poller push. Body = bare command name.
+			// Re-sanitize defensively (the sidecar already does):
+			// this value flows into CBOR text strings (AttachAck.Fg,
+			// AgentNotify), where invalid UTF-8 fails the marshal —
+			// a hostile sidecar body must not break attaches.
+			comm := strings.ToValidUTF8(string(body), "")
+			if len(comm) > ptysidecar.MaxFgCommBytes {
+				comm = strings.ToValidUTF8(comm[:ptysidecar.MaxFgCommBytes], "")
+			}
+			c.fgMu.Lock()
+			c.fgVal = comm
+			c.fgMu.Unlock()
 		case ptysidecar.FrameChildExit:
 			code, sig, derr := ptysidecar.DecodeChildExit(body)
 			if derr == nil {

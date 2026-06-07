@@ -503,6 +503,32 @@ func (s *Session) SetLastTitle(t string) {
 	}
 }
 
+// ForegroundReporter is implemented by PTY backends that can report
+// the terminal's current foreground command name (the sidecar-backed
+// ptyclient.Conn; v1.6.1+). Backends without the capability simply
+// don't conform and ForegroundComm reports "".
+type ForegroundReporter interface {
+	ForegroundComm() string
+}
+
+// ForegroundComm returns the bare command name of the session PTY's
+// current foreground process group ("claude", "codex", "vim", …) —
+// kernel truth via the sidecar's tcgetpgrp poller, ≤5s fresh. "" =
+// unknown: no PTY yet (restored session before lazy spawn), a
+// pre-v1.6.1 sidecar, a non-Linux host, or no resolvable foreground
+// process. Feeds AttachAck.Fg, AgentNotify, and SessionInfo.Fg.
+// Deliberately NOT persisted — it's live state, recomputed once the
+// PTY exists.
+func (s *Session) ForegroundComm() string {
+	s.mu.Lock()
+	pty := s.pty
+	s.mu.Unlock()
+	if fr, ok := pty.(ForegroundReporter); ok {
+		return fr.ForegroundComm()
+	}
+	return ""
+}
+
 // WedgeSnapshot returns the per-session cumulative metrics tracked by
 // the wedge watcher. Used by `mtroamd wedge-report` and
 // `mtroamd session-info` to render a summary alongside the

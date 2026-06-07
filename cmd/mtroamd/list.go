@@ -81,17 +81,22 @@ func runList(args []string) int {
 		return listExitOK
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tID\tCREATED\tIDLE\tATTACHED")
+	fmt.Fprintln(w, "NAME\tID\tCREATED\tIDLE\tATTACHED\tRUNNING")
 	now := time.Now()
 	for _, s := range resp.Sessions {
 		created := time.Unix(0, s.CreatedAtNs)
 		lastActive := time.Unix(0, s.LastActiveAtNs)
-		fmt.Fprintf(w, "%s\t%s\t%s ago\t%s\t%s\n",
+		running := s.Fg
+		if running == "" {
+			running = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s ago\t%s\t%s\t%s\n",
 			s.Name,
 			truncateID(s.ID),
 			shortDur(now.Sub(created)),
 			shortDur(now.Sub(lastActive)),
 			formatAttachedModes(s.AttachedModes, s.AttachedNow),
+			running,
 		)
 	}
 	_ = w.Flush()

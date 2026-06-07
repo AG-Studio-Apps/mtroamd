@@ -341,3 +341,46 @@ func TestAttachReplayBudgetRoundTrip(t *testing.T) {
 		t.Error("zero ReplayBudget should be omitted from the wire (omitempty)")
 	}
 }
+
+// TestAgentNotifyMarshalStampsType + Fg round-trip (v1.6.1).
+func TestAgentNotifyRoundTrip(t *testing.T) {
+	t.Parallel()
+	b, err := MarshalAgentNotify(AgentNotify{Fg: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got AgentNotify
+	if err := StrictDecMode.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.T != TypeAgentNotify {
+		t.Errorf("T = %q, want %q", got.T, TypeAgentNotify)
+	}
+	if got.Fg != "codex" {
+		t.Errorf("Fg = %q, want codex", got.Fg)
+	}
+}
+
+// TestAttachAckFgOmittedWhenEmpty — the v1.6.1 fg field is genuinely
+// optional on the wire.
+func TestAttachAckFgRoundTrip(t *testing.T) {
+	t.Parallel()
+	b, err := MarshalAttachAck(AttachAck{V: 1, OK: true, Fg: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got AttachAck
+	if err := StrictDecMode.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Fg != "claude" {
+		t.Errorf("Fg = %q, want claude", got.Fg)
+	}
+	empty, err := MarshalAttachAck(AttachAck{V: 1, OK: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(empty, []byte("fg")) {
+		t.Error("empty Fg should be omitted from the wire (omitempty)")
+	}
+}

@@ -39,7 +39,19 @@ const (
 	FrameStdout    FrameType = 0x10 // sidecar → daemon: [u64 first_byte_seq][u8 flags][N bytes]
 	FrameEchoState FrameType = 0x11 // sidecar → daemon: [u8 echo][u8 canon?] (canon optional; 0=off 1=on 2=unknown)
 	FrameChildExit FrameType = 0x12 // sidecar → daemon: [i32 code][i32 signal]
+	// FrameFgState (v1.6.1+): the PTY's foreground command name
+	// (tcgetpgrp → /proc/<pgid>/comm), pushed by the sidecar's
+	// poller only when the value changes. Body = the bare command
+	// name, ≤ MaxFgCommBytes; empty body = "unresolvable". Process
+	// NAME only — never arguments or terminal content. Older daemons
+	// log-and-ignore the unknown type; older sidecars simply never
+	// send it (absent = fg unknown).
+	FrameFgState FrameType = 0x13 // sidecar → daemon: [N bytes comm]
 )
+
+// MaxFgCommBytes bounds a FrameFgState body. Linux comm is 15 bytes;
+// the cmdline-basename fallback is truncated to this.
+const MaxFgCommBytes = 32
 
 // Flag bits for FrameStdout body. The flags byte sits between the
 // seq prefix and the payload bytes.
