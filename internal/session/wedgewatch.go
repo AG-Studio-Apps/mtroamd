@@ -253,6 +253,43 @@ func (w *wedgeWatcher) SuppressUntil(t time.Time) {
 	w.mu.Unlock()
 }
 
+// ResetWedge clears all accumulated wedge state for a fresh renderer.
+// Called by the recovery sequencer after a deliberate restart
+// (`claude --resume`): the new Claude process owns a brand-new Ink
+// renderer with zero accumulated drift, so the lifetime resize/byte
+// counters and the in-flight detection state must reset too. Otherwise
+// the pre-restart accumulation (a long session reaches 160+ resizes)
+// stays on the watcher and the diagnostics misreport a healthy session
+// as a veteran wedge candidate, and — load-bearing — a stale in-flight
+// resize window (resizePending + its silent-deadline timer + the
+// scanner's cursor-walk budget) could fire against the fresh renderer's
+// startup repaint, re-popping the banner the moment recovery finishes.
+//
+// Cancels the in-flight silent-deadline goroutine the same way
+// ArmResize does (close the channel) so it can't raise a stale wedge.
+// Session age (s.created) is intentionally left untouched — it's a
+// lifetime correlation field in the JSONL record, not a firing gate.
+func (w *wedgeWatcher) ResetWedge() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.pendingTimerCh != nil {
+		close(w.pendingTimerCh)
+		w.pendingTimerCh = nil
+	}
+	w.totalOutBytes = 0
+	w.resizesObserved = 0
+	w.silentWedges = 0
+	w.cursorWedges = 0
+	w.verticalWalkWedges = 0
+	w.resizePending = false
+	w.wedgeRaised = false
+	w.bytesAtResize = 0
+	w.scanner.reset()
+	if w.captureBytes {
+		w.captureBuffer = w.captureBuffer[:0]
+	}
+}
+
 // AltScreenActive reports whether the byte stream currently has the
 // pty on the alternate screen buffer. Used by persistence.SaveTo to
 // snapshot the tracker so daemon-restart reattaches don't lose the

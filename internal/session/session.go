@@ -691,6 +691,23 @@ func (s *Session) SuppressWedgeUntil(t time.Time) {
 	}
 }
 
+// ResetWedge clears the wedge watcher's accumulated counters and
+// in-flight detection state after a deliberate Claude restart
+// (`claude --resume`). The fresh renderer starts with zero drift, so
+// the lifetime resize/byte accumulation that the watcher carried — and
+// any in-flight resize-scan window — must reset too, or the next
+// keyboard resize re-trips the detector and re-pops the banner on a
+// healthy session. Complements SuppressWedgeUntil (which mutes the
+// transient `--resume` replay storm); this zeroes the underlying state.
+func (s *Session) ResetWedge() {
+	s.mu.Lock()
+	w := s.wedge
+	s.mu.Unlock()
+	if w != nil {
+		w.ResetWedge()
+	}
+}
+
 // ConsumeFirstAttach atomically reads and clears the firstAttachPending
 // flag. Returns true on the first call for a given session and false on
 // every subsequent call. The protocol_handler invokes this immediately

@@ -305,11 +305,21 @@ func runRecover(
 		return
 	}
 
+	// Reset the wedge watcher: the fresh `--resume` Claude owns a
+	// brand-new Ink renderer with zero accumulated drift, so the
+	// lifetime resize/byte counters and any in-flight resize-scan
+	// window must reset too. Without this the pre-restart accumulation
+	// (a long session reaches 160+ resizes) survives the restart and
+	// the next keyboard resize re-trips the detector on what is now a
+	// healthy session — the "banner re-fires on a fresh session" bug.
+	sess.ResetWedge()
+
 	// Post-recovery cooldown. claude --resume's scrollback replay
 	// emits many CUDs in rapid succession to repaint history;
 	// without this gate every restoration painted past the new
 	// viewport re-pops the wedge banner. Silence detections for
 	// postRecoveryCooldown so the fresh Claude has time to settle.
+	// (ResetWedge zeroes the counters; this mutes the transient replay.)
 	sess.SuppressWedgeUntil(time.Now().Add(postRecoveryCooldown))
 
 	emit(protocol.RecoverStageDone, "")

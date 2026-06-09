@@ -772,3 +772,45 @@ func TestWedgeWatcher_AltScreen_TracksChunkedSequence(t *testing.T) {
 		t.Fatalf("alt-screen state must survive chunked DECSET; got %+v", events)
 	}
 }
+
+// TestWedgeWatcher_ResetWedge_ClearsCounters verifies a deliberate
+// restart zeroes the lifetime accumulation that would otherwise make a
+// fresh session misreport as a veteran wedge candidate.
+func TestWedgeWatcher_ResetWedge_ClearsCounters(t *testing.T) {
+	w := newWedgeWatcher()
+	created := time.Now().Add(-time.Hour)
+	w.ObserveBytes(make([]byte, 5000), created)
+	w.ArmResize(44, 23, 90, created)
+	w.ArmResize(23, 44, 90, created)
+	w.ArmResize(44, 23, 90, created)
+	if totalOut, resizes, _, _, _ := w.Snapshot(); totalOut == 0 || resizes == 0 {
+		t.Fatalf("precondition: want non-zero counters, got totalOut=%d resizes=%d", totalOut, resizes)
+	}
+
+	w.ResetWedge()
+
+	totalOut, resizes, silent, cursor, vwalk := w.Snapshot()
+	if totalOut != 0 || resizes != 0 || silent != 0 || cursor != 0 || vwalk != 0 {
+		t.Fatalf("after ResetWedge: want all zero, got totalOut=%d resizes=%d silent=%d cursor=%d vwalk=%d",
+			totalOut, resizes, silent, cursor, vwalk)
+	}
+}
+
+// TestWedgeWatcher_ResetWedge_CancelsInFlightResize verifies that a
+// reset landing mid-resize-window cancels the open scan so the fresh
+// renderer's startup repaint can't fire a stale cursor_row wedge — the
+// "banner re-fires the moment recovery finishes" failure mode.
+func TestWedgeWatcher_ResetWedge_CancelsInFlightResize(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "wedge-events.jsonl")
+	w := newWedgeWatcher()
+	w.SetLogPath(logPath)
+	created := time.Now().Add(-time.Hour)
+	w.ArmResize(44, 23, 90, created)
+	w.ResetWedge()
+	// Without the reset this CUP (row 40 > 23) would log a cursor_row wedge.
+	w.ObserveBytes([]byte("\x1b[40;1Hhello"), created)
+	if events := readEvents(t, logPath); len(events) != 0 {
+		t.Fatalf("want no wedge after ResetWedge cancelled the resize window, got %d (%+v)", len(events), events)
+	}
+}
