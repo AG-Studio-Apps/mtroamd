@@ -36,7 +36,7 @@ const (
 	FrameDieNow    FrameType = 0x04 // daemon → sidecar: SIGHUP child + exit immediately
 	FrameAck       FrameType = 0x05 // daemon → sidecar: [u64 consumed_through] free bytes ≤ this seq
 	FrameResume    FrameType = 0x06 // daemon → sidecar: [u64 from_seq] reposition read cursor
-	// FrameKillFg (v1.6.2+): SIGTERM the PTY's current foreground
+	// FrameKillFg (v1.6.3+): SIGTERM the PTY's current foreground
 	// process group (tcgetpgrp), leaving the session/PTY alive. Empty
 	// body. Foundation for the iOS kill-and-resume restart. Older
 	// sidecars log-and-ignore the unknown type (no-op).
@@ -53,7 +53,7 @@ const (
 	// log-and-ignore the unknown type; older sidecars simply never
 	// send it (absent = fg unknown).
 	FrameFgState FrameType = 0x13 // sidecar → daemon: [N bytes comm]
-	// FrameFgCwd (v1.6.2+): the working directory of the foreground
+	// FrameFgCwd (v1.6.3+): the working directory of the foreground
 	// process group (readlink /proc/<pgid>/cwd), pushed alongside a
 	// FrameFgState change. Body = the path bytes, ≤ MaxFgCwdBytes;
 	// empty = unresolvable. Carried as a SEPARATE frame (not appended

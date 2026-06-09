@@ -338,7 +338,7 @@ type AttachAck struct {
 
 	// FgSince is the wall-clock time (UnixNano) at which the
 	// foreground command last transitioned to its current value —
-	// i.e. how long `Fg` has been the foreground process. v1.6.2+
+	// i.e. how long `Fg` has been the foreground process. v1.6.3+
 	// field; older clients ignore it. Zero/absent = unknown (no
 	// transition observed yet, pre-fg sidecar, or non-Linux host).
 	// Clients use it to anchor a "session has been running this
@@ -349,7 +349,7 @@ type AttachAck struct {
 
 	// FgSinceSeq is the ring output byte-sequence at the same fg
 	// transition as FgSince — the absolute byte position when `Fg`
-	// became the foreground command. v1.6.2+ field. Clients compute
+	// became the foreground command. v1.6.3+ field. Clients compute
 	// `currentByteSeq - FgSinceSeq` for a live "how much output this
 	// foreground process has produced" size signal (a better proxy
 	// than wall-clock for a heavily-used session, since age and
@@ -357,7 +357,7 @@ type AttachAck struct {
 	FgSinceSeq uint64 `cbor:"fg_seq,omitempty"`
 
 	// Cwd is the current working directory of the foreground process
-	// group (readlink /proc/<pgid>/cwd), ≤5s fresh. v1.6.2+ field;
+	// group (readlink /proc/<pgid>/cwd), ≤5s fresh. v1.6.3+ field;
 	// older clients ignore it. Empty/absent = unknown (pre-cwd
 	// sidecar, non-Linux host, or unresolvable). Foundation for the
 	// kill-and-resume restart (`cd <cwd> && claude --resume`); not
@@ -522,7 +522,7 @@ type AgentNotify struct {
 	// FgSince / FgSinceSeq / Cwd mirror the AttachAck fields of the
 	// same name (see there for semantics) so a client that attached
 	// before the current foreground process started still receives
-	// the transition anchors + cwd on the next change. v1.6.2+;
+	// the transition anchors + cwd on the next change. v1.6.3+;
 	// older clients ignore them.
 	FgSince    int64  `cbor:"fg_since,omitempty"`
 	FgSinceSeq uint64 `cbor:"fg_seq,omitempty"`

@@ -71,5 +71,5 @@ func procArgs(pid int) [][]byte {
 // pure-Go / CGO_ENABLED=0 build can't reach today. "" = unknown, so
 // FrameFgCwd carries nothing and the restart's cwd stays empty. The
 // killForegroundGroup mechanism (fg_kill.go) is POSIX and works here.
-// v1.6.2+; macOS cwd support is future work.
+// v1.6.3+; macOS cwd support is future work.
 func foregroundCwd(_ *os.File, _ int) string { return "" }

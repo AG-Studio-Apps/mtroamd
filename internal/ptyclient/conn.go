@@ -94,7 +94,7 @@ type Conn struct {
 	// current sidecar always wins and a pre-1.6.x sidecar's carried-
 	// over session still gets fg resolved — without anyone killing it.
 	//
-	// fgCwd (v1.6.2+) is the foreground process's cwd (FrameFgCwd,
+	// fgCwd (v1.6.3+) is the foreground process's cwd (FrameFgCwd,
 	// pushed alongside a comm change) — foundation for the kill-and-
 	// resume restart. The transition ANCHORS (fg_since time + fg_seq
 	// byte position) are NOT tracked here: the byte anchor must be in
@@ -246,8 +246,8 @@ func (c *Conn) ForegroundComm() string {
 }
 
 // ForegroundCwd returns the foreground process's working directory
-// (FrameFgCwd), or "" if unknown (pre-v1.6.2 sidecar, non-Linux, or
-// unresolvable). v1.6.2+.
+// (FrameFgCwd), or "" if unknown (pre-v1.6.3 sidecar, non-Linux, or
+// unresolvable). v1.6.3+.
 func (c *Conn) ForegroundCwd() string {
 	c.fgMu.Lock()
 	defer c.fgMu.Unlock()
@@ -361,10 +361,10 @@ func (c *Conn) runFrameReader() {
 			c.fgCapable = true
 			c.fgMu.Unlock()
 		case ptysidecar.FrameFgCwd:
-			// v1.6.2+ sidecar push, alongside a comm change. Body =
+			// v1.6.3+ sidecar push, alongside a comm change. Body =
 			// the foreground process cwd. Re-sanitize for the same
 			// CBOR-text reason as Fg. Like FrameFgState, this frame
-			// only comes from a self-reporting 1.6.2+ sidecar, so it
+			// only comes from a self-reporting 1.6.3+ sidecar, so it
 			// also stands the daemon-side fallback poller down.
 			cwd := ptysidecar.SanitizeCapped(string(body), ptysidecar.MaxFgCwdBytes)
 			c.fgMu.Lock()

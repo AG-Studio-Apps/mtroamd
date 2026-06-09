@@ -296,7 +296,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		RTTNanos:        rttNanosFor(ctrl),
 		AltScreenActive: sess.WedgeAltScreenActive(),
 		LastTitle:       sess.LastTitle(),
-		// fg transition anchors (v1.6.2+): time + ring byte-seq of the
+		// fg transition anchors (v1.6.3+): time + ring byte-seq of the
 		// last foreground change, plus its cwd. See fgSinceToNanos.
 		Fg:         attachFg,
 		FgSince:    fgSinceToNanos(sess.ForegroundCommSince()),
