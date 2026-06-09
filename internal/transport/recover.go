@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"sync"
@@ -11,53 +10,68 @@ import (
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
-// defaultSavePrompt is the natural-language instruction the daemon
-// injects into Claude's stdin when the client doesn't supply one.
-// Bookend markers ("Commencing Save & Restore" / "Memory Updated,
-// restoring session...") are the load-bearing part — the sequencer
-// scans Claude's PTY output for these substrings and advances banner
-// stages on each match, falling back to the grace window if either
-// never arrives. Phrased as a numbered directive so Claude's
-// instruction-following stays on the rails. "Do not start new work"
-// guards against an interrupted restart kicking off a long-running
-// response that gets killed mid-stream.
-const defaultSavePrompt = "System restart imminent. Please do these three things in order:\n" +
-	"1. Print exactly this line and only this line, then a newline: Commencing Save & Restore\n" +
-	"2. Save any in-flight context, decisions, or work-in-progress to memory using the memory tools.\n" +
-	"3. Print exactly this line and only this line, then a newline: Memory Updated, restoring session...\n" +
-	"Do not start new work. Do not explain. After step 3, await the exit signal."
-
-// markerStart / markerEnd are the substrings the sequencer scans for
-// in Claude's PTY output during the save window. Substring (not full
-// line) match is forgiving against minor paraphrasing AND against
-// ANSI styling that wraps but doesn't interleave with the text bytes.
-var (
-	markerStart = []byte("Commencing Save")
-	markerEnd   = []byte("Memory Updated, restoring")
-)
-
-// defaultGrace is the upper bound on the save window when the client
-// doesn't specify one. 30 s is generous on purpose — a wedged Ink
-// renderer can take seconds to process input, and memory tool calls
-// themselves are not instant.
+// defaultGrace is the upper bound on the IDLE-GATE wait when the client
+// doesn't specify one — how long we'll wait for the agent's turn to
+// finish before giving up (NOT a forced exit; see runRecover). 30s is
+// generous: a long tool call (build, test run) keeps the agent's
+// spinner animating, so we wait it out rather than interrupt it.
 const defaultGrace = 30 * time.Second
 
 // maxGrace caps GraceMillis from the client. 2 minutes is more than
-// enough for any save-restart cycle; uncapped values would let a
-// stolen token hold goroutines + timers indefinitely.
+// enough for any idle wait; uncapped values would let a stolen token
+// hold goroutines + timers indefinitely.
 const maxGrace = 2 * time.Minute
 
-// maxSavePromptLen caps the SavePrompt field. The default prompt is
-// ~350 chars; 4 KiB is generous for custom prompts and prevents a
-// malicious client from injecting unbounded content into the PTY.
-const maxSavePromptLen = 4096
+// idleQuietWindow is how long the PTY output must stay silent before we
+// treat the agent's turn as complete. Claude/Codex animate a status
+// spinner the entire time a turn is in flight — INCLUDING while a tool
+// (a shell command, a build) runs — so a quiet stream is the reliable
+// "back at the input prompt, nothing running" signal. This is the
+// load-bearing safety gate: it's what stops us interrupting an
+// in-flight `git commit` / `npm` and corrupting a repo. 1.5s comfortably
+// outlasts the spinner's redraw cadence (~80-120ms) without adding
+// noticeable latency to a genuinely-idle restart.
+const idleQuietWindow = 1500 * time.Millisecond
 
-// shellSettleDelay is the rough heuristic for "/exit has returned us
-// to a shell prompt" before we inject the restart command. We don't
-// have a clean signal for shell-prompt-ready — pattern-matching PS1
-// is brittle because users customise their prompt — so we just wait
-// long enough that any reasonable shell startup will have settled.
-const shellSettleDelay = 3 * time.Second
+// idlePollInterval is the tick at which the idle gate re-checks the
+// quiescence + foreground conditions.
+const idlePollInterval = 150 * time.Millisecond
+
+// exitWaitTimeout bounds how long we wait for the foreground command to
+// leave the agent after `/exit` before falling back to SIGTERM.
+// ForegroundComm is kernel truth but only ≤5s fresh (the sidecar's
+// tcgetpgrp poller, fixed 5s), so this MUST comfortably exceed that
+// staleness or a clean exit would race the cache and trip the kill
+// fallback. 10s = 2× the poll window.
+const exitWaitTimeout = 10 * time.Second
+
+// preKillIdleTimeout bounds the SECOND idle re-confirmation done right
+// before the SIGTERM fallback. If `/exit` failed to return the shell, we
+// re-check quiescence: a still-quiet agent is wedged-at-prompt (safe to
+// SIGTERM), but a noisy one is mid-tool with our `/exit` merely queued
+// behind it — killing then would interrupt the tool (repo corruption),
+// so we abort instead. Short: we only need to catch active output.
+const preKillIdleTimeout = 4 * time.Second
+
+// fgPollInterval is the tick at which the post-exit wait re-reads the
+// foreground command.
+const fgPollInterval = 200 * time.Millisecond
+
+// killSettleWindow is the grace after a SIGTERM-fallback for the agent's
+// process group to die and the shell to regain the foreground before we
+// inject the restart command.
+const killSettleWindow = 2 * time.Second
+
+// preRestartSettle is a short pause after the shell returns (cleanly or
+// via SIGTERM) before injecting the restart command, so the shell's
+// line editor is ready to receive it.
+const preRestartSettle = 400 * time.Millisecond
+
+// restartCmd relaunches the agent reattaching to its prior conversation.
+// `--resume` reattaches to the most recent session in the cwd's project
+// so the in-memory conversation is restored from disk — the whole point
+// of preferring this over a bare `claude` (the user keeps their work).
+const restartCmd = "claude --resume\r"
 
 // postRecoveryCooldown is how long the wedge watcher stays silenced
 // after a successful save-restart. `claude --resume` repaints its
@@ -69,119 +83,130 @@ const shellSettleDelay = 3 * time.Second
 // sensitivity and can catch a genuine fresh wedge.
 const postRecoveryCooldown = 30 * time.Second
 
-// submitSettleDelay is the gap between writing the body of a Claude
-// prompt and writing the trailing '\r'. Without this delay an
-// observed failure mode is Ink's input handler processing the
-// carriage return before the full prompt body has landed in the
-// text field — Enter fires on an empty / partial buffer, Claude
-// silently drops it, and the user is left with unsubmitted text
-// they have to send manually. 100ms is more than enough for the
-// prompt bytes to traverse PTY → terminal → Ink's stdin reader on
-// any plausible machine, and it's imperceptible inside a 30s save
-// window.
-const submitSettleDelay = 100 * time.Millisecond
-
-// markerStartTimeout caps how long the sequencer will wait for the
-// START marker before falling through. A healthy Claude that received
-// the prompt should print "Commencing Save & Restore" within a few
-// seconds. If we haven't seen it after this, Claude either ignored
-// the prompt (wedged input pipeline) or chose to paraphrase past our
-// substring match — either way, waiting longer doesn't help. The END
-// marker watch and grace cap still run.
-const markerStartTimeout = 10 * time.Second
-
-// markerScanCap bounds the rolling buffer the marker scanner keeps
-// around. Markers are short; we only need enough history to span a
-// chunk boundary. 8 KiB is generous and keeps allocator pressure on
-// the Pump goroutine negligible.
-const markerScanCap = 8 * 1024
-
-// watchSaveMarkers installs a PTY byte observer that scans for the
-// START / END markers Claude prints during a save. Returns two
-// signal channels (each closed at most once on first sight of its
-// marker) and a stop function the caller must invoke to clear the
-// observer when the sequencer is done.
+// waitForAgentIdle blocks until the session's PTY output has been quiet
+// for at least quietWindow AND (when known) the foreground command is
+// still `agent` — i.e. the agent is back at its input prompt with no
+// tool running — or until timeout / ctx cancellation. Returns true only
+// on a confirmed idle; false on timeout or cancellation (caller MUST
+// then abort rather than force an exit, so a mid-tool agent is never
+// interrupted).
 //
-// Concurrency: the observer fires from the session's Pump goroutine.
-// We snapshot accumulated bytes under a local mutex, do the substring
-// search outside the Pump lock, and close the result channels under
-// `sync.Once` guards so a noisy scan that matches multiple times in
-// the same chunk only fires each signal once.
-func watchSaveMarkers(sess *session.Session) (start, end <-chan struct{}, stop func()) {
-	startC := make(chan struct{})
-	endC := make(chan struct{})
-	var (
-		mu        sync.Mutex
-		accum     []byte
-		startOnce sync.Once
-		endOnce   sync.Once
-		started   bool
-	)
-
+// Quiescence is sampled via a PTY byte observer (fires from the Pump
+// goroutine); the last-byte timestamp is mutex-guarded. The foreground
+// check is a cheap cached read (≤5s fresh) used only as a secondary
+// confirmation — quiescence is the primary, fast signal, so the fg
+// staleness can't cause a premature "idle".
+func waitForAgentIdle(
+	ctx context.Context,
+	sess *session.Session,
+	agent string,
+	quietWindow, timeout time.Duration,
+) bool {
+	var mu sync.Mutex
+	last := time.Now()
 	sess.SetPTYByteObserver(func(data []byte) {
+		if len(data) == 0 {
+			return
+		}
 		mu.Lock()
-		accum = append(accum, data...)
-		// Keep accum bounded so a long save (lots of tool output)
-		// doesn't grow it unbounded. Trim from the front but keep
-		// enough tail history to span a chunk boundary.
-		if len(accum) > markerScanCap {
-			accum = accum[len(accum)-markerScanCap/2:]
-		}
-		hitStart := !started && bytes.Contains(accum, markerStart)
-		if hitStart {
-			started = true
-		}
-		hitEnd := started && bytes.Contains(accum, markerEnd)
+		last = time.Now()
 		mu.Unlock()
-
-		if hitStart {
-			startOnce.Do(func() { close(startC) })
-		}
-		if hitEnd {
-			endOnce.Do(func() { close(endC) })
-		}
 	})
+	defer sess.SetPTYByteObserver(nil)
 
-	stop = func() { sess.SetPTYByteObserver(nil) }
-	return startC, endC, stop
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(idlePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		case <-ticker.C:
+			mu.Lock()
+			quietFor := time.Since(last)
+			mu.Unlock()
+			if quietFor < quietWindow {
+				continue
+			}
+			// Output is quiet. If we know the foreground command,
+			// require it to still be the agent: a tool that grabbed
+			// the tty (fg != agent) means a turn is in flight even if
+			// it happens to be momentarily silent.
+			if agent != "" {
+				if fg := sess.ForegroundComm(); fg != "" && fg != agent {
+					continue
+				}
+			}
+			return true
+		}
+	}
 }
 
-// runRecover drives the save-restart sequence on a session's PTY.
+// waitForForegroundLeave blocks until the session's foreground command
+// is no longer `agent` (the agent exited and the shell is back) or until
+// timeout / ctx cancellation. Returns true once the agent has left,
+// false otherwise. When the foreground command is unknown ("" agent —
+// backend without the capability) it can't observe the transition, so it
+// falls back to a fixed settle and reports success (assume exited).
+func waitForForegroundLeave(
+	ctx context.Context,
+	sess *session.Session,
+	agent string,
+	timeout time.Duration,
+) bool {
+	if agent == "" {
+		return sleepCtx(ctx, preRestartSettle)
+	}
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(fgPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		case <-ticker.C:
+			if fg := sess.ForegroundComm(); fg != agent {
+				return true
+			}
+		}
+	}
+}
+
+// runRecover drives the kill-and-resume restart of a session's
+// foreground agent, preserving the conversation via `--resume`.
 //
-// Wire flow:
-//  1. RecoverProgress {stage: "started"}
-//  2. Inject ESC (0x1b) to interrupt anything mid-stream, sleep 200 ms.
-//  3. Inject the save prompt + '\r'; RecoverProgress {stage: "saving"}.
-//  4. Sleep grace (default 30 s) — future iteration may short-circuit
-//     on observed alt-screen exit (\x1b[?1049l) in the PTY output.
-//  5. Inject "/exit\r"; RecoverProgress {stage: "exiting"}.
-//  6. Sleep shellSettleDelay (3 s) for the shell prompt to return.
-//  7. Inject "claude --resume\r"; RecoverProgress {stage: "restarting"}.
-//  8. RecoverProgress {stage: "done"} — best-effort completion signal.
+// Flow (v1.6.3 / B2 — idle-gated, save-prompt-free):
+//  1. RecoverProgress {stage: "started"}.
+//  2. IDLE GATE: wait for the agent's turn to complete (PTY output
+//     quiescent + fg still the agent), bounded by grace. If it never
+//     goes idle, ABORT with {stage: "error"} — we never interrupt a
+//     running tool (repo-corruption safety). No save-prompt is injected;
+//     `--resume` restores the conversation from disk.
+//  3. Inject "/exit\r"; RecoverProgress {stage: "exiting"}.
+//  4. Wait for the foreground to leave the agent (shell returned). If it
+//     doesn't within exitWaitTimeout, SIGTERM the foreground group
+//     (KillForeground) — safe because we already confirmed idle, and the
+//     shell is in a different process group so it survives.
+//  5. Inject "claude --resume\r"; RecoverProgress {stage: "restarting"}.
+//  6. ResetWedge() + post-recovery cooldown for the replay storm.
+//  7. RecoverProgress {stage: "done"}.
 //
-// Errors at any injection point emit {stage: "error"} and return.
-// The whole sequence honours ctx cancellation between stages so a
-// client disconnect terminates the goroutine promptly without
-// leaving a half-recovered session.
+// Errors at any injection point emit {stage: "error"} and return. The
+// whole sequence honours ctx cancellation between stages so a client
+// disconnect terminates the goroutine promptly.
 //
-// The sequencer does NOT hold the session lock or block the read
-// pump — each WriteStdin call goes through Session.WriteStdin which
-// has its own locking. User input concurrent with recovery is
-// possible in principle; we accept the interleave risk for v1 (the
-// user is presumably waiting for the recovery to finish anyway).
+// The sequencer does NOT hold the session lock or block the read pump —
+// each WriteStdin goes through Session.WriteStdin (own locking).
 func runRecover(
 	ctx context.Context,
 	sess *session.Session,
 	req protocol.Recover,
 	write frameWriter,
 ) {
-	prompt := req.SavePrompt
-	if prompt == "" {
-		prompt = defaultSavePrompt
-	}
-	if len(prompt) > maxSavePromptLen {
-		prompt = prompt[:maxSavePromptLen]
-	}
 	grace := time.Duration(req.GraceMillis) * time.Millisecond
 	if grace <= 0 {
 		grace = defaultGrace
@@ -207,119 +232,95 @@ func runRecover(
 		}
 	}
 
+	// The foreground command at sequence start — used to confirm idle
+	// (fg == agent) and to detect exit (fg leaves agent). "" when the
+	// backend can't report it; the helpers degrade gracefully.
+	agent := sess.ForegroundComm()
+
 	slog.Info("recover: sequence started",
-		"sid", sid,
-		"grace_ms", grace/time.Millisecond,
-		"save_prompt_chars", len(prompt))
+		"sid", sid, "grace_ms", grace/time.Millisecond, "agent", agent)
 	emit(protocol.RecoverStageStarted, "")
 
-	if err := injectAndCheckCtx(ctx, sess, []byte{0x1b}); err != nil {
-		emit(protocol.RecoverStageError, "interrupt failed: "+err.Error())
-		return
-	}
-	if !sleepCtx(ctx, 200*time.Millisecond) {
-		emit(protocol.RecoverStageError, "cancelled before save prompt")
-		return
-	}
-
-	// Install the marker scanner BEFORE we inject the prompt so we
-	// don't miss the start marker if Claude responds faster than the
-	// SetPTYByteObserver call returns. Cleared via defer so a future
-	// recovery starts with a fresh observer pointed at a fresh stream.
-	startCh, endCh, stopWatch := watchSaveMarkers(sess)
-	defer stopWatch()
-
-	// Save prompt + Enter. The trailing '\r' submits the line in raw
-	// mode (Claude's stdin doesn't translate \n → \r). The
-	// submitSettleDelay between the body and the carriage return is
-	// load-bearing — see the constant's docstring.
-	emit(protocol.RecoverStageSaving, "Asking Claude to save…")
-	if err := injectAndCheckCtx(ctx, sess, []byte(prompt)); err != nil {
-		emit(protocol.RecoverStageError, "save prompt write failed: "+err.Error())
-		return
-	}
-	if !sleepCtx(ctx, submitSettleDelay) {
-		emit(protocol.RecoverStageError, "cancelled before save prompt submit")
-		return
-	}
-	if err := injectAndCheckCtx(ctx, sess, []byte{'\r'}); err != nil {
-		emit(protocol.RecoverStageError, "save prompt enter failed: "+err.Error())
+	// 1. Idle gate. Never proceed while a tool is running — interrupting a
+	//    Bash tool mid-flight (git commit, package install) is the repo-
+	//    corruption surface. Abort (don't force) if the agent stays busy.
+	emit(protocol.RecoverStageSaving, "Waiting for the agent to finish…")
+	if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, grace) {
+		if ctx.Err() != nil {
+			emit(protocol.RecoverStageError, "cancelled while waiting for idle")
+		} else {
+			emit(protocol.RecoverStageError, "agent still busy — try again when it's idle")
+			slog.Info("recover: aborted — agent never went idle", "sid", sid, "grace", grace)
+		}
 		return
 	}
 
-	// Marker watch — primary timing signal for v0.9.7+.
-	//
-	// Phase 1: wait for the START marker (Claude acknowledged the
-	// prompt). If we don't see it within markerStartTimeout, Claude
-	// likely never parsed the instruction (wedged input pipeline,
-	// already mid-tool-call ignoring stdin, etc.). Skip ahead to the
-	// grace-only fallback rather than waiting the full window.
-	graceDeadline := time.After(grace)
-	select {
-	case <-ctx.Done():
-		emit(protocol.RecoverStageError, "cancelled while awaiting save start")
-		return
-	case <-startCh:
-		emit(protocol.RecoverStageSaving, "Claude is saving memory…")
-	case <-time.After(markerStartTimeout):
-		slog.Info("recover: start marker not seen — falling through to grace window",
-			"sid", sid, "timeout", markerStartTimeout)
-	case <-graceDeadline:
-		slog.Info("recover: grace expired before start marker", "sid", sid)
-	}
-
-	// Phase 2: wait for the END marker, capped by the remaining
-	// grace window. End marker = "save complete, ready to exit."
-	// If grace expires first, fire /exit anyway — Claude has had
-	// long enough.
-	select {
-	case <-ctx.Done():
-		emit(protocol.RecoverStageError, "cancelled while awaiting save end")
-		return
-	case <-endCh:
-		emit(protocol.RecoverStageSaving, "Save complete — exiting…")
-	case <-graceDeadline:
-		slog.Info("recover: grace expired before end marker — exiting anyway", "sid", sid)
-	}
-
-	// /exit. Claude Code listens for this slash-command and shuts down
-	// cleanly, returning control to the parent shell.
+	// 2. Clean exit.
 	emit(protocol.RecoverStageExiting, "")
 	if err := injectAndCheckCtx(ctx, sess, []byte("/exit\r")); err != nil {
 		emit(protocol.RecoverStageError, "exit command failed: "+err.Error())
 		return
 	}
-	if !sleepCtx(ctx, shellSettleDelay) {
+
+	// 3. Wait for the shell to return; SIGTERM fallback if it doesn't.
+	if !waitForForegroundLeave(ctx, sess, agent, exitWaitTimeout) {
+		if ctx.Err() != nil {
+			emit(protocol.RecoverStageError, "cancelled while awaiting exit")
+			return
+		}
+		// /exit didn't return the shell. Before escalating to SIGTERM,
+		// RE-CONFIRM the agent is idle: the initial idle gate could have
+		// caught a lull, and if output is flowing now a tool is running
+		// with our `/exit` queued behind it — a SIGTERM here would kill
+		// that tool mid-flight (repo corruption). Only a still-quiet,
+		// not-exiting agent is wedged-at-prompt and safe to terminate; a
+		// noisy one means abort and let the user retry when it's idle.
+		if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, preKillIdleTimeout) {
+			if ctx.Err() != nil {
+				emit(protocol.RecoverStageError, "cancelled awaiting exit")
+			} else {
+				emit(protocol.RecoverStageError, "agent busy after /exit — not forcing a kill")
+				slog.Info("recover: aborted SIGTERM — agent producing output after /exit", "sid", sid)
+			}
+			return
+		}
+		// Confirmed idle but still foreground: input pipeline is wedged.
+		// SIGTERMing the foreground group is safe — no tool is running,
+		// and the shell (a different process group) survives.
+		slog.Info("recover: /exit did not return shell, agent idle — SIGTERM fg fallback", "sid", sid)
+		if err := sess.KillForeground(); err != nil {
+			slog.Warn("recover: KillForeground failed", "sid", sid, "err", err)
+		}
+		if !sleepCtx(ctx, killSettleWindow) {
+			emit(protocol.RecoverStageError, "cancelled after fg kill")
+			return
+		}
+	}
+
+	if !sleepCtx(ctx, preRestartSettle) {
 		emit(protocol.RecoverStageError, "cancelled before restart")
 		return
 	}
 
-	// Restart Claude. `--resume` reattaches to the most recent
-	// session in the cwd's project so the in-memory conversation is
-	// restored from disk. If --resume fails (no prior session for
-	// this cwd, package not in PATH, etc.) the user sees the shell
-	// error and can manually rerun — best-effort is acceptable here.
+	// 4. Restart with --resume (restores the conversation from disk). If
+	//    --resume fails (no prior session for this cwd, not in PATH) the
+	//    user sees the shell error and can rerun — best-effort.
 	emit(protocol.RecoverStageRestarting, "")
-	if err := injectAndCheckCtx(ctx, sess, []byte("claude --resume\r")); err != nil {
+	if err := injectAndCheckCtx(ctx, sess, []byte(restartCmd)); err != nil {
 		emit(protocol.RecoverStageError, "restart command failed: "+err.Error())
 		return
 	}
 
-	// Reset the wedge watcher: the fresh `--resume` Claude owns a
-	// brand-new Ink renderer with zero accumulated drift, so the
-	// lifetime resize/byte counters and any in-flight resize-scan
-	// window must reset too. Without this the pre-restart accumulation
-	// (a long session reaches 160+ resizes) survives the restart and
-	// the next keyboard resize re-trips the detector on what is now a
-	// healthy session — the "banner re-fires on a fresh session" bug.
+	// 5. Reset the wedge watcher: the fresh `--resume` Claude owns a
+	//    brand-new Ink renderer with zero accumulated drift, so the
+	//    lifetime resize/byte counters and any in-flight resize-scan
+	//    window must reset too. Without this the pre-restart accumulation
+	//    survives and the next keyboard resize re-trips the detector on
+	//    what is now a healthy session.
 	sess.ResetWedge()
 
-	// Post-recovery cooldown. claude --resume's scrollback replay
-	// emits many CUDs in rapid succession to repaint history;
-	// without this gate every restoration painted past the new
-	// viewport re-pops the wedge banner. Silence detections for
-	// postRecoveryCooldown so the fresh Claude has time to settle.
-	// (ResetWedge zeroes the counters; this mutes the transient replay.)
+	// 6. Post-recovery cooldown for the --resume scrollback replay (many
+	//    CUDs in rapid succession that otherwise re-pop the banner).
 	sess.SuppressWedgeUntil(time.Now().Add(postRecoveryCooldown))
 
 	emit(protocol.RecoverStageDone, "")
@@ -355,4 +356,3 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
-

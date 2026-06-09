@@ -15,12 +15,15 @@ import (
 // testPTY is a minimal session.PTY implementation that we can push
 // bytes into from a test. Mirrors the shape of session-pkg's
 // internal fakePTY but lives here because Go test helpers don't
-// cross package boundaries.
+// cross package boundaries. It also implements ForegroundReporter
+// (ForegroundComm/ForegroundCwd) so the idle/exit gates can be driven
+// from a test via SetFg.
 type testPTY struct {
 	mu      sync.Mutex
 	outBuf  bytes.Buffer
 	outCond *sync.Cond
 	closed  bool
+	fgComm  string
 }
 
 func newTestPTY() *testPTY {
@@ -62,6 +65,23 @@ func (p *testPTY) Close() error {
 
 func (p *testPTY) SetSize(rows, cols uint16) error { return nil }
 
+// ForegroundComm / ForegroundCwd make testPTY a session.ForegroundReporter
+// so sess.ForegroundComm() returns whatever SetFg last set.
+func (p *testPTY) ForegroundComm() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fgComm
+}
+
+func (p *testPTY) ForegroundCwd() string { return "" }
+
+// SetFg sets the reported foreground command (kernel-truth stand-in).
+func (p *testPTY) SetFg(comm string) {
+	p.mu.Lock()
+	p.fgComm = comm
+	p.mu.Unlock()
+}
+
 // Push simulates the child process emitting bytes to the PTY's
 // slave side, which Pump will read.
 func (p *testPTY) Push(b []byte) {
@@ -88,92 +108,114 @@ func newTestSession(t *testing.T) (*session.Session, *testPTY) {
 	return sess, pipe
 }
 
-// TestWatchSaveMarkers_StartThenEnd is the happy-path: inject the
-// START marker, expect startCh to close; then inject the END marker,
-// expect endCh to close.
-func TestWatchSaveMarkers_StartThenEnd(t *testing.T) {
-	sess, pipe := newTestSession(t)
+// streamUntil pushes a byte to the PTY every 10ms until the returned
+// stop func is called — simulates an agent mid-turn (its spinner keeps
+// the output stream non-quiescent). 10ms is ~15× tighter than the 150ms
+// quiet windows the tests use, so a scheduler hiccup under CI load can't
+// fabricate a quiescent gap and flip the result.
+func streamUntil(pipe *testPTY) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		tk := time.NewTicker(10 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tk.C:
+				pipe.Push([]byte("."))
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// TestWaitForAgentIdle_QuietReturnsTrue: a session producing no output
+// is idle, so the gate returns true after the quiet window.
+func TestWaitForAgentIdle_QuietReturnsTrue(t *testing.T) {
+	sess, _ := newTestSession(t)
 	defer func() { _ = sess.Close() }()
-
-	startCh, endCh, stop := watchSaveMarkers(sess)
-	defer stop()
-
-	pipe.Push([]byte("foo bar Commencing Save & Restore\r\n"))
-	select {
-	case <-startCh:
-	case <-time.After(time.Second):
-		t.Fatal("start marker not signalled within 1s")
-	}
-
-	// End hasn't fired yet.
-	select {
-	case <-endCh:
-		t.Fatal("end fired before END marker was injected")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	pipe.Push([]byte("(...saving...)\r\nMemory Updated, restoring session...\r\n"))
-	select {
-	case <-endCh:
-	case <-time.After(time.Second):
-		t.Fatal("end marker not signalled within 1s")
+	if !waitForAgentIdle(context.Background(), sess, "", 100*time.Millisecond, time.Second) {
+		t.Fatal("expected idle (true) on a quiet session")
 	}
 }
 
-// TestWatchSaveMarkers_EndBeforeStartDoesNotFire pins the ordering
-// guard: an END marker that arrives before any START is ignored.
-func TestWatchSaveMarkers_EndBeforeStartDoesNotFire(t *testing.T) {
+// TestWaitForAgentIdle_BusyTimesOut: continuous output (an in-flight
+// turn) keeps the stream non-quiescent, so the gate must time out
+// (false) rather than report a false idle — this is the repo-corruption
+// safety contract.
+func TestWaitForAgentIdle_BusyTimesOut(t *testing.T) {
 	sess, pipe := newTestSession(t)
 	defer func() { _ = sess.Close() }()
-
-	_, endCh, stop := watchSaveMarkers(sess)
+	stop := streamUntil(pipe)
 	defer stop()
-
-	pipe.Push([]byte("Memory Updated, restoring something — and ready\r\n"))
-
-	select {
-	case <-endCh:
-		t.Fatal("end fired without START having been seen")
-	case <-time.After(200 * time.Millisecond):
+	if waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 400*time.Millisecond) {
+		t.Fatal("expected timeout (false) while output keeps streaming")
 	}
 }
 
-// TestWatchSaveMarkers_SplitAcrossChunks pins the cross-chunk
-// behaviour: a marker split between two PTY reads still matches.
-func TestWatchSaveMarkers_SplitAcrossChunks(t *testing.T) {
+// TestWaitForAgentIdle_BecomesIdleAfterOutputStops: streaming that stops
+// flips the gate to idle once the quiet window elapses.
+func TestWaitForAgentIdle_BecomesIdleAfterOutputStops(t *testing.T) {
 	sess, pipe := newTestSession(t)
 	defer func() { _ = sess.Close() }()
-
-	startCh, _, stop := watchSaveMarkers(sess)
-	defer stop()
-
-	pipe.Push([]byte("Commen"))
-	time.Sleep(50 * time.Millisecond)
-	pipe.Push([]byte("cing Save & Restore\r\n"))
-
-	select {
-	case <-startCh:
-	case <-time.After(time.Second):
-		t.Fatal("split-across-chunks marker not signalled")
+	go func() {
+		for i := 0; i < 5; i++ {
+			pipe.Push([]byte("x"))
+			time.Sleep(30 * time.Millisecond)
+		}
+	}()
+	if !waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 2*time.Second) {
+		t.Fatal("expected idle (true) after output stops")
 	}
 }
 
-// TestWatchSaveMarkers_StopClearsObserver pins the cleanup contract:
-// after stop(), a follow-up burst of marker bytes must NOT re-trigger
-// the start channel.
-func TestWatchSaveMarkers_StopClearsObserver(t *testing.T) {
+// TestWaitForAgentIdle_CancelReturnsFalse: ctx cancellation aborts the
+// gate promptly even while the agent is busy.
+func TestWaitForAgentIdle_CancelReturnsFalse(t *testing.T) {
 	sess, pipe := newTestSession(t)
 	defer func() { _ = sess.Close() }()
+	stop := streamUntil(pipe)
+	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(80 * time.Millisecond); cancel() }()
+	if waitForAgentIdle(ctx, sess, "", time.Second, 5*time.Second) {
+		t.Fatal("expected false on ctx cancel")
+	}
+}
 
-	startCh, _, stop := watchSaveMarkers(sess)
-	stop()
+// TestWaitForForegroundLeave_LeavesWhenFgChanges: once the foreground
+// command moves off the agent (shell returned), the wait succeeds.
+func TestWaitForForegroundLeave_LeavesWhenFgChanges(t *testing.T) {
+	sess, pipe := newTestSession(t)
+	defer func() { _ = sess.Close() }()
+	pipe.SetFg("claude")
+	go func() { time.Sleep(120 * time.Millisecond); pipe.SetFg("bash") }()
+	if !waitForForegroundLeave(context.Background(), sess, "claude", 2*time.Second) {
+		t.Fatal("expected leave (true) when fg moves off the agent")
+	}
+}
 
-	pipe.Push([]byte("Commencing Save & Restore\r\n"))
+// TestWaitForForegroundLeave_TimesOutWhenStuck: an agent that never
+// leaves the foreground (wedged /exit) trips the timeout, so the caller
+// escalates to the SIGTERM fallback.
+func TestWaitForForegroundLeave_TimesOutWhenStuck(t *testing.T) {
+	sess, pipe := newTestSession(t)
+	defer func() { _ = sess.Close() }()
+	pipe.SetFg("claude")
+	if waitForForegroundLeave(context.Background(), sess, "claude", 300*time.Millisecond) {
+		t.Fatal("expected timeout (false) while fg stays the agent")
+	}
+}
 
-	select {
-	case <-startCh:
-		t.Fatal("start fired after stop() — observer not cleared")
-	case <-time.After(200 * time.Millisecond):
+// TestWaitForForegroundLeave_UnknownAgentFallsBack: with no fg signal
+// ("" agent), the wait can't observe the transition, so it settles and
+// reports success (assume exited).
+func TestWaitForForegroundLeave_UnknownAgentFallsBack(t *testing.T) {
+	sess, _ := newTestSession(t)
+	defer func() { _ = sess.Close() }()
+	if !waitForForegroundLeave(context.Background(), sess, "", 2*time.Second) {
+		t.Fatal("expected true fallback for unknown agent")
 	}
 }
 
