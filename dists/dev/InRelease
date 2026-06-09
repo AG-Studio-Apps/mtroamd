@@ -5,44 +5,44 @@ Origin: mtroamd
 Label: mtroamd
 Suite: dev
 Codename: dev
-Date: Sun, 07 Jun 2026 22:46:44 UTC
+Date: Tue, 09 Jun 2026 07:45:37 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (DEVELOPMENT — unstable, may break your system)
 MD5Sum:
- c37dcfb0bf28c4713595833fae6d3c6b 843 main/binary-amd64/Packages
- 5c5ada039a2993004d0f71368b65d62b 569 main/binary-amd64/Packages.gz
+ a0966dd10cf04edd6cb09c324f6bfbc3 843 main/binary-amd64/Packages
+ eff72a7f55ef4531b79fd353578800cc 570 main/binary-amd64/Packages.gz
  1ae03e9791b5505e796a73d9ef6facf7 172 main/binary-amd64/Release
- ed9cb72eeb4544bbd04a9449ca6c1580 843 main/binary-arm64/Packages
- 894f0dbee6a0a6e6242944e3e729198d 570 main/binary-arm64/Packages.gz
+ d8258b6f3843a7ddf113d891a7f93770 843 main/binary-arm64/Packages
+ 5576d58ca59a35578e8e94dfb84ce806 570 main/binary-arm64/Packages.gz
  df9924a80dcdb9c5af9faa42134fb9f1 172 main/binary-arm64/Release
- 3270c004b8a1e34df3b71f33b1ab833f 843 main/binary-armhf/Packages
- 73baf37c02a396c2518067c72a16809d 572 main/binary-armhf/Packages.gz
+ 88ff3cc9a54a39cab5d95149843667ed 843 main/binary-armhf/Packages
+ 0e2f846847dec3e86b9192cb66da99e9 568 main/binary-armhf/Packages.gz
  06a694288bc17c38da1ff7f42783efbd 172 main/binary-armhf/Release
 SHA1:
- c71fb5e97b7707419754d1e42766aa2dd11f6cb4 843 main/binary-amd64/Packages
- 6f6e78342b861357042b73806d9316afb619fcf9 569 main/binary-amd64/Packages.gz
+ e0a54ad1626a5ee61091949b973af2921fb69d96 843 main/binary-amd64/Packages
+ c82d19c891ddfaa8d2e2e9fb8ead300463879a0c 570 main/binary-amd64/Packages.gz
  a64ab171e4ec062319f89be7ac4a718aa50f3b27 172 main/binary-amd64/Release
- 9ade20bd94e726d0ba02d7b07d9aa3b3de6e33ca 843 main/binary-arm64/Packages
- 38b4cf696f9893bc0ae8ee2df0f06d853257f16c 570 main/binary-arm64/Packages.gz
+ bddb5e830420c441e39262fdb0456e146a2af2f7 843 main/binary-arm64/Packages
+ e24f2cddd9b1d31a5bde3a9abf9ea6c5e8a1d006 570 main/binary-arm64/Packages.gz
  5d96665768b1ec0746f52b6b6276d8d8ad970cc4 172 main/binary-arm64/Release
- a16dd64d55c7e24c0740779eca5ea2a343e049df 843 main/binary-armhf/Packages
- 77dfb9483e6538e1f218444488f2c171b15f97da 572 main/binary-armhf/Packages.gz
+ 54c41da2cd8a89dbe08b2d876bf4ccc7204472e0 843 main/binary-armhf/Packages
+ 207ca4bae10408dc54f05922b760449121835bc2 568 main/binary-armhf/Packages.gz
  c539e44ee0cc91f9a450aec773c7aad68d9056bd 172 main/binary-armhf/Release
 SHA256:
- b66bdfe07d271faa9fbcb0a6735b2f8e8d142dc227705f2ffa9e26785407300d 843 main/binary-amd64/Packages
- 89a9a05e533e2153fc5aefa55ffc725a0df739edc497ca96af4a18f2b38323b8 569 main/binary-amd64/Packages.gz
+ 3e258145b0cbe5e1eec00773ffec554a47baf563789358ccf12f08fb2eb817af 843 main/binary-amd64/Packages
+ bac0a10ca429e0373751308c57bf7e008041051d985e306d4c407e02550c2d38 570 main/binary-amd64/Packages.gz
  a1253f2bcbdc5091ebf4bbb3af22e90291d08c89421c04642bf7ef277c56627b 172 main/binary-amd64/Release
- e148d6f0b2cba9ef93eddc1e8d6e30f7e8df2099dbc9fdb476eceb7f612b49f4 843 main/binary-arm64/Packages
- 73e325a5cb18e6617a43db8a602e8056b9229b9197a8a64826705baa55988fe0 570 main/binary-arm64/Packages.gz
+ 6393fce764e2f5416451145fe9914371460e1607c129cc5af086b1cc88677ef1 843 main/binary-arm64/Packages
+ 5e23ab0c7b896c7bf9ed588090ee530f24b843791b0be614c68b56795fd6b0f7 570 main/binary-arm64/Packages.gz
  3734524224f4b900e8cb1494001d4ed13ef93a209ca911622c0bc4a4486c2add 172 main/binary-arm64/Release
- 6a692798883833bc9921080fa8599857c1307a069f4ac2ec4d70f8891c429a4d 843 main/binary-armhf/Packages
- e746511174c131d75a7225a3f2aabfaa93bd9727fd55b9fca3c1d4d90e4584c1 572 main/binary-armhf/Packages.gz
+ 80bf92c47070fe92f92ed3f9a0ded8f68fd52b99fe24ab74cca42cfe65c66890 843 main/binary-armhf/Packages
+ f491380f8735327b47d9532b2e3d14d0f4e5c53c6b998977812f56648c8ef65e 568 main/binary-armhf/Packages.gz
  0c89a57dc0f5c86c96dd0465a9c475d62c2c68fb447627a9345fd182e6086ae3 172 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaiX01AAKCRBQfbpy8DxF
-wim/AP9fVvD5J5/s3dAURWfMt66hpGB0uctCqm6kdkhcYcUwDQD/VDDOXUPnKBKg
-x0qU2XUq/izIc4Mx8a76KcEz2eX8bws=
-=mCgZ
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCaifEoQAKCRBQfbpy8DxF
+wrXKAP9CDEj63fv/gZJFx5eItf3WhFsVW+Yam1OBrqh/4lhYKwEAhMn+o2Ps4GNp
+aG98psz82/Sh43pnzHGOkX/KNTZo7ws=
+=jNX4
 -----END PGP SIGNATURE-----
