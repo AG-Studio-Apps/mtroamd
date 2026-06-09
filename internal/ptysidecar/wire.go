@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // FrameType identifies one of the seven sidecar↔daemon message
@@ -35,6 +36,11 @@ const (
 	FrameDieNow    FrameType = 0x04 // daemon → sidecar: SIGHUP child + exit immediately
 	FrameAck       FrameType = 0x05 // daemon → sidecar: [u64 consumed_through] free bytes ≤ this seq
 	FrameResume    FrameType = 0x06 // daemon → sidecar: [u64 from_seq] reposition read cursor
+	// FrameKillFg (v1.6.2+): SIGTERM the PTY's current foreground
+	// process group (tcgetpgrp), leaving the session/PTY alive. Empty
+	// body. Foundation for the iOS kill-and-resume restart. Older
+	// sidecars log-and-ignore the unknown type (no-op).
+	FrameKillFg FrameType = 0x07 // daemon → sidecar: SIGTERM foreground pgid
 
 	FrameStdout    FrameType = 0x10 // sidecar → daemon: [u64 first_byte_seq][u8 flags][N bytes]
 	FrameEchoState FrameType = 0x11 // sidecar → daemon: [u8 echo][u8 canon?] (canon optional; 0=off 1=on 2=unknown)
@@ -47,11 +53,41 @@ const (
 	// log-and-ignore the unknown type; older sidecars simply never
 	// send it (absent = fg unknown).
 	FrameFgState FrameType = 0x13 // sidecar → daemon: [N bytes comm]
+	// FrameFgCwd (v1.6.2+): the working directory of the foreground
+	// process group (readlink /proc/<pgid>/cwd), pushed alongside a
+	// FrameFgState change. Body = the path bytes, ≤ MaxFgCwdBytes;
+	// empty = unresolvable. Carried as a SEPARATE frame (not appended
+	// to FrameFgState) so the FrameFgState wire form stays byte-
+	// identical across versions — an upgraded daemon reconnecting to
+	// an old persisted sidecar still parses comm correctly, and an
+	// old daemon log-and-ignores this unknown frame. Process cwd
+	// only — never arguments or terminal content.
+	FrameFgCwd FrameType = 0x14 // sidecar → daemon: [N bytes cwd]
 )
 
 // MaxFgCommBytes bounds a FrameFgState body. Linux comm is 15 bytes;
 // the cmdline-basename fallback is truncated to this.
 const MaxFgCommBytes = 32
+
+// MaxFgCwdBytes bounds a FrameFgCwd body (a filesystem path). Linux
+// PATH_MAX is 4096; cap there so a hostile/oversized symlink target
+// can't balloon a frame.
+const MaxFgCwdBytes = 4096
+
+// SanitizeCapped coerces s to valid UTF-8 and truncates it to max
+// bytes. Both the sidecar (when reading /proc comm/cwd — arbitrary
+// kernel bytes) and the daemon-side client (defensive re-validation)
+// run untrusted fg/cwd strings through this before they reach a CBOR
+// text field, where invalid UTF-8 would fail the marshal. The cap is
+// re-sanitized so a multi-byte rune split at the boundary is dropped
+// rather than emitted torn.
+func SanitizeCapped(s string, max int) string {
+	s = strings.ToValidUTF8(s, "")
+	if len(s) > max {
+		s = strings.ToValidUTF8(s[:max], "")
+	}
+	return s
+}
 
 // Flag bits for FrameStdout body. The flags byte sits between the
 // seq prefix and the payload bytes.

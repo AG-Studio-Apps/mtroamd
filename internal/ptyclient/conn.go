@@ -13,7 +13,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -77,10 +76,10 @@ type Conn struct {
 	// emit a 2-byte body carrying both echo + canon bits; older
 	// sidecars emit 1 byte and canon stays Unknown (the cache's
 	// initial state).
-	echoMu      sync.Mutex
-	echoVal     byte // ptysidecar.EchoOff / EchoOn / EchoUnknown
-	canonVal    byte // ptysidecar.CanonOff / CanonOn / CanonUnknown
-	echoValid   bool // false until first FrameEchoState arrives
+	echoMu    sync.Mutex
+	echoVal   byte // ptysidecar.EchoOff / EchoOn / EchoUnknown
+	canonVal  byte // ptysidecar.CanonOff / CanonOn / CanonUnknown
+	echoValid bool // false until first FrameEchoState arrives
 
 	// Foreground-command cache (v1.6.1+). Last FrameFgState body
 	// from the sidecar's poller; ForegroundComm() reads under fgMu.
@@ -94,9 +93,18 @@ type Conn struct {
 	// sysctl, no-op elsewhere) stands down once this is set, so a
 	// current sidecar always wins and a pre-1.6.x sidecar's carried-
 	// over session still gets fg resolved — without anyone killing it.
+	//
+	// fgCwd (v1.6.2+) is the foreground process's cwd (FrameFgCwd,
+	// pushed alongside a comm change) — foundation for the kill-and-
+	// resume restart. The transition ANCHORS (fg_since time + fg_seq
+	// byte position) are NOT tracked here: the byte anchor must be in
+	// the ring's post-filter sequence space (what the client sees),
+	// which only the session knows, so Session derives both anchors by
+	// observing fgVal in its Pump. See Session.observeForegroundAnchor.
 	fgMu      sync.Mutex
 	fgVal     string
 	fgCapable bool
+	fgCwd     string
 	// sidecarPID is the sidecar process (captured at spawn, or read
 	// from the pidfile on reconnect). 0 = unknown → fallback poller
 	// disabled. shellPID caches the sidecar's child shell (resolved
@@ -237,6 +245,15 @@ func (c *Conn) ForegroundComm() string {
 	return c.fgVal
 }
 
+// ForegroundCwd returns the foreground process's working directory
+// (FrameFgCwd), or "" if unknown (pre-v1.6.2 sidecar, non-Linux, or
+// unresolvable). v1.6.2+.
+func (c *Conn) ForegroundCwd() string {
+	c.fgMu.Lock()
+	defer c.fgMu.Unlock()
+	return c.fgCwd
+}
+
 // Close shuts the socket; the sidecar sees EOF and enters its grace
 // timer (default 30 s) waiting for a daemon reconnect. Idempotent.
 // Use Kill() for `mtroam kill` semantics — that path sends die_now
@@ -263,6 +280,15 @@ func (c *Conn) Kill() error {
 	// already gone — Close handles the rest.
 	_ = c.writeFrame(ptysidecar.FrameDieNow, nil)
 	return c.Close()
+}
+
+// KillFg SIGTERMs the PTY's foreground process group (the running
+// agent plus any children), leaving the session/PTY and its shell
+// alive — the shell returns to its prompt. Foundation for the
+// kill-and-resume restart. Unlike Kill(), the session survives.
+// Best-effort: a write error means the socket is already gone.
+func (c *Conn) KillFg() error {
+	return c.writeFrame(ptysidecar.FrameKillFg, nil)
 }
 
 // ChildExit returns the child's exit info if the sidecar has
@@ -320,18 +346,29 @@ func (c *Conn) runFrameReader() {
 			}
 		case ptysidecar.FrameFgState:
 			// v1.6.1+ sidecar poller push. Body = bare command name.
-			// Re-sanitize defensively (the sidecar already does):
-			// this value flows into CBOR text strings (AttachAck.Fg,
-			// AgentNotify), where invalid UTF-8 fails the marshal —
-			// a hostile sidecar body must not break attaches.
-			comm := strings.ToValidUTF8(string(body), "")
-			if len(comm) > ptysidecar.MaxFgCommBytes {
-				comm = strings.ToValidUTF8(comm[:ptysidecar.MaxFgCommBytes], "")
-			}
+			// Re-sanitize defensively (the sidecar already does): this
+			// value flows into CBOR text strings (AttachAck.Fg,
+			// AgentNotify) where invalid UTF-8 fails the marshal — a
+			// hostile sidecar body must not break attaches. The session
+			// derives the transition anchors by observing fgVal changes
+			// (it owns the ring's post-filter seq space); conn just
+			// caches the latest value.
+			comm := ptysidecar.SanitizeCapped(string(body), ptysidecar.MaxFgCommBytes)
 			c.fgMu.Lock()
 			c.fgVal = comm
 			// The sidecar self-reports → it's a 1.6.x build; the
 			// daemon-side fallback poller stands down (sidecar wins).
+			c.fgCapable = true
+			c.fgMu.Unlock()
+		case ptysidecar.FrameFgCwd:
+			// v1.6.2+ sidecar push, alongside a comm change. Body =
+			// the foreground process cwd. Re-sanitize for the same
+			// CBOR-text reason as Fg. Like FrameFgState, this frame
+			// only comes from a self-reporting 1.6.2+ sidecar, so it
+			// also stands the daemon-side fallback poller down.
+			cwd := ptysidecar.SanitizeCapped(string(body), ptysidecar.MaxFgCwdBytes)
+			c.fgMu.Lock()
+			c.fgCwd = cwd
 			c.fgCapable = true
 			c.fgMu.Unlock()
 		case ptysidecar.FrameChildExit:

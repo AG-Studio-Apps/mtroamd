@@ -34,11 +34,12 @@ import (
 // gigantic map count and force allocation pressure.
 //
 // Limits picked against the actual messages we exchange:
-//   - MaxMapPairs 64       — Attach has 7 pairs; AttachAck max ~9
+//   - MaxMapPairs 64       — Attach has 7 pairs; AttachAck ~20 and
+//     growing as optional fields accrete — keep headroom under 64
 //   - MaxArrayElements 256 — no current message uses arrays, but
-//                            being permissive here costs nothing
+//     being permissive here costs nothing
 //   - MaxNestedLevels 8    — every control message is a flat map;
-//                            8 is generous future-proofing
+//     8 is generous future-proofing
 var StrictDecMode cbor.DecMode = func() cbor.DecMode {
 	dm, err := cbor.DecOptions{
 		MaxArrayElements: 256,
@@ -78,13 +79,13 @@ const MaxDatagramBytes = 1200
 // QUIC application error code that should be sent when terminating a
 // connection due to that condition.
 const (
-	ErrOversizedFrame     uint64 = 1001
-	ErrBadFrame           uint64 = 1002
-	ErrProtocolViolation  uint64 = 1003
-	ErrBadToken           uint64 = 1004
-	ErrStreamWrongOrder   uint64 = 1005
-	ErrOversizedDatagram  uint64 = 1006
-	ErrInternal           uint64 = 2000
+	ErrOversizedFrame    uint64 = 1001
+	ErrBadFrame          uint64 = 1002
+	ErrProtocolViolation uint64 = 1003
+	ErrBadToken          uint64 = 1004
+	ErrStreamWrongOrder  uint64 = 1005
+	ErrOversizedDatagram uint64 = 1006
+	ErrInternal          uint64 = 2000
 )
 
 // Type tags for the discriminated-union encoding of control messages.
@@ -194,11 +195,11 @@ const (
 
 // Error codes for AttachAck.Err per § 7.3.
 const (
-	AttachErrUnknownSession      = "unknown_session"
-	AttachErrBadToken            = "bad_token"
-	AttachErrVersionUnsupported  = "version_unsupported"
-	AttachErrCapacity            = "capacity"
-	AttachErrReplaced            = "replaced"
+	AttachErrUnknownSession     = "unknown_session"
+	AttachErrBadToken           = "bad_token"
+	AttachErrVersionUnsupported = "version_unsupported"
+	AttachErrCapacity           = "capacity"
+	AttachErrReplaced           = "replaced"
 )
 
 // Attach is the first message a client sends on the control stream.
@@ -334,6 +335,35 @@ type AttachAck struct {
 	// Process NAME only — never arguments or terminal content.
 	// Ongoing changes flow via AgentNotify on the 5-second ticker.
 	Fg string `cbor:"fg,omitempty"`
+
+	// FgSince is the wall-clock time (UnixNano) at which the
+	// foreground command last transitioned to its current value —
+	// i.e. how long `Fg` has been the foreground process. v1.6.2+
+	// field; older clients ignore it. Zero/absent = unknown (no
+	// transition observed yet, pre-fg sidecar, or non-Linux host).
+	// Clients use it to anchor a "session has been running this
+	// long" age clock that survives alt-screen bounces (the PTY fg
+	// pgid stays `claude` even when Claude shells out), which a
+	// client-side clock keyed on alt-screen state cannot.
+	FgSince int64 `cbor:"fg_since,omitempty"`
+
+	// FgSinceSeq is the ring output byte-sequence at the same fg
+	// transition as FgSince — the absolute byte position when `Fg`
+	// became the foreground command. v1.6.2+ field. Clients compute
+	// `currentByteSeq - FgSinceSeq` for a live "how much output this
+	// foreground process has produced" size signal (a better proxy
+	// than wall-clock for a heavily-used session, since age and
+	// activity are orthogonal). Zero/absent = unknown.
+	FgSinceSeq uint64 `cbor:"fg_seq,omitempty"`
+
+	// Cwd is the current working directory of the foreground process
+	// group (readlink /proc/<pgid>/cwd), ≤5s fresh. v1.6.2+ field;
+	// older clients ignore it. Empty/absent = unknown (pre-cwd
+	// sidecar, non-Linux host, or unresolvable). Foundation for the
+	// kill-and-resume restart (`cd <cwd> && claude --resume`); not
+	// yet consumed by current clients. Ongoing changes flow via
+	// AgentNotify alongside Fg.
+	Cwd string `cbor:"cwd,omitempty"`
 }
 
 // Ack reports the highest output sequence number the client has
@@ -471,13 +501,13 @@ type RTTNotify struct {
 // prefer these over hand-rolling cbor.Marshal so the "t" field is
 // guaranteed correct.
 
-func MarshalAttach(m Attach) ([]byte, error)         { m.T = TypeAttach; return cborMarshal(m) }
-func MarshalAttachAck(m AttachAck) ([]byte, error)   { m.T = TypeAttachAck; return cborMarshal(m) }
-func MarshalAck(m Ack) ([]byte, error)               { m.T = TypeAck; return cborMarshal(m) }
-func MarshalResize(m Resize) ([]byte, error)         { m.T = TypeResize; return cborMarshal(m) }
-func MarshalPing(m Ping) ([]byte, error)             { m.T = TypePing; return cborMarshal(m) }
-func MarshalPong(m Pong) ([]byte, error)             { m.T = TypePong; return cborMarshal(m) }
-func MarshalGoodbye(m Goodbye) ([]byte, error)       { m.T = TypeGoodbye; return cborMarshal(m) }
+func MarshalAttach(m Attach) ([]byte, error)       { m.T = TypeAttach; return cborMarshal(m) }
+func MarshalAttachAck(m AttachAck) ([]byte, error) { m.T = TypeAttachAck; return cborMarshal(m) }
+func MarshalAck(m Ack) ([]byte, error)             { m.T = TypeAck; return cborMarshal(m) }
+func MarshalResize(m Resize) ([]byte, error)       { m.T = TypeResize; return cborMarshal(m) }
+func MarshalPing(m Ping) ([]byte, error)           { m.T = TypePing; return cborMarshal(m) }
+func MarshalPong(m Pong) ([]byte, error)           { m.T = TypePong; return cborMarshal(m) }
+func MarshalGoodbye(m Goodbye) ([]byte, error)     { m.T = TypeGoodbye; return cborMarshal(m) }
 func MarshalRTTNotify(m RTTNotify) ([]byte, error) { m.T = TypeRTTNotify; return cborMarshal(m) }
 
 // AgentNotify (server → client, v1.6.1+) reports a change in the
@@ -488,6 +518,15 @@ func MarshalRTTNotify(m RTTNotify) ([]byte, error) { m.T = TypeRTTNotify; return
 type AgentNotify struct {
 	T  string `cbor:"t"`
 	Fg string `cbor:"fg"`
+
+	// FgSince / FgSinceSeq / Cwd mirror the AttachAck fields of the
+	// same name (see there for semantics) so a client that attached
+	// before the current foreground process started still receives
+	// the transition anchors + cwd on the next change. v1.6.2+;
+	// older clients ignore them.
+	FgSince    int64  `cbor:"fg_since,omitempty"`
+	FgSinceSeq uint64 `cbor:"fg_seq,omitempty"`
+	Cwd        string `cbor:"cwd,omitempty"`
 }
 
 func MarshalAgentNotify(m AgentNotify) ([]byte, error) {

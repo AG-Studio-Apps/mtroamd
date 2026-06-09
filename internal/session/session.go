@@ -296,6 +296,19 @@ type Session struct {
 	// thread-safe.
 	ptyByteObserver func([]byte)
 
+	// Foreground transition anchors (v1.6.2+), derived by
+	// observeForegroundAnchor from the PTY's foreground command. The
+	// seq anchor is in the ring's post-filter byte-sequence space
+	// (buf.HeadSeq) — the same space the client tracks — so a client's
+	// size = currentSeq-fgAnchorSeq is well defined. fgAnchorInit
+	// distinguishes "never observed" from a genuine "" foreground.
+	// Own mutex so the hot Pump observe path never contends s.mu.
+	fgAnchorMu   sync.Mutex
+	fgAnchorComm string
+	fgAnchorTime time.Time
+	fgAnchorSeq  uint64
+	fgAnchorInit bool
+
 	// recoverCancel cancels the in-flight recovery goroutine. Non-nil
 	// while a recovery is running. Protected by mu. recoverGen
 	// identifies the recovery that currently owns the slot so a
@@ -515,10 +528,25 @@ func (s *Session) SetLastTitle(t string) {
 
 // ForegroundReporter is implemented by PTY backends that can report
 // the terminal's current foreground command name (the sidecar-backed
-// ptyclient.Conn; v1.6.1+). Backends without the capability simply
-// don't conform and ForegroundComm reports "".
+// ptyclient.Conn; v1.6.1+) and, v1.6.2+, its working directory.
+// Backends without the capability simply don't conform and
+// ForegroundComm/ForegroundCwd report "".
+//
+// The transition ANCHORS (fg_since time + fg_seq byte position) are
+// NOT on this interface: the byte anchor must live in the ring's
+// post-filter sequence space (what the client sees), which the backend
+// doesn't know. Session derives both anchors itself by observing
+// ForegroundComm in its Pump — see observeForegroundAnchor.
 type ForegroundReporter interface {
 	ForegroundComm() string
+	ForegroundCwd() string
+}
+
+// ForegroundKiller is implemented by PTY backends that can SIGTERM the
+// terminal's foreground process group without tearing down the session
+// (v1.6.2+) — the daemon side of the kill-and-resume restart.
+type ForegroundKiller interface {
+	KillFg() error
 }
 
 // ForegroundComm returns the bare command name of the session PTY's
@@ -537,6 +565,74 @@ func (s *Session) ForegroundComm() string {
 		return fr.ForegroundComm()
 	}
 	return ""
+}
+
+// ForegroundCommSince returns the wall-clock time the foreground
+// command last transitioned to its current value (v1.6.2+), or the
+// zero time when unknown. Derived by observeForegroundAnchor; feeds
+// AttachAck.FgSince / AgentNotify.
+func (s *Session) ForegroundCommSince() time.Time {
+	s.fgAnchorMu.Lock()
+	defer s.fgAnchorMu.Unlock()
+	return s.fgAnchorTime
+}
+
+// ForegroundSinceSeq returns the ring output byte high-water at the
+// last foreground transition — the size-signal anchor, in the same
+// post-filter sequence space the client tracks (buf.HeadSeq), so a
+// client's currentSeq-FgSinceSeq is well defined. 0 when unknown.
+// v1.6.2+. Feeds AttachAck.FgSinceSeq / AgentNotify.
+func (s *Session) ForegroundSinceSeq() uint64 {
+	s.fgAnchorMu.Lock()
+	defer s.fgAnchorMu.Unlock()
+	return s.fgAnchorSeq
+}
+
+// observeForegroundAnchor stamps the foreground transition anchors
+// (wall-clock time + ring byte high-water) whenever the PTY's
+// foreground command changes. Called from Pump after each ring write
+// — so fgAnchorSeq captures buf.HeadSeq() at the transition, in the
+// client-visible post-filter sequence space — and from the attach /
+// notify paths so the anchors stay fresh on an idle session whose fg
+// changed without producing output. Cheap: a cached-fg read + string
+// compare; writes only on an actual change, so the first observer of
+// a new value wins and later same-value observers no-op.
+func (s *Session) observeForegroundAnchor() {
+	comm := s.ForegroundComm() // "" for backends without the capability
+	s.fgAnchorMu.Lock()
+	if !s.fgAnchorInit || comm != s.fgAnchorComm {
+		s.fgAnchorInit = true
+		s.fgAnchorComm = comm
+		s.fgAnchorTime = time.Now()
+		s.fgAnchorSeq = s.buf.HeadSeq()
+	}
+	s.fgAnchorMu.Unlock()
+}
+
+// ForegroundCwd returns the foreground process's working directory
+// (v1.6.2+), or "" when unknown. Feeds AttachAck.Cwd / AgentNotify;
+// foundation for the kill-and-resume restart.
+func (s *Session) ForegroundCwd() string {
+	s.mu.Lock()
+	pty := s.pty
+	s.mu.Unlock()
+	if fr, ok := pty.(ForegroundReporter); ok {
+		return fr.ForegroundCwd()
+	}
+	return ""
+}
+
+// KillForeground SIGTERMs the session PTY's foreground process group,
+// leaving the session and its shell alive (v1.6.2+). No-op (nil) on
+// backends without the capability. The daemon side of kill-and-resume.
+func (s *Session) KillForeground() error {
+	s.mu.Lock()
+	pty := s.pty
+	s.mu.Unlock()
+	if fk, ok := pty.(ForegroundKiller); ok {
+		return fk.KillFg()
+	}
+	return nil
 }
 
 // WedgeSnapshot returns the per-session cumulative metrics tracked by
@@ -1279,6 +1375,10 @@ func (s *Session) Pump() {
 				seq := seqAware.LastConsumedSeq()
 				s.AdvanceSidecarSeq(seq)
 				_ = seqAware.Ack(seq)
+				// Stamp the fg transition anchors now that buf.HeadSeq
+				// reflects this chunk — so the size anchor lands in the
+				// client-visible post-filter seq space.
+				s.observeForegroundAnchor()
 			}
 			s.Touch()
 		}

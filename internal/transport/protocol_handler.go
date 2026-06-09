@@ -296,7 +296,12 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		RTTNanos:        rttNanosFor(ctrl),
 		AltScreenActive: sess.WedgeAltScreenActive(),
 		LastTitle:       sess.LastTitle(),
-		Fg:              attachFg,
+		// fg transition anchors (v1.6.2+): time + ring byte-seq of the
+		// last foreground change, plus its cwd. See fgSinceToNanos.
+		Fg:         attachFg,
+		FgSince:    fgSinceToNanos(sess.ForegroundCommSince()),
+		FgSinceSeq: sess.ForegroundSinceSeq(),
+		Cwd:        sess.ForegroundCwd(),
 	})
 	if err != nil {
 		log.WarnContext(ctx, "marshal AttachAck", "err", err)
@@ -378,7 +383,16 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 			case <-ticker.C:
 				if fg := sess.ForegroundComm(); fg != lastFg {
 					lastFg = fg
-					if body, err := protocol.MarshalAgentNotify(protocol.AgentNotify{Fg: fg}); err == nil {
+					// Carry the same fg transition anchors + cwd as
+					// AttachAck so a client attached before this change
+					// gets a fresh age/size clock and the cwd.
+					notify := protocol.AgentNotify{
+						Fg:         fg,
+						FgSince:    fgSinceToNanos(sess.ForegroundCommSince()),
+						FgSinceSeq: sess.ForegroundSinceSeq(),
+						Cwd:        sess.ForegroundCwd(),
+					}
+					if body, err := protocol.MarshalAgentNotify(notify); err == nil {
 						// Best-effort, same posture as RTTNotify.
 						_ = writeFrame(protocol.FrameTypeControl, body)
 					}
@@ -725,4 +739,16 @@ func rttNanosFor(c Conn) int64 {
 		return 0
 	}
 	return rtt.Nanoseconds()
+}
+
+// fgSinceToNanos converts a foreground-transition timestamp to the
+// AttachAck/AgentNotify FgSince wire value. The zero time means
+// "unknown" and maps to 0 (omitempty drops it) rather than
+// time.Time{}.UnixNano(), which is a large garbage sentinel a client
+// would misread as a real instant.
+func fgSinceToNanos(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }

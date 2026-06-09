@@ -32,10 +32,12 @@ func newFakePTY() *fakePTY {
 	return p
 }
 
-// ForegroundComm conforms fakePTY to session.ForegroundReporter so
-// attach tests can assert AttachAck.Fg plumbing without a real
-// sidecar.
+// ForegroundComm + ForegroundCwd conform fakePTY to
+// session.ForegroundReporter so attach tests can assert AttachAck.Fg /
+// Cwd plumbing without a real sidecar. (The FgSince/FgSinceSeq anchors
+// are session-derived in Pump, not reported by the backend.)
 func (p *fakePTY) ForegroundComm() string { return "fakecmd" }
+func (p *fakePTY) ForegroundCwd() string  { return "/fake/cwd" }
 
 func (p *fakePTY) Read(b []byte) (int, error) {
 	p.mu.Lock()

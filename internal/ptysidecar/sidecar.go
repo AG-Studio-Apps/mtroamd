@@ -571,6 +571,13 @@ func startClientPumps(conn net.Conn, master *os.File, childPID int, ring *Ring, 
 				if err := cp.writeFrame(FrameFgState, []byte(comm)); err != nil {
 					return
 				}
+				// Push the foreground cwd alongside the comm change, in
+				// a separate frame (FrameFgState stays byte-stable). "" on
+				// non-Linux / unresolvable. A write error here means the
+				// daemon socket is gone, same as above — exit the poller.
+				if err := cp.writeFrame(FrameFgCwd, []byte(foregroundCwd(master, childPID))); err != nil {
+					return
+				}
 			}
 		}
 	}()
@@ -624,6 +631,14 @@ func startClientPumps(conn net.Conn, master *os.File, childPID int, ring *Ring, 
 					close(cp.dieNow)
 				}
 				return
+			case FrameKillFg:
+				// SIGTERM the foreground process group, leaving the
+				// session/PTY (and its shell) alive. Best-effort: a
+				// missing foreground group or signal error is logged,
+				// never fatal — the connection stays up.
+				if kerr := killForegroundGroup(master, childPID); kerr != nil {
+					log.Warn("sidecar.killfg_failed", "err", kerr.Error())
+				}
 			default:
 				log.Warn("sidecar.unknown_frame_type", "type", uint8(t))
 			}

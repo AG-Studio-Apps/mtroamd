@@ -76,3 +76,31 @@ func ResolveForegroundComm(pgid, sessionPid int) string {
 	}
 	return ""
 }
+
+// foregroundCwd returns the working directory of the PTY's current
+// foreground process group — readlink /proc/<pgid>/cwd, where pgid is
+// the tcgetpgrp of the master fd. Foundation for the kill-and-resume
+// restart, which relaunches the agent in the same directory
+// (`cd <cwd> && claude --resume`).
+//
+// sessionPid getsid-confines the read exactly like ResolveForegroundComm:
+// a recycled pgid (the foreground group exited between TIOCGPGRP and the
+// readlink) must not leak a stranger's cwd. Returns "" when unresolvable
+// (fd error, no foreground group, recycled pid, unreadable symlink).
+// Reads the cwd symlink target only — no arguments, no terminal content.
+func foregroundCwd(master *os.File, sessionPid int) string {
+	pgid, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
+	if err != nil || pgid <= 0 {
+		return ""
+	}
+	if sessionPid > 0 {
+		if sid, serr := unix.Getsid(pgid); serr != nil || sid != sessionPid {
+			return ""
+		}
+	}
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pgid))
+	if err != nil {
+		return ""
+	}
+	return SanitizeCapped(cwd, MaxFgCwdBytes)
+}
