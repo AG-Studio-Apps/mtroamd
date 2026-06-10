@@ -42,7 +42,9 @@ func runAttach(args []string) int {
 	mode := fs.String("mode", "exclusive",
 		"attach mode. 'exclusive' (default) sends stdin and owns PTY size — displaces any prior exclusive client. "+
 			"'readonly' is a watcher: receives output only, can't type, can't resize. Multiple readonly clients can "+
-			"coexist with each other and with one exclusive client.")
+			"coexist with each other and with one exclusive client. "+
+			"'exclusive-if-free' is polite exclusive: takes exclusive only when nobody holds it, otherwise joins "+
+			"readonly (check the attach banner for the granted role).")
 	predictFlag := fs.String("predict", "adaptive",
 		"predictive local echo mode. 'always' renders unconfirmed predictions with an SGR-underline preview. "+
 			"'adaptive' (default) underlines only when smoothed RTT exceeds the adaptive threshold (~80ms) — "+
@@ -78,8 +80,10 @@ func runAttach(args []string) int {
 		resolvedMode = protocol.AttachModeExclusive
 	case "readonly", "watch", "ro":
 		resolvedMode = protocol.AttachModeReadonly
+	case "exclusive-if-free", "polite", "if-free":
+		resolvedMode = protocol.AttachModeExclusiveIfFree
 	default:
-		fmt.Fprintf(os.Stderr, "mtroam attach: unknown --mode %q (want exclusive or readonly)\n", *mode)
+		fmt.Fprintf(os.Stderr, "mtroam attach: unknown --mode %q (want exclusive, readonly, or exclusive-if-free)\n", *mode)
 		return exitConfig
 	}
 

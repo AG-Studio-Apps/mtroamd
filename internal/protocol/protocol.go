@@ -191,6 +191,18 @@ const (
 	// that other tools would render to the user. Hard-capped at 8
 	// concurrent passive attachers per session.
 	AttachModePassive = "passive"
+
+	// AttachModeExclusiveIfFree: polite exclusive. Grants exclusive
+	// iff no live exclusive client is attached at the moment of this
+	// attach; otherwise grants readonly. Resolved atomically inside
+	// Session.Acquire — there is no probe/upgrade race. AttachAck.Mode
+	// echoes the role actually granted ("exclusive" or "readonly");
+	// the requested string is never echoed back. v1.7.0+; older
+	// daemons treat it as plain exclusive per the unknown-mode compat
+	// posture above, which is exactly the pre-1.7.0 displacement
+	// behaviour. Use case: multi-device clients (iOS) that want
+	// first-attach-wins instead of last-attach-steals.
+	AttachModeExclusiveIfFree = "exclusive-if-free"
 )
 
 // Error codes for AttachAck.Err per § 7.3.

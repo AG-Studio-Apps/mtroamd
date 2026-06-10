@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
@@ -135,6 +136,12 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		attachMode = session.AttachReadonly
 	case protocol.AttachModePassive:
 		attachMode = session.AttachPassive
+	case protocol.AttachModeExclusiveIfFree:
+		// Resolved to exclusive-or-readonly inside Acquire, under
+		// the session lock; attachMode is reassigned to the granted
+		// mode below so every downstream gate (stdin, resize,
+		// recover, wedge push) follows the granted role.
+		attachMode = session.AttachExclusiveIfFree
 	}
 
 	// Lazy-spawn the PTY for sessions hydrated by LoadPersisted. The
@@ -159,7 +166,10 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// just adds to the live-clients slice. Either way, gen is what
 	// we pass to Release on exit so a displaced re-entry doesn't
 	// clobber the new owner (audit F4).
-	attachCtx, attachGen, err := sess.Acquire(ctx, attachMode)
+	attachCtx, attachGen, grantedMode, err := sess.Acquire(ctx, attachMode)
+	// From here on attachMode is the GRANTED role, which differs from
+	// the request only for exclusive-if-free (→ exclusive or readonly).
+	attachMode = grantedMode
 	if err != nil {
 		ackErr := protocol.AttachErrUnknownSession
 		if errors.Is(err, session.ErrPassiveCapacity) ||
@@ -229,7 +239,39 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// client owns the resize path that produces wedge candidates in
 	// the first place. Cleared on attach exit (deferred below) so a
 	// re-attach gets a fresh closure pointed at the new stream.
+	// Displacement notice (first-attach-wins, v1.7.0): when a later
+	// exclusive attach displaces this client, the session fires this
+	// notifier BEFORE cancelling our context, while the stream is
+	// still healthy. We push Goodbye{reason:"replaced"} here so the
+	// client can tell displacement from a network drop (and e.g.
+	// rejoin readonly instead of redialing exclusive — the
+	// two-device attach-war fix), and flag the teardown as graceful
+	// so the output pump's ctx-cancel hook FINs the stream (delivering
+	// the queued Goodbye) instead of resetting it. The gen-keyed
+	// notifier dies with this attach (Release drops the entry), so no
+	// defer-clear is needed. Readonly/passive clients are never
+	// displaced — exclusive-only by construction. writeFrame is
+	// mutex-serialised, so writing from the displacer's goroutine is
+	// safe against the pumps.
+	var wasDisplaced atomic.Bool
 	if attachMode == session.AttachExclusive {
+		sess.SetReplacedNotifier(attachGen, func() {
+			wasDisplaced.Store(true)
+			body, err := protocol.MarshalGoodbye(protocol.Goodbye{
+				Reason: protocol.ReasonReplaced,
+			})
+			if err != nil {
+				return
+			}
+			if werr := writeFrame(protocol.FrameTypeControl, body); werr != nil {
+				log.DebugContext(ctx, "replaced: Goodbye push failed (stream tearing down?)",
+					"err", werr)
+			} else {
+				log.InfoContext(ctx, "replaced: pushed Goodbye to displaced client",
+					"session", sess.ID().String(), "gen", attachGen)
+			}
+		})
+
 		sess.OnWedge(func(n session.WedgeNotice) {
 			body, err := protocol.MarshalWedgeDetected(protocol.WedgeDetected{
 				Kind:               n.Kind,
@@ -419,7 +461,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		defer wg.Done()
 		defer pumpsCancel()
 		defer recoverPump("output")
-		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start); err != nil && !errors.Is(err, context.Canceled) {
+		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start, &wasDisplaced); err != nil && !errors.Is(err, context.Canceled) {
 			log.DebugContext(pumpsCtx, "output pump exit", "err", err)
 		}
 	}()
@@ -464,8 +506,26 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	}()
 
 	wg.Wait()
+	// Displaced teardown: the Goodbye{replaced} was pushed by the
+	// notifier (pre-cancel) and the output pump FIN'd the stream
+	// instead of resetting it. Linger briefly so the peer can read
+	// the frame before the deferred CloseWithError discards
+	// undelivered stream data. A drain (attach-reject pattern) won't
+	// work here: readPump's cancel hook has already CancelRead the
+	// stream, so reads return instantly. Bounded, displacement-only.
+	if wasDisplaced.Load() {
+		time.Sleep(displacedCloseLinger)
+	}
 	log.InfoContext(ctx, "connection closed", "session", sess.ID().String())
 }
+
+// displacedCloseLinger is how long a displaced client's handler holds
+// the connection open after its pumps exit so the Goodbye{replaced}
+// (already FIN-queued on the stream) is delivered before the
+// connection-level close discards it. Loopback delivers in <1ms; one
+// lossy-WAN retransmit fits comfortably. Worst case the client misses
+// the frame and degrades to the legacy bare-close behaviour.
+const displacedCloseLinger = 250 * time.Millisecond
 
 // lazySpawnRestoredPTY handles the first-attach-after-restart path
 // for a session that was hydrated from disk by LoadPersisted. The
