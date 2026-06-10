@@ -206,7 +206,7 @@ A maximum frame length of 64 KiB is enforced. Exceeding it is a fatal protocol v
   "ack": 0,                        // last_ack_seq; 0 for fresh attach
   "rows": 24,                      // initial PTY rows
   "cols": 80,                      // initial PTY cols
-  "mode": "exclusive",             // optional: "exclusive" (default) or "readonly"
+  "mode": "exclusive",             // optional: "exclusive" (default), "readonly", or "exclusive-if-free" (v1.7.0+)
   "replay_budget": 307200          // optional (v1.6.0+): max replay bytes, counted back from buffer head
 }
 ```
@@ -215,6 +215,7 @@ A maximum frame length of 64 KiB is enforced. Exceeding it is a fatal protocol v
 
 - `"exclusive"` (default; missing/empty/unknown values map here): the client receives output, sends stdin, and owns the PTY size via Resize. A new exclusive Attach **displaces** any prior exclusive client — the daemon cancels the displaced client's stream context and the client sees its connection close cleanly. Existing readonly clients are unaffected by exclusive turnover.
 - `"readonly"`: the client receives output only. Stdin frames from a readonly client are silently dropped by the daemon (NOT a protocol violation — a misbehaving keystroke shouldn't tear the connection down). Resize frames are also dropped: the exclusive client owns the geometry. Multiple readonly clients can coexist with each other AND with one exclusive client.
+- `"exclusive-if-free"` (v1.7.0+): polite exclusive — first-attach-wins. Grants `exclusive` iff no live exclusive client is attached at the moment of the Attach, otherwise grants `readonly`. Resolved atomically inside the daemon's session lock (no probe/upgrade race); `AttachAck.mode` echoes the **granted** role, never the requested string. Never displaces anyone. On pre-1.7.0 daemons the unknown string maps to plain `exclusive` per the compat posture above — i.e. the legacy displacement behaviour, never worse. When the daemon displaces an exclusive client (a plain-`exclusive` Attach arrived), the displaced client is sent `Goodbye{reason:"replaced"}` (v1.7.0+; reason code existed since v0 but was never emitted) before its stream closes, so it can distinguish displacement from a network drop and rejoin readonly instead of redialing exclusive.
 
 The pre-`mode` field client posture is preserved exactly: an Attach with no `mode` field is treated as exclusive, identical to v0 behaviour.
 

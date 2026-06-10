@@ -851,3 +851,66 @@ func TestSetReplacedNotifierStaleGenIsNoop(t *testing.T) {
 		t.Error("stale-gen notifier fired")
 	}
 }
+
+func TestReplacedNotifierRunsOutsideSessionLock(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	_, gen1, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A notifier that takes s.mu itself (PeerModes does). If the
+	// displacement loop ever runs while Acquire still holds the
+	// lock, this deadlocks — the test hangs and fails on timeout.
+	called := make(chan struct{}, 1)
+	s.SetReplacedNotifier(gen1, func() {
+		_ = s.PeerModes(gen1)
+		called <- struct{}{}
+	})
+	done := make(chan struct{})
+	go func() {
+		if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+			t.Error(err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Acquire deadlocked — notifier ran under s.mu")
+	}
+	select {
+	case <-called:
+	default:
+		t.Error("notifier not called")
+	}
+}
+
+func TestReplacedNotifierPanicDoesNotBreakDisplacement(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	firstCtx, gen1, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetReplacedNotifier(gen1, func() { panic("notifier exploded") })
+
+	secondCtx, _, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstCtx.Err() == nil {
+		t.Error("displaced context not cancelled despite notifier panic")
+	}
+	if secondCtx.Err() != nil {
+		t.Error("new attacher's context cancelled")
+	}
+}

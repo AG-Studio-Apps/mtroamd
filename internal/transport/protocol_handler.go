@@ -271,9 +271,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 					"session", sess.ID().String(), "gen", attachGen)
 			}
 		})
-	}
 
-	if attachMode == session.AttachExclusive {
 		sess.OnWedge(func(n session.WedgeNotice) {
 			body, err := protocol.MarshalWedgeDetected(protocol.WedgeDetected{
 				Kind:               n.Kind,
@@ -510,15 +508,24 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	wg.Wait()
 	// Displaced teardown: the Goodbye{replaced} was pushed by the
 	// notifier (pre-cancel) and the output pump FIN'd the stream
-	// instead of resetting it. Drain briefly so the peer has time to
-	// read the frame before the deferred CloseWithError discards
-	// undelivered stream data — same pattern as the attach-reject
-	// path above.
+	// instead of resetting it. Linger briefly so the peer can read
+	// the frame before the deferred CloseWithError discards
+	// undelivered stream data. A drain (attach-reject pattern) won't
+	// work here: readPump's cancel hook has already CancelRead the
+	// stream, so reads return instantly. Bounded, displacement-only.
 	if wasDisplaced.Load() {
-		drainBriefly(ctrl, 500*time.Millisecond)
+		time.Sleep(displacedCloseLinger)
 	}
 	log.InfoContext(ctx, "connection closed", "session", sess.ID().String())
 }
+
+// displacedCloseLinger is how long a displaced client's handler holds
+// the connection open after its pumps exit so the Goodbye{replaced}
+// (already FIN-queued on the stream) is delivered before the
+// connection-level close discards it. Loopback delivers in <1ms; one
+// lossy-WAN retransmit fits comfortably. Worst case the client misses
+// the frame and degrades to the legacy bare-close behaviour.
+const displacedCloseLinger = 250 * time.Millisecond
 
 // lazySpawnRestoredPTY handles the first-attach-after-restart path
 // for a session that was hydrated from disk by LoadPersisted. The

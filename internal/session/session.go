@@ -921,10 +921,43 @@ func (s *Session) WindowSize() (rows, cols uint16) {
 // returned AttachMode is the mode actually granted; it differs from
 // the requested mode only for AttachExclusiveIfFree.
 func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Context, uint64, AttachMode, error) {
+	ctx, gen, granted, doomed, err := s.acquireLocked(parent, mode)
+	// Notify + cancel displaced clients OUTSIDE the lock: a
+	// notifyReplaced hook does a network write (Goodbye{replaced})
+	// that can block on a dead peer's flow-control window — under
+	// s.mu that would wedge every session operation until the
+	// transport's write backstop fired. Synchronous on purpose:
+	// callers (and tests) rely on the displaced context being
+	// cancelled by the time Acquire returns. notify-before-cancel
+	// ordering is what lets the frame go out on a healthy stream.
+	for _, c := range doomed {
+		if c.notifyReplaced != nil {
+			func() {
+				// A panicking notifier must not break the
+				// displacement chain for the remaining doomed
+				// clients (their cancel would never fire).
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("session: replaced-notifier panic",
+							"sid", s.ID().String(), "gen", c.gen, "panic", r)
+					}
+				}()
+				c.notifyReplaced()
+			}()
+		}
+		c.cancel()
+	}
+	return ctx, gen, granted, err
+}
+
+// acquireLocked is Acquire's lock-holding core. It returns the
+// displaced clients (doomed) instead of cancelling them so the
+// caller can run the notify+cancel sequence after s.mu is released.
+func (s *Session) acquireLocked(parent context.Context, mode AttachMode) (context.Context, uint64, AttachMode, []sessionClient, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, 0, mode, ErrSessionClosed
+		return nil, 0, mode, nil, ErrSessionClosed
 	}
 	if mode == AttachExclusiveIfFree {
 		mode = AttachExclusive
@@ -941,7 +974,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 		// Cap enforced here so the transport layer doesn't need to
 		// peek into Session internals.
 		if len(s.passiveClients) >= MaxPassivePerSession {
-			return nil, 0, mode, ErrPassiveCapacity
+			return nil, 0, mode, nil, ErrPassiveCapacity
 		}
 		s.nextGen++
 		gen := s.nextGen
@@ -952,17 +985,16 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			cancel: cancel,
 		})
 		s.lastActiveAt = time.Now()
-		return ctx, gen, mode, nil
+		return ctx, gen, mode, nil, nil
 	}
+	var doomed []sessionClient
 	if mode == AttachExclusive {
 		// Displace any current exclusive client. We collect the
-		// doomed entries first, drop them from the slice, then
-		// notify + cancel OUTSIDE the lock so the displaced
-		// goroutines' Release call doesn't deadlock on our mu.
+		// doomed entries and drop them from the slice; Acquire
+		// notifies + cancels them after the lock is released.
 		// Passive attachers are untouched — exclusive turnover is
 		// invisible to them.
 		kept := s.clients[:0]
-		var doomed []sessionClient
 		for _, c := range s.clients {
 			if c.mode == AttachExclusive {
 				doomed = append(doomed, c)
@@ -971,17 +1003,6 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			kept = append(kept, c)
 		}
 		s.clients = kept
-		// Defer notify+cancel until after we drop the lock. The
-		// Goodbye{replaced} push must land on the wire before the
-		// cancel tears the client's pumps down, so notify first.
-		defer func() {
-			for _, c := range doomed {
-				if c.notifyReplaced != nil {
-					c.notifyReplaced()
-				}
-				c.cancel()
-			}
-		}()
 	}
 	if mode == AttachReadonly {
 		// Cap read-only fan-out (see MaxReadonlyPerSession). Counts
@@ -994,7 +1015,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			}
 		}
 		if n >= MaxReadonlyPerSession {
-			return nil, 0, mode, ErrReadonlyCapacity
+			return nil, 0, mode, nil, ErrReadonlyCapacity
 		}
 	}
 	s.nextGen++
@@ -1006,7 +1027,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 		cancel: cancel,
 	})
 	s.lastActiveAt = time.Now()
-	return ctx, gen, mode, nil
+	return ctx, gen, mode, doomed, nil
 }
 
 // SetReplacedNotifier installs the displacement callback on the

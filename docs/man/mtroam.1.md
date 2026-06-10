@@ -52,7 +52,7 @@ needs to be running on the remote host; **mtroam** is a client only.
     for this specific session; absent means inherit the daemon
     default (typically on).
 
-**attach** [**\-\-host** *user@host*] [**\-\-mode** {*exclusive*|*readonly*}] [**\-\-predict** {*always*|*adaptive*|*never*}] [**\-\-persist** | **\-\-no-persist**] *id-or-name*
+**attach** [**\-\-host** *user@host*] [**\-\-mode** {*exclusive*|*readonly*|*exclusive-if-free*}] [**\-\-predict** {*always*|*adaptive*|*never*}] [**\-\-persist** | **\-\-no-persist**] *id-or-name*
 :   Attach to a session as your local terminal. If the named session
     doesn't exist, **attach** creates it. Use **\-\-mode readonly** to
     watch without sending input. **\-\-predict** controls predictive

@@ -67,6 +67,7 @@ mtroam attach user@host new                  # spawn + attach to a fresh shell
 mtroam attach user@host my-session           # attach to "my-session", create if missing
 mtroam attach user@host <hex-id>             # reattach to a specific session by id
 mtroam attach user@host --mode readonly <id> # watcher: see output, can't type
+mtroam attach user@host --mode exclusive-if-free <id> # polite: exclusive if free, else watcher
 ```
 
 If you always attach to the same host, set `$MTROAM_HOST` (or write it
