@@ -43,6 +43,14 @@ const (
 	// to AttachedModes / PeerModes. Capped at MaxPassivePerSession.
 	// See protocol.AttachModePassive for the wire-form rationale.
 	AttachPassive
+
+	// AttachExclusiveIfFree is a REQUEST-only mode: Acquire resolves
+	// it to AttachExclusive (no live exclusive client) or
+	// AttachReadonly (someone already holds exclusive) atomically
+	// under the session lock, and the resolved mode is what gets
+	// stored and returned. A sessionClient never carries this value.
+	// See protocol.AttachModeExclusiveIfFree.
+	AttachExclusiveIfFree
 )
 
 // MaxPassivePerSession caps the number of concurrent passive
@@ -86,6 +94,13 @@ type sessionClient struct {
 	gen    uint64
 	mode   AttachMode
 	cancel context.CancelFunc
+	// notifyReplaced, when non-nil, is invoked (best-effort, once)
+	// just before this client's context is cancelled because a new
+	// exclusive attach displaced it. The transport layer installs it
+	// via SetReplacedNotifier to push Goodbye{reason:"replaced"} so
+	// the client can tell displacement from a network drop. Must be
+	// safe to call from another goroutine and must not block.
+	notifyReplaced func()
 }
 
 // SessionID is a 16-byte random identifier for a Session, generated at
@@ -895,16 +910,30 @@ func (s *Session) WindowSize() (rows, cols uint16) {
 //     readonly clients are unaffected — they keep observing.
 //   - mode = AttachReadonly: never displaces anyone. Coexists with
 //     a current exclusive client and with other readonly clients.
+//   - mode = AttachExclusiveIfFree: resolved here, atomically — to
+//     AttachExclusive when no live exclusive client exists, else to
+//     AttachReadonly. Never displaces anyone.
 //
 // Returns a derived context the new attacher should use; cancelling
 // that context (e.g., via Release or via the registry GC'ing the
 // session) terminates the new attach. `gen` is the unique identity
-// of THIS attach — the caller must pass it to Release later.
-func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Context, uint64, error) {
+// of THIS attach — the caller must pass it to Release later. The
+// returned AttachMode is the mode actually granted; it differs from
+// the requested mode only for AttachExclusiveIfFree.
+func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Context, uint64, AttachMode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, 0, ErrSessionClosed
+		return nil, 0, mode, ErrSessionClosed
+	}
+	if mode == AttachExclusiveIfFree {
+		mode = AttachExclusive
+		for _, c := range s.clients {
+			if c.mode == AttachExclusive {
+				mode = AttachReadonly
+				break
+			}
+		}
 	}
 	if mode == AttachPassive {
 		// Passive attaches live in a sibling slice so they're
@@ -912,7 +941,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 		// Cap enforced here so the transport layer doesn't need to
 		// peek into Session internals.
 		if len(s.passiveClients) >= MaxPassivePerSession {
-			return nil, 0, ErrPassiveCapacity
+			return nil, 0, mode, ErrPassiveCapacity
 		}
 		s.nextGen++
 		gen := s.nextGen
@@ -923,29 +952,34 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			cancel: cancel,
 		})
 		s.lastActiveAt = time.Now()
-		return ctx, gen, nil
+		return ctx, gen, mode, nil
 	}
 	if mode == AttachExclusive {
 		// Displace any current exclusive client. We collect the
-		// cancel funcs first, drop the displaced entries from the
-		// slice, then call cancels OUTSIDE the lock so the
-		// displaced goroutines' Release call doesn't deadlock on
-		// our mu. Passive attachers are untouched — exclusive
-		// turnover is invisible to them.
+		// doomed entries first, drop them from the slice, then
+		// notify + cancel OUTSIDE the lock so the displaced
+		// goroutines' Release call doesn't deadlock on our mu.
+		// Passive attachers are untouched — exclusive turnover is
+		// invisible to them.
 		kept := s.clients[:0]
-		var doomed []context.CancelFunc
+		var doomed []sessionClient
 		for _, c := range s.clients {
 			if c.mode == AttachExclusive {
-				doomed = append(doomed, c.cancel)
+				doomed = append(doomed, c)
 				continue
 			}
 			kept = append(kept, c)
 		}
 		s.clients = kept
-		// Defer cancels until after we drop the lock.
+		// Defer notify+cancel until after we drop the lock. The
+		// Goodbye{replaced} push must land on the wire before the
+		// cancel tears the client's pumps down, so notify first.
 		defer func() {
 			for _, c := range doomed {
-				c()
+				if c.notifyReplaced != nil {
+					c.notifyReplaced()
+				}
+				c.cancel()
 			}
 		}()
 	}
@@ -960,7 +994,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 			}
 		}
 		if n >= MaxReadonlyPerSession {
-			return nil, 0, ErrReadonlyCapacity
+			return nil, 0, mode, ErrReadonlyCapacity
 		}
 	}
 	s.nextGen++
@@ -972,7 +1006,24 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 		cancel: cancel,
 	})
 	s.lastActiveAt = time.Now()
-	return ctx, gen, nil
+	return ctx, gen, mode, nil
+}
+
+// SetReplacedNotifier installs the displacement callback on the
+// client identified by gen (see sessionClient.notifyReplaced). The
+// transport layer calls this right after a successful exclusive
+// Acquire, once its write path exists. No-op for a stale gen (the
+// client was already displaced or released) and for passive clients
+// (they are never displaced).
+func (s *Session) SetReplacedNotifier(gen uint64, fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.clients {
+		if s.clients[i].gen == gen {
+			s.clients[i].notifyReplaced = fn
+			return
+		}
+	}
 }
 
 // Release is called by an attached client when its goroutine exits.

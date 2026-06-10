@@ -5,10 +5,17 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
+	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
+
+// gracefulCancelBackstop bounds how long a displaced client's
+// outputPump goroutine may stay pinned in a blocked Write after the
+// graceful stream Close — see outputPump's graceful teardown branch.
+const gracefulCancelBackstop = 500 * time.Millisecond
 
 // frameWriter sends one tagged frame on the protocol's single bidi
 // stream. The protocol_handler creates this with a mutex so the
@@ -32,8 +39,22 @@ type frameWriter func(t uint8, body []byte) error
 // write when the peer's flow-control window is full; CancelWrite
 // on ctx-cancel unblocks that path so the goroutine exits within
 // milliseconds of teardown rather than at MaxIdleTimeout.
-func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, fromSeq uint64) error {
-	cancelOnDone(ctx, func() { s.CancelWrite(0) })
+// graceful, when non-nil and true at teardown time, switches the
+// ctx-cancel hook from CancelWrite (a stream RESET that discards
+// queued-but-undelivered frames) to a stream Close (FIN — queued
+// data, e.g. the Goodbye{replaced} displacement notice, is still
+// delivered reliably). A delayed CancelWrite backstop keeps the
+// F-D guarantee that a Write pinned on a dead peer's flow-control
+// window can't hold the goroutine past teardown.
+func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, fromSeq uint64, graceful *atomic.Bool) error {
+	cancelOnDone(ctx, func() {
+		if graceful != nil && graceful.Load() {
+			_ = s.Close()
+			time.AfterFunc(gracefulCancelBackstop, func() { s.CancelWrite(0) })
+			return
+		}
+		s.CancelWrite(0)
+	})
 	buf := sess.Buffer()
 	if buf == nil {
 		return nil

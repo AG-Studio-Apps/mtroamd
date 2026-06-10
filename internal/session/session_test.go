@@ -216,7 +216,7 @@ func TestAcquireDisplacesPriorAttach(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	parent := context.Background()
 
-	first, gen1, err := s.Acquire(parent, AttachExclusive)
+	first, gen1, _, err := s.Acquire(parent, AttachExclusive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestAcquireDisplacesPriorAttach(t *testing.T) {
 		t.Error("first attach context cancelled prematurely")
 	}
 
-	second, gen2, err := s.Acquire(parent, AttachExclusive)
+	second, gen2, _, err := s.Acquire(parent, AttachExclusive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,8 +250,8 @@ func TestReleaseDoesNotClearWhenDisplaced(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	parent := context.Background()
 
-	_, gen1, _ := s.Acquire(parent, AttachExclusive)
-	second, _, _ := s.Acquire(parent, AttachExclusive)
+	_, gen1, _, _ := s.Acquire(parent, AttachExclusive)
+	second, _, _, _ := s.Acquire(parent, AttachExclusive)
 	// Old attach calls Release after seeing its ctx cancelled. With
 	// the generation counter, this no-ops cleanly.
 	s.Release(gen1)
@@ -271,14 +271,14 @@ func TestReleaseStaleGenerationIsNoOp(t *testing.T) {
 	pty := newFakePTY()
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	parent, cancel := context.WithCancel(context.Background())
-	_, gen1, _ := s.Acquire(parent, AttachExclusive)
-	_, gen2, _ := s.Acquire(parent, AttachExclusive)
+	_, gen1, _, _ := s.Acquire(parent, AttachExclusive)
+	_, gen2, _, _ := s.Acquire(parent, AttachExclusive)
 	cancel() // cancel the shared parent — both ctxs now have Err()
 	// First's Release with the OLD gen must not clear gen2's slot.
 	s.Release(gen1)
 	// Inspect: activeCancel must still be set (a third Acquire
 	// should still trigger displacement).
-	_, gen3, _ := s.Acquire(context.Background(), AttachExclusive)
+	_, gen3, _, _ := s.Acquire(context.Background(), AttachExclusive)
 	if gen3 == gen2 {
 		t.Error("third Acquire didn't increment generation; second's cancel was prematurely cleared")
 	}
@@ -294,11 +294,11 @@ func TestAcquireReadonlyDoesNotDisplace(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	exclCtx, exclGen, err := s.Acquire(context.Background(), AttachExclusive)
+	exclCtx, exclGen, _, err := s.Acquire(context.Background(), AttachExclusive)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roCtx, roGen, err := s.Acquire(context.Background(), AttachReadonly)
+	roCtx, roGen, _, err := s.Acquire(context.Background(), AttachReadonly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,11 +332,11 @@ func TestAcquireExclusiveDisplacesPriorExclusive(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	first, _, _ := s.Acquire(context.Background(), AttachExclusive)
-	roCtx, _, _ := s.Acquire(context.Background(), AttachReadonly)
+	first, _, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	roCtx, _, _, _ := s.Acquire(context.Background(), AttachReadonly)
 
 	// Now displace the exclusive.
-	second, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	second, _, _, _ := s.Acquire(context.Background(), AttachExclusive)
 
 	// First (displaced exclusive) must be cancelled.
 	select {
@@ -364,8 +364,8 @@ func TestAcquireMultipleReadonlyCoexist(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	a, genA, _ := s.Acquire(context.Background(), AttachReadonly)
-	b, _, _ := s.Acquire(context.Background(), AttachReadonly)
+	a, genA, _, _ := s.Acquire(context.Background(), AttachReadonly)
+	b, _, _, _ := s.Acquire(context.Background(), AttachReadonly)
 	if a.Err() != nil || b.Err() != nil {
 		t.Error("readonly Acquire cancelled a peer")
 	}
@@ -384,9 +384,9 @@ func TestAcquirePassiveDoesNotDisplace(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	exclCtx, _, _ := s.Acquire(context.Background(), AttachExclusive)
-	roCtx, _, _ := s.Acquire(context.Background(), AttachReadonly)
-	passCtx, _, err := s.Acquire(context.Background(), AttachPassive)
+	exclCtx, _, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	roCtx, _, _, _ := s.Acquire(context.Background(), AttachReadonly)
+	passCtx, _, _, err := s.Acquire(context.Background(), AttachPassive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,9 +411,9 @@ func TestAcquirePassiveInvisibleInAttachedModes(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	_, exclGen, _ := s.Acquire(context.Background(), AttachExclusive)
-	_, _, _ = s.Acquire(context.Background(), AttachPassive)
-	_, _, _ = s.Acquire(context.Background(), AttachPassive)
+	_, exclGen, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	_, _, _, _ = s.Acquire(context.Background(), AttachPassive)
+	_, _, _, _ = s.Acquire(context.Background(), AttachPassive)
 
 	modes := s.AttachedModes()
 	if len(modes) != 1 || modes[0] != "exclusive" {
@@ -436,19 +436,19 @@ func TestAcquirePassiveCapEnforced(t *testing.T) {
 
 	gens := make([]uint64, 0, MaxPassivePerSession)
 	for i := 0; i < MaxPassivePerSession; i++ {
-		_, g, err := s.Acquire(context.Background(), AttachPassive)
+		_, g, _, err := s.Acquire(context.Background(), AttachPassive)
 		if err != nil {
 			t.Fatalf("passive #%d unexpectedly failed: %v", i, err)
 		}
 		gens = append(gens, g)
 	}
-	_, _, err := s.Acquire(context.Background(), AttachPassive)
+	_, _, _, err := s.Acquire(context.Background(), AttachPassive)
 	if !errors.Is(err, ErrPassiveCapacity) {
 		t.Errorf("passive overflow err = %v, want ErrPassiveCapacity", err)
 	}
 	// Releasing one should free up a slot.
 	s.Release(gens[0])
-	_, _, err = s.Acquire(context.Background(), AttachPassive)
+	_, _, _, err = s.Acquire(context.Background(), AttachPassive)
 	if err != nil {
 		t.Errorf("passive after release unexpectedly failed: %v", err)
 	}
@@ -466,24 +466,24 @@ func TestAcquireReadonlyCapEnforced(t *testing.T) {
 
 	gens := make([]uint64, 0, MaxReadonlyPerSession)
 	for i := 0; i < MaxReadonlyPerSession; i++ {
-		_, g, err := s.Acquire(context.Background(), AttachReadonly)
+		_, g, _, err := s.Acquire(context.Background(), AttachReadonly)
 		if err != nil {
 			t.Fatalf("readonly #%d unexpectedly failed: %v", i, err)
 		}
 		gens = append(gens, g)
 	}
-	if _, _, err := s.Acquire(context.Background(), AttachReadonly); !errors.Is(err, ErrReadonlyCapacity) {
+	if _, _, _, err := s.Acquire(context.Background(), AttachReadonly); !errors.Is(err, ErrReadonlyCapacity) {
 		t.Errorf("readonly overflow err = %v, want ErrReadonlyCapacity", err)
 	}
 	// An exclusive attach is NOT a read-only client and must still be
 	// admitted at the read-only cap (it lives in the same slice but is
 	// bounded by displacement, not the read-only count).
-	if _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
 		t.Errorf("exclusive at readonly cap unexpectedly failed: %v", err)
 	}
 	// Releasing a read-only client frees a read-only slot.
 	s.Release(gens[0])
-	if _, _, err := s.Acquire(context.Background(), AttachReadonly); err != nil {
+	if _, _, _, err := s.Acquire(context.Background(), AttachReadonly); err != nil {
 		t.Errorf("readonly after release unexpectedly failed: %v", err)
 	}
 }
@@ -498,10 +498,10 @@ func TestExclusiveDoesNotDisplacePassive(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	_, _, _ = s.Acquire(context.Background(), AttachExclusive)
-	passCtx, _, _ := s.Acquire(context.Background(), AttachPassive)
+	_, _, _, _ = s.Acquire(context.Background(), AttachExclusive)
+	passCtx, _, _, _ := s.Acquire(context.Background(), AttachPassive)
 	// Displace the exclusive.
-	_, _, _ = s.Acquire(context.Background(), AttachExclusive)
+	_, _, _, _ = s.Acquire(context.Background(), AttachExclusive)
 	// Passive must still be alive.
 	if passCtx.Err() != nil {
 		t.Error("passive context cancelled by exclusive turnover")
@@ -517,13 +517,13 @@ func TestReleasePassive(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	_, exclGen, _ := s.Acquire(context.Background(), AttachExclusive)
-	_, passGen, _ := s.Acquire(context.Background(), AttachPassive)
+	_, exclGen, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	_, passGen, _, _ := s.Acquire(context.Background(), AttachPassive)
 
 	s.Release(passGen)
 
 	// Acquire another passive; the slot should be free.
-	_, _, err := s.Acquire(context.Background(), AttachPassive)
+	_, _, _, err := s.Acquire(context.Background(), AttachPassive)
 	if err != nil {
 		t.Errorf("after Release(passive), new passive failed: %v", err)
 	}
@@ -541,7 +541,7 @@ func TestClosePassiveContextsCancelled(t *testing.T) {
 	pty := newFakePTY()
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 
-	passCtx, _, _ := s.Acquire(context.Background(), AttachPassive)
+	passCtx, _, _, _ := s.Acquire(context.Background(), AttachPassive)
 	_ = s.Close()
 
 	select {
@@ -561,8 +561,8 @@ func TestReleaseRemovesSpecificClient(t *testing.T) {
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
 	defer s.Close()
 
-	_, genA, _ := s.Acquire(context.Background(), AttachReadonly)
-	_, genB, _ := s.Acquire(context.Background(), AttachReadonly)
+	_, genA, _, _ := s.Acquire(context.Background(), AttachReadonly)
+	_, genB, _, _ := s.Acquire(context.Background(), AttachReadonly)
 	s.Release(genA)
 	// Release(genA) should leave B in place.
 	if !s.IsAttached() {
@@ -601,7 +601,7 @@ func TestCloseCancelsActiveAttach(t *testing.T) {
 	id, _ := NewSessionID()
 	pty := newFakePTY()
 	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
-	ctx, _, _ := s.Acquire(context.Background(), AttachExclusive)
+	ctx, _, _, _ := s.Acquire(context.Background(), AttachExclusive)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -672,4 +672,182 @@ func TestClearRecoverStaleGenerationDoesNotFreeSuccessor(t *testing.T) {
 	default:
 	}
 	s.ClearRecover(genC)
+}
+
+// --- exclusive-if-free (first-attach-wins, v1.7.0) ---
+
+func TestAcquireExclusiveIfFreeGrantsExclusiveWhenFree(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	ctx, gen, granted, err := s.Acquire(context.Background(), AttachExclusiveIfFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted != AttachExclusive {
+		t.Errorf("granted = %v, want AttachExclusive", granted)
+	}
+	if ctx.Err() != nil {
+		t.Error("context cancelled at acquire time")
+	}
+	// The granted role must be what PeerModes reports to others.
+	_, roGen, _, err := s.Acquire(context.Background(), AttachReadonly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := s.PeerModes(roGen)
+	if len(peers) != 1 || peers[0] != "exclusive" {
+		t.Errorf("peers = %v, want [exclusive]", peers)
+	}
+	// After the holder releases, a fresh if-free attach gets exclusive.
+	s.Release(gen)
+	_, _, granted2, err := s.Acquire(context.Background(), AttachExclusiveIfFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted2 != AttachExclusive {
+		t.Errorf("granted after release = %v, want AttachExclusive", granted2)
+	}
+}
+
+func TestAcquireExclusiveIfFreeGrantsReadonlyWhenHeld(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	holderCtx, holderGen, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roCtx, roGen, granted, err := s.Acquire(context.Background(), AttachExclusiveIfFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted != AttachReadonly {
+		t.Errorf("granted = %v, want AttachReadonly", granted)
+	}
+	// The holder must NOT be displaced — that's the whole point.
+	if holderCtx.Err() != nil {
+		t.Error("exclusive holder cancelled by exclusive-if-free attach")
+	}
+	if roCtx.Err() != nil {
+		t.Error("readonly grant cancelled at acquire time")
+	}
+	if peers := s.PeerModes(holderGen); len(peers) != 1 || peers[0] != "readonly" {
+		t.Errorf("holder's peers = %v, want [readonly]", peers)
+	}
+	if peers := s.PeerModes(roGen); len(peers) != 1 || peers[0] != "exclusive" {
+		t.Errorf("viewer's peers = %v, want [exclusive]", peers)
+	}
+}
+
+func TestAcquireExclusiveIfFreeIgnoresReadonlyPeers(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	// Only readonly watchers attached — the session is "free".
+	watcher, _, _, err := s.Acquire(context.Background(), AttachReadonly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, granted, err := s.Acquire(context.Background(), AttachExclusiveIfFree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted != AttachExclusive {
+		t.Errorf("granted = %v, want AttachExclusive (readonly peers don't hold)", granted)
+	}
+	if watcher.Err() != nil {
+		t.Error("readonly watcher cancelled by exclusive-if-free grant")
+	}
+}
+
+func TestAcquireExclusiveIfFreeRespectsReadonlyCap(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < MaxReadonlyPerSession; i++ {
+		if _, _, _, err := s.Acquire(context.Background(), AttachReadonly); err != nil {
+			t.Fatalf("readonly %d: %v", i, err)
+		}
+	}
+	// Holder present + readonly slots full → if-free resolves to
+	// readonly and must hit the cap, not displace the holder.
+	_, _, _, err := s.Acquire(context.Background(), AttachExclusiveIfFree)
+	if err != ErrReadonlyCapacity {
+		t.Errorf("err = %v, want ErrReadonlyCapacity", err)
+	}
+}
+
+func TestReplacedNotifierFiresBeforeCancel(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	firstCtx, gen1, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notified := make(chan bool, 1) // value = "ctx still alive at notify time"
+	s.SetReplacedNotifier(gen1, func() {
+		notified <- firstCtx.Err() == nil
+	})
+
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case alive := <-notified:
+		if !alive {
+			t.Error("notifyReplaced ran AFTER the displaced context was cancelled — Goodbye would race the teardown")
+		}
+	default:
+		t.Fatal("notifyReplaced not called on displacement")
+	}
+	if firstCtx.Err() == nil {
+		t.Error("displaced context not cancelled after notification")
+	}
+}
+
+func TestSetReplacedNotifierStaleGenIsNoop(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	_, gen1, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Release(gen1)
+	// Stale install: must not panic, must not fire on later displacement.
+	fired := false
+	s.SetReplacedNotifier(gen1, func() { fired = true })
+
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Fatal(err)
+	}
+	if fired {
+		t.Error("stale-gen notifier fired")
+	}
 }

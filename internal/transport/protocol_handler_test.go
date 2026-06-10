@@ -494,3 +494,123 @@ func TestProtocolHandlerAttachAckCarriesFg(t *testing.T) {
 		t.Errorf("AttachAck.Fg = %q, want %q", ack.Fg, "fakecmd")
 	}
 }
+
+// --- exclusive-if-free + Goodbye(replaced) (first-attach-wins, v1.7.0) ---
+
+func TestProtocolHandlerExclusiveIfFree(t *testing.T) {
+	t.Parallel()
+	h := newHandlerHarness(t)
+	defer h.cleanup()
+
+	// First if-free attach on a free session → granted exclusive.
+	tok1, err := h.reg.IssueAttachToken(h.sess.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := h.sess.ID()
+	connA, streamA, ackA := dialAndAttachFrame(t, h, protocol.Attach{
+		V: 1, Token: tok1[:], SessionID: sid[:], Rows: 24, Cols: 80,
+		Mode: protocol.AttachModeExclusiveIfFree,
+	})
+	defer connA.CloseWithError(0, "")
+	if !ackA.OK {
+		t.Fatalf("first attach not OK: err=%q msg=%q", ackA.Err, ackA.Msg)
+	}
+	if ackA.Mode != protocol.AttachModeExclusive {
+		t.Errorf("first ack.Mode = %q, want %q (granted, not requested, is echoed)",
+			ackA.Mode, protocol.AttachModeExclusive)
+	}
+
+	// Second if-free attach while A holds exclusive → granted readonly,
+	// A undisturbed.
+	tok2, err := h.reg.IssueAttachToken(h.sess.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	connB, _, ackB := dialAndAttachFrame(t, h, protocol.Attach{
+		V: 1, Token: tok2[:], SessionID: sid[:], Rows: 50, Cols: 24,
+		Mode: protocol.AttachModeExclusiveIfFree,
+	})
+	defer connB.CloseWithError(0, "")
+	if !ackB.OK {
+		t.Fatalf("second attach not OK: err=%q msg=%q", ackB.Err, ackB.Msg)
+	}
+	if ackB.Mode != protocol.AttachModeReadonly {
+		t.Errorf("second ack.Mode = %q, want %q", ackB.Mode, protocol.AttachModeReadonly)
+	}
+	if len(ackB.Peers) != 1 || ackB.Peers[0] != protocol.AttachModeExclusive {
+		t.Errorf("second ack.Peers = %v, want [exclusive]", ackB.Peers)
+	}
+
+	// A's stream must still be live: PTY output keeps flowing to it.
+	want := []byte("still-mine")
+	h.pty.push(want)
+	got := make([]byte, 0, len(want))
+	for len(got) < len(want) {
+		_, payload := readNextStdoutFrame(t, streamA)
+		got = append(got, payload...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("holder stdout after if-free join = %q, want %q", got, want)
+	}
+
+	// B's 50×24 Attach dims must NOT have resized the PTY — readonly
+	// clients never own geometry (the incident's resize-stomp guard).
+	rows, cols := h.sess.WindowSize()
+	if rows != 24 || cols != 80 {
+		t.Errorf("PTY size after readonly join = %d×%d, want 24×80", rows, cols)
+	}
+}
+
+func TestProtocolHandlerGoodbyeReplacedOnDisplacement(t *testing.T) {
+	t.Parallel()
+	h := newHandlerHarness(t)
+	defer h.cleanup()
+	sid := h.sess.ID()
+
+	tok1, err := h.reg.IssueAttachToken(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connA, streamA, ackA := dialAndAttach(t, h, sid, tok1)
+	defer connA.CloseWithError(0, "")
+	if !ackA.OK {
+		t.Fatalf("first attach not OK: err=%q", ackA.Err)
+	}
+
+	// Plain-exclusive B displaces A; A must see Goodbye{replaced}
+	// on its stream before teardown.
+	tok2, err := h.reg.IssueAttachToken(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connB, _, ackB := dialAndAttach(t, h, sid, tok2)
+	defer connB.CloseWithError(0, "")
+	if !ackB.OK {
+		t.Fatalf("second attach not OK: err=%q", ackB.Err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	_ = streamA.SetReadDeadline(deadline)
+	for {
+		frameType, body, err := protocol.ReadTaggedFrame(streamA)
+		if err != nil {
+			t.Fatalf("displaced client's stream died without Goodbye(replaced): %v", err)
+		}
+		if frameType != protocol.FrameTypeControl {
+			continue // drain replayed stdout etc.
+		}
+		typ, err := protocol.PeekType(body)
+		if err != nil || typ != protocol.TypeGoodbye {
+			continue
+		}
+		var g protocol.Goodbye
+		if err := protocol.StrictDecMode.Unmarshal(body, &g); err != nil {
+			t.Fatalf("decode Goodbye: %v", err)
+		}
+		if g.Reason != protocol.ReasonReplaced {
+			t.Errorf("Goodbye.Reason = %q, want %q", g.Reason, protocol.ReasonReplaced)
+		}
+		return
+	}
+}
