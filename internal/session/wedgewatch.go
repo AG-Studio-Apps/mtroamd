@@ -133,7 +133,7 @@ type wedgeWatcher struct {
 	// vertical_walk) until the wall-clock passes it. The recovery
 	// sequencer sets this at the end of a save-restart cycle to
 	// suppress the well-known false-positive storm caused by
-	// `claude --resume` replaying scrollback (lots of CUDs in
+	// `claude --continue` replaying scrollback (lots of CUDs in
 	// milliseconds, no real wedge — just restoration replay). Zero
 	// value = no suppression. The watcher checks via
 	// time.Now().Before(suppressUntil).
@@ -206,7 +206,7 @@ const scanWindow = 10 * time.Second
 // fire sub-100ms after SIGWINCH (Claude immediately redraws the
 // stale frame as a single contiguous CUD burst); healthy multi-frame
 // renders accumulate CUDs across many seconds (spinner ticks, status
-// bar updates, scrollback replay during `claude --resume`). 800ms
+// bar updates, scrollback replay during `claude --continue`). 800ms
 // captures the real-wedge response window with generous headroom
 // without bleeding into the multi-frame false-positive territory.
 //
@@ -244,7 +244,7 @@ func (w *wedgeWatcher) SetOnWedge(cb func(WedgeNotice)) {
 
 // SuppressUntil silences ALL wedge detections until the given
 // wall-clock time. Used by the recovery sequencer to gate the false-
-// positive storm during `claude --resume` scrollback replay (lots of
+// positive storm during `claude --continue` scrollback replay (lots of
 // rapid CUDs from re-painting history, no real wedge). Pass a
 // zero-value time.Time to clear suppression.
 func (w *wedgeWatcher) SuppressUntil(t time.Time) {
@@ -255,7 +255,7 @@ func (w *wedgeWatcher) SuppressUntil(t time.Time) {
 
 // ResetWedge clears all accumulated wedge state for a fresh renderer.
 // Called by the recovery sequencer after a deliberate restart
-// (`claude --resume`): the new Claude process owns a brand-new Ink
+// (`claude --continue`): the new Claude process owns a brand-new Ink
 // renderer with zero accumulated drift, so the lifetime resize/byte
 // counters and the in-flight detection state must reset too. Otherwise
 // the pre-restart accumulation (a long session reaches 160+ resizes)
@@ -390,7 +390,7 @@ func (w *wedgeWatcher) runSilentDeadline(cancel <-chan struct{}, oldRows, newRow
 	// Post-recovery cooldown: the sequencer sets suppressUntil at
 	// the end of every save-restart cycle. While it's in the future
 	// every signal — including silent — is muted. Keeps the banner
-	// from re-popping during `claude --resume` scrollback replay.
+	// from re-popping during `claude --continue` scrollback replay.
 	if !w.suppressUntil.IsZero() && time.Now().Before(w.suppressUntil) {
 		w.mu.Unlock()
 		return
@@ -498,7 +498,7 @@ func (w *wedgeWatcher) ObserveBytes(data []byte, sessionCreated time.Time) {
 	// Post-recovery cooldown — same gate as the silent path. The
 	// recovery sequencer sets suppressUntil at the end of every
 	// save-restart so the false-positive storm during `claude
-	// --resume` scrollback replay (lots of rapid CUDs from history
+	// --continue` scrollback replay (lots of rapid CUDs from history
 	// repaint) doesn't re-pop the banner the moment recovery
 	// finishes. Once the cooldown expires the watcher's back to
 	// normal sensitivity.

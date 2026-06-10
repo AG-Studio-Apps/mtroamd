@@ -555,7 +555,7 @@ func TestWedgeWatcher_CursorWedge_FiresRegardlessOfTimeWindow(t *testing.T) {
 
 func TestWedgeWatcher_SuppressUntil_BlocksAllSignals(t *testing.T) {
 	// SuppressUntil is the recovery sequencer's "give Claude time to
-	// settle after --resume" guard. While the suppression clock is
+	// settle after --continue" guard. While the suppression clock is
 	// in the future, no signal — silent, cursor_row, or vertical_walk
 	// — may emit. Once the clock passes, normal detection resumes.
 	dir := t.TempDir()

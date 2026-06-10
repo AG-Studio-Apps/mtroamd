@@ -81,7 +81,7 @@ func ResolveForegroundComm(pgid, sessionPid int) string {
 // foreground process group — readlink /proc/<pgid>/cwd, where pgid is
 // the tcgetpgrp of the master fd. Foundation for the kill-and-resume
 // restart, which relaunches the agent in the same directory
-// (`cd <cwd> && claude --resume`).
+// (`cd <cwd> && claude --continue`).
 //
 // sessionPid getsid-confines the read exactly like ResolveForegroundComm:
 // a recycled pgid (the foreground group exited between TIOCGPGRP and the

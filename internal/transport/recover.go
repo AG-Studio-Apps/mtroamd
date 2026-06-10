@@ -68,13 +68,15 @@ const killSettleWindow = 2 * time.Second
 const preRestartSettle = 400 * time.Millisecond
 
 // restartCmd relaunches the agent reattaching to its prior conversation.
-// `--resume` reattaches to the most recent session in the cwd's project
-// so the in-memory conversation is restored from disk — the whole point
-// of preferring this over a bare `claude` (the user keeps their work).
-const restartCmd = "claude --resume\r"
+// `--continue` auto-resumes the MOST RECENT conversation in the cwd — which
+// is the one we just exited — restoring it from disk with no interaction, so
+// the user keeps their work. (Bare `claude --resume` was wrong: with no
+// session id it drops the user on the interactive session-picker list rather
+// than reattaching. `--continue` is the auto-reattach flag.)
+const restartCmd = "claude --continue\r"
 
 // postRecoveryCooldown is how long the wedge watcher stays silenced
-// after a successful save-restart. `claude --resume` repaints its
+// after a successful save-restart. `claude --continue` repaints its
 // scrollback by emitting many CUDs in rapid succession (history
 // replay) — this matches the vertical_walk signature exactly and
 // would otherwise re-pop the recovery banner the moment recovery
@@ -177,7 +179,7 @@ func waitForForegroundLeave(
 }
 
 // runRecover drives the kill-and-resume restart of a session's
-// foreground agent, preserving the conversation via `--resume`.
+// foreground agent, preserving the conversation via `--continue`.
 //
 // Flow (v1.6.3 / B2 — idle-gated, save-prompt-free):
 //  1. RecoverProgress {stage: "started"}.
@@ -185,13 +187,13 @@ func waitForForegroundLeave(
 //     quiescent + fg still the agent), bounded by grace. If it never
 //     goes idle, ABORT with {stage: "error"} — we never interrupt a
 //     running tool (repo-corruption safety). No save-prompt is injected;
-//     `--resume` restores the conversation from disk.
+//     `--continue` restores the conversation from disk.
 //  3. Inject "/exit\r"; RecoverProgress {stage: "exiting"}.
 //  4. Wait for the foreground to leave the agent (shell returned). If it
 //     doesn't within exitWaitTimeout, SIGTERM the foreground group
 //     (KillForeground) — safe because we already confirmed idle, and the
 //     shell is in a different process group so it survives.
-//  5. Inject "claude --resume\r"; RecoverProgress {stage: "restarting"}.
+//  5. Inject "claude --continue\r"; RecoverProgress {stage: "restarting"}.
 //  6. ResetWedge() + post-recovery cooldown for the replay storm.
 //  7. RecoverProgress {stage: "done"}.
 //
@@ -302,8 +304,8 @@ func runRecover(
 		return
 	}
 
-	// 4. Restart with --resume (restores the conversation from disk). If
-	//    --resume fails (no prior session for this cwd, not in PATH) the
+	// 4. Restart with --continue (restores the conversation from disk). If
+	//    --continue fails (no prior session for this cwd, not in PATH) the
 	//    user sees the shell error and can rerun — best-effort.
 	emit(protocol.RecoverStageRestarting, "")
 	if err := injectAndCheckCtx(ctx, sess, []byte(restartCmd)); err != nil {
@@ -311,7 +313,7 @@ func runRecover(
 		return
 	}
 
-	// 5. Reset the wedge watcher: the fresh `--resume` Claude owns a
+	// 5. Reset the wedge watcher: the fresh `--continue` Claude owns a
 	//    brand-new Ink renderer with zero accumulated drift, so the
 	//    lifetime resize/byte counters and any in-flight resize-scan
 	//    window must reset too. Without this the pre-restart accumulation
@@ -319,7 +321,7 @@ func runRecover(
 	//    what is now a healthy session.
 	sess.ResetWedge()
 
-	// 6. Post-recovery cooldown for the --resume scrollback replay (many
+	// 6. Post-recovery cooldown for the --continue scrollback replay (many
 	//    CUDs in rapid succession that otherwise re-pop the banner).
 	sess.SuppressWedgeUntil(time.Now().Add(postRecoveryCooldown))
 

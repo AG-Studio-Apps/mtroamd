@@ -115,7 +115,7 @@ const (
 	// natural-language save prompt + Enter, wait a grace window for
 	// any user-driven save (memory writes, file flushes), inject
 	// `/exit`, wait for the child to return to a shell prompt, then
-	// inject `claude --resume`. Stages are reported back via
+	// inject `claude --continue`. Stages are reported back via
 	// TypeRecoverProgress so the client banner can show progress.
 	TypeRecover = "Recover"
 
@@ -360,7 +360,7 @@ type AttachAck struct {
 	// group (readlink /proc/<pgid>/cwd), ≤5s fresh. v1.6.3+ field;
 	// older clients ignore it. Empty/absent = unknown (pre-cwd
 	// sidecar, non-Linux host, or unresolvable). Foundation for the
-	// kill-and-resume restart (`cd <cwd> && claude --resume`); not
+	// kill-and-resume restart (`cd <cwd> && claude --continue`); not
 	// yet consumed by current clients. Ongoing changes flow via
 	// AgentNotify alongside Fg.
 	Cwd string `cbor:"cwd,omitempty"`

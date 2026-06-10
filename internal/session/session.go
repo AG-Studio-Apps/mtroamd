@@ -679,7 +679,7 @@ func (s *Session) SetPTYByteObserver(cb func([]byte)) {
 
 // SuppressWedgeUntil silences all wedge detections on this session
 // until the given wall-clock time. Used by the recovery sequencer to
-// gate the false-positive storm from `claude --resume` scrollback
+// gate the false-positive storm from `claude --continue` scrollback
 // replay (lots of CUDs in milliseconds, no real wedge). Pass a
 // zero-value time.Time to clear suppression.
 func (s *Session) SuppressWedgeUntil(t time.Time) {
@@ -693,12 +693,12 @@ func (s *Session) SuppressWedgeUntil(t time.Time) {
 
 // ResetWedge clears the wedge watcher's accumulated counters and
 // in-flight detection state after a deliberate Claude restart
-// (`claude --resume`). The fresh renderer starts with zero drift, so
+// (`claude --continue`). The fresh renderer starts with zero drift, so
 // the lifetime resize/byte accumulation that the watcher carried — and
 // any in-flight resize-scan window — must reset too, or the next
 // keyboard resize re-trips the detector and re-pops the banner on a
 // healthy session. Complements SuppressWedgeUntil (which mutes the
-// transient `--resume` replay storm); this zeroes the underlying state.
+// transient `--continue` replay storm); this zeroes the underlying state.
 func (s *Session) ResetWedge() {
 	s.mu.Lock()
 	w := s.wedge
