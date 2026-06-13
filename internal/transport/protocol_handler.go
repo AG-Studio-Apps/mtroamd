@@ -166,7 +166,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// just adds to the live-clients slice. Either way, gen is what
 	// we pass to Release on exit so a displaced re-entry doesn't
 	// clobber the new owner (audit F4).
-	attachCtx, attachGen, grantedMode, err := sess.Acquire(ctx, attachMode)
+	attachCtx, attachGen, grantedMode, err := sess.AcquireClient(ctx, attachMode, att.ClientID)
 	// From here on attachMode is the GRANTED role, which differs from
 	// the request only for exclusive-if-free (→ exclusive or readonly).
 	attachMode = grantedMode

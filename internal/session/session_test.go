@@ -746,6 +746,60 @@ func TestAcquireExclusiveIfFreeGrantsReadonlyWhenHeld(t *testing.T) {
 	}
 }
 
+// Same client id → an exclusive-if-free attach reclaims exclusive, silently
+// displacing that client's own stale connection (the reconnect / cold-start
+// self-collision fix). The displaced holder IS cancelled.
+func TestAcquireExclusiveIfFreeSameClientHandsOver(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	holderCtx, _, _, err := s.AcquireClient(context.Background(), AttachExclusive, "deviceA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCtx, _, granted, err := s.AcquireClient(context.Background(), AttachExclusiveIfFree, "deviceA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted != AttachExclusive {
+		t.Errorf("granted = %v, want AttachExclusive (same-client handover)", granted)
+	}
+	if holderCtx.Err() == nil {
+		t.Error("stale same-client holder was NOT displaced")
+	}
+	if newCtx.Err() != nil {
+		t.Error("new exclusive grant cancelled at acquire time")
+	}
+}
+
+// Different client id → exclusive-if-free still downgrades to readonly and the
+// genuine other-device holder is preserved (the "Live on another device" path).
+func TestAcquireExclusiveIfFreeDifferentClientReadonly(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	holderCtx, _, _, err := s.AcquireClient(context.Background(), AttachExclusive, "deviceA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, granted, err := s.AcquireClient(context.Background(), AttachExclusiveIfFree, "deviceB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted != AttachReadonly {
+		t.Errorf("granted = %v, want AttachReadonly (different client)", granted)
+	}
+	if holderCtx.Err() != nil {
+		t.Error("genuine other-device holder displaced by a different client's if-free attach")
+	}
+}
+
 func TestAcquireExclusiveIfFreeIgnoresReadonlyPeers(t *testing.T) {
 	t.Parallel()
 	id, _ := NewSessionID()

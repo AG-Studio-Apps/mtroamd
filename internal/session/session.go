@@ -94,6 +94,11 @@ type sessionClient struct {
 	gen    uint64
 	mode   AttachMode
 	cancel context.CancelFunc
+	// clientID is the attach's stable per-device id (protocol.Attach.ClientID),
+	// "" when the client sent none. Used so an exclusive-if-free attach from the
+	// SAME client silently displaces its own stale connection instead of landing
+	// readonly. See acquireLocked.
+	clientID string
 	// notifyReplaced, when non-nil, is invoked (best-effort, once)
 	// just before this client's context is cancelled because a new
 	// exclusive attach displaced it. The transport layer installs it
@@ -921,7 +926,17 @@ func (s *Session) WindowSize() (rows, cols uint16) {
 // returned AttachMode is the mode actually granted; it differs from
 // the requested mode only for AttachExclusiveIfFree.
 func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Context, uint64, AttachMode, error) {
-	ctx, gen, granted, doomed, err := s.acquireLocked(parent, mode)
+	return s.AcquireClient(parent, mode, "")
+}
+
+// AcquireClient is Acquire with a stable per-device client identity. An
+// exclusive-if-free attach whose clientID is non-empty and equals the current
+// exclusive holder's resolves to exclusive — silently displacing that same
+// client's stale connection — rather than readonly. clientID "" reproduces
+// Acquire's behaviour exactly (so the bare Acquire and all existing callers are
+// unchanged). The only production caller is the transport attach path.
+func (s *Session) AcquireClient(parent context.Context, mode AttachMode, clientID string) (context.Context, uint64, AttachMode, error) {
+	ctx, gen, granted, doomed, err := s.acquireLocked(parent, mode, clientID)
 	// Notify + cancel displaced clients OUTSIDE the lock: a
 	// notifyReplaced hook does a network write (Goodbye{replaced})
 	// that can block on a dead peer's flow-control window — under
@@ -953,7 +968,7 @@ func (s *Session) Acquire(parent context.Context, mode AttachMode) (context.Cont
 // acquireLocked is Acquire's lock-holding core. It returns the
 // displaced clients (doomed) instead of cancelling them so the
 // caller can run the notify+cancel sequence after s.mu is released.
-func (s *Session) acquireLocked(parent context.Context, mode AttachMode) (context.Context, uint64, AttachMode, []sessionClient, error) {
+func (s *Session) acquireLocked(parent context.Context, mode AttachMode, clientID string) (context.Context, uint64, AttachMode, []sessionClient, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -963,6 +978,13 @@ func (s *Session) acquireLocked(parent context.Context, mode AttachMode) (contex
 		mode = AttachExclusive
 		for _, c := range s.clients {
 			if c.mode == AttachExclusive {
+				// Same client (non-empty matching id) → this is that client's own
+				// reconnect/cold-start; keep exclusive so the displacement below
+				// silently evicts its stale connection. Different/unknown client →
+				// downgrade to readonly ("Live on another device").
+				if clientID != "" && c.clientID == clientID {
+					break
+				}
 				mode = AttachReadonly
 				break
 			}
@@ -1022,9 +1044,10 @@ func (s *Session) acquireLocked(parent context.Context, mode AttachMode) (contex
 	gen := s.nextGen
 	ctx, cancel := context.WithCancel(parent)
 	s.clients = append(s.clients, sessionClient{
-		gen:    gen,
-		mode:   mode,
-		cancel: cancel,
+		gen:      gen,
+		mode:     mode,
+		cancel:   cancel,
+		clientID: clientID,
 	})
 	s.lastActiveAt = time.Now()
 	return ctx, gen, mode, doomed, nil

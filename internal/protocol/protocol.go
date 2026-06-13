@@ -242,6 +242,14 @@ type Attach struct {
 	// only the final frame matters. v1.6.0+ field; same additive-
 	// compat posture as Mode.
 	ReplayBudget uint64 `cbor:"replay_budget,omitempty"`
+	// ClientID is a stable per-device identifier (the iOS app persists a
+	// non-synced UUID). When an exclusive-if-free attach carries a ClientID that
+	// matches the session's current exclusive holder, Acquire grants exclusive —
+	// silently displacing that client's own stale connection (a reconnect /
+	// cold-start) — instead of downgrading to readonly. Empty/missing → treated
+	// as "no identity / always a different client" (the pre-v1.8.0 behaviour, so
+	// older clients are unaffected). Additive-compat, same posture as Mode.
+	ClientID string `cbor:"cid,omitempty"`
 }
 
 // AttachAck is the server's response to Attach.
