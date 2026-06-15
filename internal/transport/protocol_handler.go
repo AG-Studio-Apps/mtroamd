@@ -320,10 +320,11 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// sessions arrive with the flag already false (LoadPersisted
 	// path) so a restore reports Restored=true, FreshlyCreated=false.
 	freshlyCreated := sess.ConsumeFirstAttach()
-	// One fg read shared by the AttachAck, the attach log, and the
-	// ticker's change-detection seed — separate reads could disagree
-	// (a change in the gap would then never be notified).
-	attachFg := sess.ForegroundComm()
+	// One CONSISTENT fg snapshot for the AttachAck (critic #1/#2): refreshes the
+	// anchor so an idle fg transition is reflected, and reads Fg/FgSince/FgSinceSeq/
+	// Cwd together so they can't tear. attachFg is also the attach log + the ticker's
+	// change-detection seed.
+	attachFg, fgSince, fgSinceSeq, fgCwd := sess.ForegroundSnapshot()
 	ackBody, err := protocol.MarshalAttachAck(protocol.AttachAck{
 		V:               1,
 		OK:              true,
@@ -341,9 +342,9 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		// fg transition anchors (v1.6.3+): time + ring byte-seq of the
 		// last foreground change, plus its cwd. See fgSinceToNanos.
 		Fg:         attachFg,
-		FgSince:    fgSinceToNanos(sess.ForegroundCommSince()),
-		FgSinceSeq: sess.ForegroundSinceSeq(),
-		Cwd:        sess.ForegroundCwd(),
+		FgSince:    fgSinceToNanos(fgSince),
+		FgSinceSeq: fgSinceSeq,
+		Cwd:        fgCwd,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "marshal AttachAck", "err", err)
@@ -423,16 +424,17 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 			case <-pumpsCtx.Done():
 				return
 			case <-ticker.C:
-				if fg := sess.ForegroundComm(); fg != lastFg {
+				if fg, fgSince, fgSinceSeq, fgCwd := sess.ForegroundSnapshot(); fg != lastFg {
 					lastFg = fg
-					// Carry the same fg transition anchors + cwd as
-					// AttachAck so a client attached before this change
-					// gets a fresh age/size clock and the cwd.
+					// Carry the same fg transition anchors + cwd as AttachAck,
+					// from ONE consistent snapshot (critic #1/#2), so a client
+					// attached before this change gets a fresh, non-torn age/size
+					// clock and cwd.
 					notify := protocol.AgentNotify{
 						Fg:         fg,
-						FgSince:    fgSinceToNanos(sess.ForegroundCommSince()),
-						FgSinceSeq: sess.ForegroundSinceSeq(),
-						Cwd:        sess.ForegroundCwd(),
+						FgSince:    fgSinceToNanos(fgSince),
+						FgSinceSeq: fgSinceSeq,
+						Cwd:        fgCwd,
 					}
 					if body, err := protocol.MarshalAgentNotify(notify); err == nil {
 						// Best-effort, same posture as RTTNotify.
@@ -663,6 +665,12 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer, src
 // the wrapped error — that string round-trips into the
 // CONNECTION_CLOSE reason via closeMsgFor, and we don't echo peer
 // bytes there (audit F8).
+// maxClientIDLen caps the per-device ClientID hint. A stable UUID is 36 bytes; a
+// larger value has no legitimate use and is truncated so a malformed/hostile id can't
+// bloat per-session state or logs (the 64 KiB frame cap is the only other bound).
+// (Low, security audit v1.7.0.)
+const maxClientIDLen = 128
+
 func readAttach(s io.Reader) (protocol.Attach, error) {
 	frameType, body, err := protocol.ReadTaggedFrame(s)
 	if err != nil {
@@ -681,6 +689,9 @@ func readAttach(s io.Reader) (protocol.Attach, error) {
 	var att protocol.Attach
 	if err := protocol.StrictDecMode.Unmarshal(body, &att); err != nil {
 		return protocol.Attach{}, fmt.Errorf("%w: %v", errAttachBadFrame, err)
+	}
+	if len(att.ClientID) > maxClientIDLen {
+		att.ClientID = att.ClientID[:maxClientIDLen]
 	}
 	return att, nil
 }

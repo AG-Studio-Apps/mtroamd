@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -313,8 +314,11 @@ type Session struct {
 	// "Memory Updated, restoring…"). Cleared by the sequencer on
 	// exit so a future recovery starts fresh. The observer runs in
 	// the Pump goroutine; callers must keep it non-blocking and
-	// thread-safe.
-	ptyByteObserver func([]byte)
+	// thread-safe. Identity-keyed by the recover generation (M4): a
+	// superseded recover's deferred clear must only clear the slot if it
+	// still owns it, never the live recover's observer.
+	ptyByteObserver    func([]byte)
+	ptyByteObserverGen uint64
 
 	// Foreground transition anchors (v1.6.3+), derived by
 	// observeForegroundAnchor from the PTY's foreground command. The
@@ -620,7 +624,7 @@ func (s *Session) ForegroundSinceSeq() uint64 {
 // changed without producing output. Cheap: a cached-fg read + string
 // compare; writes only on an actual change, so the first observer of
 // a new value wins and later same-value observers no-op.
-func (s *Session) observeForegroundAnchor() {
+func (s *Session) observeForegroundAnchor() string {
 	comm := s.ForegroundComm() // "" for backends without the capability
 	s.fgAnchorMu.Lock()
 	if !s.fgAnchorInit || comm != s.fgAnchorComm {
@@ -630,6 +634,23 @@ func (s *Session) observeForegroundAnchor() {
 		s.fgAnchorSeq = s.buf.HeadSeq()
 	}
 	s.fgAnchorMu.Unlock()
+	return comm
+}
+
+// ForegroundSnapshot returns the foreground anchors as ONE consistent reading for
+// AttachAck / AgentNotify. It first refreshes the anchor (critic #1: so a fg
+// transition on an idle session — no output to drive Pump's observe — is reflected),
+// then returns the comm it observed together with the matching since/sinceSeq under a
+// single anchor-lock hold (critic #2: the prior code read Fg once but FgSince/
+// FgSinceSeq/Cwd separately, so a transition in the gap shipped a torn record). cwd is
+// a best-effort companion read (the `cd <cwd>` restart form is not yet wired).
+func (s *Session) ForegroundSnapshot() (comm string, since time.Time, sinceSeq uint64, cwd string) {
+	comm = s.observeForegroundAnchor()
+	cwd = s.ForegroundCwd()
+	s.fgAnchorMu.Lock()
+	since, sinceSeq = s.fgAnchorTime, s.fgAnchorSeq
+	s.fgAnchorMu.Unlock()
+	return
 }
 
 // ForegroundCwd returns the foreground process's working directory
@@ -692,11 +713,24 @@ func (s *Session) OnWedge(cb func(WedgeNotice)) {
 // sequencer to scan for the bookend markers Claude prints during a
 // save ("Commencing Save…" / "Memory Updated, restoring…"). The
 // callback fires from the Pump goroutine — keep it non-blocking and
-// internally thread-safe. Only one observer at a time; setting a
-// non-nil callback replaces any previous one. Cleared via nil.
-func (s *Session) SetPTYByteObserver(cb func([]byte)) {
+// internally thread-safe. Identity-keyed by gen (the recover generation,
+// M4): the slot records the installing gen, and ClearPTYByteObserver
+// only clears if it still matches — so a superseded recover's deferred
+// cleanup can't nuke the live recover's observer (which would make its
+// idle gate see a permanently "quiet" PTY and fire a premature kill).
+func (s *Session) SetPTYByteObserver(gen uint64, cb func([]byte)) {
 	s.mu.Lock()
 	s.ptyByteObserver = cb
+	s.ptyByteObserverGen = gen
+	s.mu.Unlock()
+}
+
+// ClearPTYByteObserver clears the observer slot only if gen still owns it.
+func (s *Session) ClearPTYByteObserver(gen uint64) {
+	s.mu.Lock()
+	if s.ptyByteObserverGen == gen {
+		s.ptyByteObserver = nil
+	}
 	s.mu.Unlock()
 }
 
@@ -1005,7 +1039,10 @@ func (s *Session) acquireLocked(parent context.Context, mode AttachMode, clientI
 				// reconnect/cold-start; keep exclusive so the displacement below
 				// silently evicts its stale connection. Different/unknown client →
 				// downgrade to readonly ("Live on another device").
-				if clientID != "" && c.clientID == clientID {
+				// Constant-time compare for parity with the SID check (ClientID is a
+				// non-secret hint, so this is belt-and-suspenders). Differing lengths
+				// → ConstantTimeCompare returns 0 (non-match), as intended.
+				if clientID != "" && subtle.ConstantTimeCompare([]byte(c.clientID), []byte(clientID)) == 1 {
 					break
 				}
 				mode = AttachReadonly

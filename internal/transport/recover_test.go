@@ -135,7 +135,7 @@ func streamUntil(pipe *testPTY) (stop func()) {
 func TestWaitForAgentIdle_QuietReturnsTrue(t *testing.T) {
 	sess, _ := newTestSession(t)
 	defer func() { _ = sess.Close() }()
-	if !waitForAgentIdle(context.Background(), sess, "", 100*time.Millisecond, time.Second) {
+	if !waitForAgentIdle(context.Background(), sess, "", 100*time.Millisecond, time.Second, 1) {
 		t.Fatal("expected idle (true) on a quiet session")
 	}
 }
@@ -149,7 +149,7 @@ func TestWaitForAgentIdle_BusyTimesOut(t *testing.T) {
 	defer func() { _ = sess.Close() }()
 	stop := streamUntil(pipe)
 	defer stop()
-	if waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 400*time.Millisecond) {
+	if waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 400*time.Millisecond, 1) {
 		t.Fatal("expected timeout (false) while output keeps streaming")
 	}
 }
@@ -165,7 +165,7 @@ func TestWaitForAgentIdle_BecomesIdleAfterOutputStops(t *testing.T) {
 			time.Sleep(30 * time.Millisecond)
 		}
 	}()
-	if !waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 2*time.Second) {
+	if !waitForAgentIdle(context.Background(), sess, "", 150*time.Millisecond, 2*time.Second, 1) {
 		t.Fatal("expected idle (true) after output stops")
 	}
 }
@@ -179,7 +179,7 @@ func TestWaitForAgentIdle_CancelReturnsFalse(t *testing.T) {
 	defer stop()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(80 * time.Millisecond); cancel() }()
-	if waitForAgentIdle(ctx, sess, "", time.Second, 5*time.Second) {
+	if waitForAgentIdle(ctx, sess, "", time.Second, 5*time.Second, 1) {
 		t.Fatal("expected false on ctx cancel")
 	}
 }

@@ -488,7 +488,12 @@ type WedgeDetected struct {
 // the sequencer may complete sooner if it observes an alt-screen
 // exit on the PTY output stream.
 type Recover struct {
-	T           string `cbor:"t"`
+	T string `cbor:"t"`
+	// SavePrompt is RESERVED and currently IGNORED: the v1.6.3+ idle-gated sequence
+	// is save-prompt-free (it injects a fixed `/exit` + `claude --continue`, never a
+	// client-supplied string). Kept for wire compat. If ever re-enabled, it MUST be
+	// length-bounded and control-character-stripped before any PTY injection — it is
+	// attacker-influenced. (Low, security audit v1.7.0.)
 	SavePrompt  string `cbor:"sp,omitempty"`
 	GraceMillis uint32 `cbor:"gms,omitempty"`
 }

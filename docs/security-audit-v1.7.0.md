@@ -106,16 +106,20 @@ envelope — real, but not a v1.7.0 ship blocker.
 H1 also de-risks **M4** in practice: a premature-idle race can no longer drive a kill
 of a non-agent (the live-fg refusal catches it).
 
-**REMAINING (lower-severity hardening, before tag):**
-- **M4** — identity-key the `PTYByteObserver` slot (+ ResetWedge) so a superseded
-  recover's cleanup can't clear the live recover's observer. (Now largely mitigated by
-  H1; still worth the keyed slot for correctness.)
-- **Critic #1** — wire `observeForegroundAnchor` from the attach/notify paths (stale
-  anchors on a silent fg transition; feeds the iOS age/size banner).
-- **Critic #2** — single-read `Fg`/`FgSince`/`FgSinceSeq`/`Cwd` in AttachAck/AgentNotify
-  so a torn `Cwd` can't drive a wrong-directory restart.
-- Cheap lows: explicit ClientID length cap; constant-time ClientID compare (marginal —
-  ClientID is a non-secret hint); document/guard the unused `SavePrompt`.
+**ALSO DONE (batch 3, build+vet+tests clean):**
+- **M4** — `SetPTYByteObserver`/`ClearPTYByteObserver` are now gen-keyed, so a
+  superseded recover can't clear the live recover's observer.
+- **Critic #1/#2** — `ForegroundSnapshot()` refreshes the anchor (so an idle fg
+  transition is reflected) and returns Fg/FgSince/FgSinceSeq/Cwd as ONE consistent
+  reading; used by both AttachAck and the AgentNotify ticker.
+- **Lows** — explicit `maxClientIDLen` cap (128) on `Attach.ClientID`; constant-time
+  ClientID compare; `SavePrompt` documented as reserved/never-injected.
+
+**DEFERRED (documented, not blocking — same-uid / public-bind-only / not-wired):**
+DoS-aggregation (ratelimit /64, table-exhaustion, TCP-on-unspecified fail-closed); IPC
+belt-and-suspenders (SO_PEERCRED, umask-around-bind, XDG_RUNTIME_DIR verify); TOCTOU
+best-effort tightening; cert renewal overlap; `foregroundCwd` shell-quoting (the `cd`
+form isn't shipped); SessionSearch MaxMatches cap. See the Defer section above.
 
 ## Recommended fix-before-tag set
 

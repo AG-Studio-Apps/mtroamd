@@ -114,10 +114,13 @@ func waitForAgentIdle(
 	sess *session.Session,
 	agent string,
 	quietWindow, timeout time.Duration,
+	gen uint64,
 ) bool {
 	var mu sync.Mutex
 	last := time.Now()
-	sess.SetPTYByteObserver(func(data []byte) {
+	// Install the observer keyed by this recover's gen so a superseded recover
+	// can't clear it out from under us (M4).
+	sess.SetPTYByteObserver(gen, func(data []byte) {
 		if len(data) == 0 {
 			return
 		}
@@ -125,7 +128,7 @@ func waitForAgentIdle(
 		last = time.Now()
 		mu.Unlock()
 	})
-	defer sess.SetPTYByteObserver(nil)
+	defer sess.ClearPTYByteObserver(gen)
 
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(idlePollInterval)
@@ -219,6 +222,7 @@ func runRecover(
 	sess *session.Session,
 	req protocol.Recover,
 	write frameWriter,
+	gen uint64,
 ) {
 	grace := time.Duration(req.GraceMillis) * time.Millisecond
 	if grace <= 0 {
@@ -268,7 +272,7 @@ func runRecover(
 	//    Bash tool mid-flight (git commit, package install) is the repo-
 	//    corruption surface. Abort (don't force) if the agent stays busy.
 	emit(protocol.RecoverStageSaving, "Waiting for the agent to finish…")
-	if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, grace) {
+	if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, grace, gen) {
 		if ctx.Err() != nil {
 			emit(protocol.RecoverStageError, "cancelled while waiting for idle")
 		} else {
@@ -298,7 +302,7 @@ func runRecover(
 		// that tool mid-flight (repo corruption). Only a still-quiet,
 		// not-exiting agent is wedged-at-prompt and safe to terminate; a
 		// noisy one means abort and let the user retry when it's idle.
-		if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, preKillIdleTimeout) {
+		if !waitForAgentIdle(ctx, sess, agent, idleQuietWindow, preKillIdleTimeout, gen) {
 			if ctx.Err() != nil {
 				emit(protocol.RecoverStageError, "cancelled awaiting exit")
 			} else {

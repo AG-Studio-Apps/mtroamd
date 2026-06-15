@@ -219,10 +219,10 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 			"sid", sess.ID().String(),
 			"grace_ms", m.GraceMillis,
 			"custom_prompt", m.SavePrompt != "")
-		ctx, gen := sess.TryStartRecover()
+		ctx, rgen := sess.TryStartRecover()
 		go func() {
-			defer sess.ClearRecover(gen)
-			runRecover(ctx, sess, m, write)
+			defer sess.ClearRecover(rgen)
+			runRecover(ctx, sess, m, write, rgen)
 		}()
 		return nil
 	case protocol.TypeGoodbye:
