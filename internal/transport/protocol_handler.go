@@ -474,7 +474,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		defer wg.Done()
 		defer pumpsCancel()
 		defer recoverPump("read")
-		if err := readPump(pumpsCtx, sess, ctrl, writeFrame, attachMode); err != nil &&
+		if err := readPump(pumpsCtx, sess, ctrl, writeFrame, attachMode, attachGen); err != nil &&
 			!errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 			log.DebugContext(pumpsCtx, "read pump exit", "err", err)
 		}

@@ -97,7 +97,7 @@ func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameW
 // quic-go's Read does NOT abort on context cancel; without an
 // explicit CancelRead a stuck Read would pin this goroutine until
 // QUIC's idle timeout. We watch ctx in a sidecar (audit F11).
-func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, mode session.AttachMode) error {
+func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, mode session.AttachMode, gen uint64) error {
 	cancelOnDone(ctx, func() { s.CancelRead(0) })
 	for {
 		if err := ctx.Err(); err != nil {
@@ -112,8 +112,12 @@ func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWri
 		}
 		switch frameType {
 		case protocol.FrameTypeStdin:
-			if mode != session.AttachExclusive {
-				continue // silently drop; only exclusive clients drive the shell
+			// Only the CURRENT exclusive client drives the shell. The mode pre-check
+			// keeps readonly clients off the lock; IsCurrentExclusive is the LIVE gate
+			// (M3) so a displaced client's in-flight stdin can't land in the new
+			// owner's PTY.
+			if mode != session.AttachExclusive || !sess.IsCurrentExclusive(gen) {
+				continue // silently drop
 			}
 			if len(body) > 0 {
 				if _, werr := sess.WriteStdin(body); werr != nil {
@@ -121,7 +125,7 @@ func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWri
 				}
 			}
 		case protocol.FrameTypeControl:
-			if err := handleControlFrame(sess, body, write, mode); err != nil {
+			if err := handleControlFrame(sess, body, write, mode, gen); err != nil {
 				return err
 			}
 		default:
@@ -143,7 +147,7 @@ func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWri
 // the ring buffer below the ack point yet (the buffer's FIFO drop
 // policy already bounds memory). Future versions may use Ack to
 // keep the buffer larger when network is healthy and clients keep up.
-func handleControlFrame(sess *session.Session, body []byte, write frameWriter, mode session.AttachMode) error {
+func handleControlFrame(sess *session.Session, body []byte, write frameWriter, mode session.AttachMode, gen uint64) error {
 	t, err := protocol.PeekType(body)
 	if err != nil {
 		return err
@@ -153,10 +157,10 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 		// v0: informational only.
 		return nil
 	case protocol.TypeResize:
-		// Only exclusive clients change PTY size — they own
-		// geometry. Readonly and passive clients' Resize frames are
-		// dropped silently rather than tearing the connection down.
-		if mode != session.AttachExclusive {
+		// Only the CURRENT exclusive client changes PTY size — they own
+		// geometry. Readonly/passive (and displaced — live check, M3) Resize
+		// frames are dropped silently rather than tearing the connection down.
+		if mode != session.AttachExclusive || !sess.IsCurrentExclusive(gen) {
 			slog.Debug("resize: dropped (non-exclusive client)",
 				"sid", sess.ID().String(), "mode", mode)
 			return nil
@@ -196,11 +200,12 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 		}
 		return write(protocol.FrameTypeControl, pong)
 	case protocol.TypeRecover:
-		// Only exclusive clients can drive recovery — same posture as
-		// Resize (geometry-owning). Readonly / passive Recovers are
-		// silently dropped rather than tearing the connection down.
-		if mode != session.AttachExclusive {
-			slog.Debug("recover: dropped (non-exclusive client)",
+		// Only the CURRENT exclusive client can drive recovery — same posture as
+		// Resize. The LIVE check (M2/M3) means a displaced client can't fire the
+		// destructive /exit + claude --continue (+ possible SIGTERM) at the session
+		// the new owner now holds. Readonly / passive / displaced are dropped.
+		if mode != session.AttachExclusive || !sess.IsCurrentExclusive(gen) {
+			slog.Debug("recover: dropped (non-current-exclusive client)",
 				"sid", sess.ID().String(), "mode", mode)
 			return nil
 		}

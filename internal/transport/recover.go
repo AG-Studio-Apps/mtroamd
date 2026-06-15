@@ -67,6 +67,17 @@ const killSettleWindow = 2 * time.Second
 // line editor is ready to receive it.
 const preRestartSettle = 400 * time.Millisecond
 
+// recoverableAgents are the foreground commands runRecover is allowed to act on.
+// The sequence injects `/exit` + `claude --continue` and may SIGTERM the foreground
+// process group, so it must NEVER run against an unrecognized program — a user's
+// editor, a build, a plain shell — which would corrupt unrelated work or kill the
+// wrong process. Restart is claude-specific (`restartCmd`), so the allowlist is
+// claude-only for now; adding codex needs an agent-aware restart command first.
+// (M1, security audit v1.7.0.)
+var recoverableAgents = map[string]bool{"claude": true}
+
+func isRecoverableAgent(comm string) bool { return recoverableAgents[comm] }
+
 // restartCmd relaunches the agent reattaching to its prior conversation.
 // `--continue` auto-resumes the MOST RECENT conversation in the cwd — which
 // is the one we just exited — restoring it from disk with no interaction, so
@@ -238,6 +249,16 @@ func runRecover(
 	// (fg == agent) and to detect exit (fg leaves agent). "" when the
 	// backend can't report it; the helpers degrade gracefully.
 	agent := sess.ForegroundComm()
+
+	// M1: refuse to run the destructive sequence unless the foreground is a known,
+	// restartable agent. An empty/unknown fg means we'd be injecting `/exit` +
+	// `claude --continue` (and possibly SIGTERM) into an editor, a build, or a shell.
+	if !isRecoverableAgent(agent) {
+		slog.Info("recover: refused — foreground is not a recoverable agent",
+			"sid", sid, "fg", agent)
+		emit(protocol.RecoverStageError, "recovery is only available for a Claude session")
+		return
+	}
 
 	slog.Info("recover: sequence started",
 		"sid", sid, "grace_ms", grace/time.Millisecond, "agent", agent)

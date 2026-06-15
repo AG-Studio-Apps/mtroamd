@@ -841,6 +841,26 @@ func (s *Session) WriteStdin(p []byte) (int, error) {
 	return pty.Write(p)
 }
 
+// IsCurrentExclusive reports whether gen identifies the session's CURRENT
+// exclusive client. The transport checks this LIVE — right before writing client
+// stdin, applying a Resize, or starting a Recover — instead of trusting the
+// goroutine-local mode captured at attach. A displaced exclusive client's readPump
+// goroutine still holds mode==AttachExclusive until its CancelRead lands, and a
+// frame it already pulled off the wire would otherwise be applied to the session
+// the NEW owner now controls. Once displaced, the client's gen is no longer in
+// s.clients, so this returns false and the in-flight frame is dropped.
+// (M3, security audit v1.7.0.)
+func (s *Session) IsCurrentExclusive(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.clients {
+		if c.gen == gen {
+			return c.mode == AttachExclusive
+		}
+	}
+	return false
+}
+
 // Resize updates the PTY's window size and remembers the latest
 // values for any future re-attachers that join without sending their
 // own Resize. If the new size differs from the current one, the
