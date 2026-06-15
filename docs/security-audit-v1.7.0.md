@@ -93,6 +93,30 @@ envelope — real, but not a v1.7.0 ship blocker.
 
 ---
 
+## Fix status (2026-06-15)
+
+**DONE (committed on develop, build+vet clean):**
+- **H1** — kill path re-reads the LIVE foreground and refuses the SIGTERM unless it
+  still matches the agent (`fg_kill.go`, threaded through KillForeground→Conn.KillFg→
+  FrameKillFg→sidecar). Residual (child-in-agent-pgid) documented.
+- **M1** — recover refuses unless the foreground is a recoverable agent (claude).
+- **M2/M3** — `Session.IsCurrentExclusive(gen)` gates stdin/Resize/Recover LIVE, so a
+  displaced client can't inject or fire recover at the new owner's session.
+
+H1 also de-risks **M4** in practice: a premature-idle race can no longer drive a kill
+of a non-agent (the live-fg refusal catches it).
+
+**REMAINING (lower-severity hardening, before tag):**
+- **M4** — identity-key the `PTYByteObserver` slot (+ ResetWedge) so a superseded
+  recover's cleanup can't clear the live recover's observer. (Now largely mitigated by
+  H1; still worth the keyed slot for correctness.)
+- **Critic #1** — wire `observeForegroundAnchor` from the attach/notify paths (stale
+  anchors on a silent fg transition; feeds the iOS age/size banner).
+- **Critic #2** — single-read `Fg`/`FgSince`/`FgSinceSeq`/`Cwd` in AttachAck/AgentNotify
+  so a torn `Cwd` can't drive a wrong-directory restart.
+- Cheap lows: explicit ClientID length cap; constant-time ClientID compare (marginal —
+  ClientID is a non-secret hint); document/guard the unused `SavePrompt`.
+
 ## Recommended fix-before-tag set
 
 **Block the v1.7.0 tag on the recover/ownership cluster:** H1 (live-fg recheck before kill +
