@@ -311,8 +311,11 @@ func runRecover(
 		// SIGTERMing the foreground group is safe — no tool is running,
 		// and the shell (a different process group) survives.
 		slog.Info("recover: /exit did not return shell, agent idle — SIGTERM fg fallback", "sid", sid)
-		if err := sess.KillForeground(); err != nil {
-			slog.Warn("recover: KillForeground failed", "sid", sid, "err", err)
+		// Pass the expected agent so the sidecar re-reads the LIVE foreground and
+		// refuses the SIGTERM unless it still matches (H1) — never kill a foreground
+		// that changed out from under the idle-gate decision.
+		if err := sess.KillForeground(agent); err != nil {
+			slog.Warn("recover: KillForeground refused/failed", "sid", sid, "err", err)
 		}
 		if !sleepCtx(ctx, killSettleWindow) {
 			emit(protocol.RecoverStageError, "cancelled after fg kill")

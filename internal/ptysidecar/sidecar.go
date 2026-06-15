@@ -633,10 +633,11 @@ func startClientPumps(conn net.Conn, master *os.File, childPID int, ring *Ring, 
 				return
 			case FrameKillFg:
 				// SIGTERM the foreground process group, leaving the
-				// session/PTY (and its shell) alive. Best-effort: a
-				// missing foreground group or signal error is logged,
-				// never fatal — the connection stays up.
-				if kerr := killForegroundGroup(master, childPID); kerr != nil {
+				// session/PTY (and its shell) alive. The frame body carries the
+				// daemon's expected agent comm; killForegroundGroup refuses unless
+				// the LIVE foreground still matches (H1). Best-effort: a missing
+				// group, a mismatch, or a signal error is logged, never fatal.
+				if kerr := killForegroundGroup(master, childPID, string(body)); kerr != nil {
 					log.Warn("sidecar.killfg_failed", "err", kerr.Error())
 				}
 			default:

@@ -21,7 +21,15 @@ import (
 // TIOCGPGRP and the kill and was reassigned to an unrelated process —
 // must never be signalled, or we'd SIGTERM a stranger's process group.
 // sessionPid<=0 disables the confinement.
-func killForegroundGroup(master *os.File, sessionPid int) error {
+// expectAgent (when non-empty) is the foreground command the daemon believed was
+// running when it decided to recover. We re-read the LIVE foreground command for the
+// SAME pgid right before signalling and refuse the SIGTERM unless it still matches —
+// so a foreground that changed to a non-agent (the agent exited, a different program
+// took the tty) between the daemon's idle-gate decision and this kill is never
+// signalled. (H1, security audit v1.7.0. Residual: a tool running as a CHILD in the
+// agent's OWN process group still reads as the agent — the idle gate is the only
+// guard there; see recover.go.)
+func killForegroundGroup(master *os.File, sessionPid int, expectAgent string) error {
 	pgid, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
 	if err != nil {
 		return err
@@ -32,6 +40,11 @@ func killForegroundGroup(master *os.File, sessionPid int) error {
 	if sessionPid > 0 {
 		if sid, serr := unix.Getsid(pgid); serr != nil || sid != sessionPid {
 			return fmt.Errorf("killForegroundGroup: foreground pgid %d not in session %d", pgid, sessionPid)
+		}
+	}
+	if expectAgent != "" {
+		if comm := ResolveForegroundComm(pgid, sessionPid); comm != expectAgent {
+			return fmt.Errorf("killForegroundGroup: live foreground %q != expected agent %q — refusing SIGTERM", comm, expectAgent)
 		}
 	}
 	// Negative pgid → signal the entire foreground group.

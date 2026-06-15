@@ -25,6 +25,6 @@ func foregroundCwd(_ *os.File, _ int) string { return "" }
 // killForegroundGroup is implemented on Linux + macOS (fg_kill.go);
 // unsupported elsewhere. The FrameKillFg handler logs the error and
 // the session is unaffected. v1.6.3+.
-func killForegroundGroup(_ *os.File, _ int) error {
+func killForegroundGroup(_ *os.File, _ int, _ string) error {
 	return errors.New("killForegroundGroup: unsupported platform")
 }

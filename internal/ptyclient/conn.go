@@ -287,8 +287,10 @@ func (c *Conn) Kill() error {
 // alive — the shell returns to its prompt. Foundation for the
 // kill-and-resume restart. Unlike Kill(), the session survives.
 // Best-effort: a write error means the socket is already gone.
-func (c *Conn) KillFg() error {
-	return c.writeFrame(ptysidecar.FrameKillFg, nil)
+func (c *Conn) KillFg(expectAgent string) error {
+	// The frame body carries the expected agent comm; the sidecar refuses the
+	// SIGTERM unless the live foreground still matches (H1).
+	return c.writeFrame(ptysidecar.FrameKillFg, []byte(expectAgent))
 }
 
 // ChildExit returns the child's exit info if the sidecar has

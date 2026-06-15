@@ -566,7 +566,10 @@ type ForegroundReporter interface {
 // terminal's foreground process group without tearing down the session
 // (v1.6.3+) — the daemon side of the kill-and-resume restart.
 type ForegroundKiller interface {
-	KillFg() error
+	// KillFg SIGTERMs the foreground group. expectAgent (when non-empty) is the
+	// foreground command the caller believes is running; the backend re-reads the
+	// LIVE foreground and refuses unless it still matches (H1).
+	KillFg(expectAgent string) error
 }
 
 // ForegroundComm returns the bare command name of the session PTY's
@@ -645,12 +648,12 @@ func (s *Session) ForegroundCwd() string {
 // KillForeground SIGTERMs the session PTY's foreground process group,
 // leaving the session and its shell alive (v1.6.3+). No-op (nil) on
 // backends without the capability. The daemon side of kill-and-resume.
-func (s *Session) KillForeground() error {
+func (s *Session) KillForeground(expectAgent string) error {
 	s.mu.Lock()
 	pty := s.pty
 	s.mu.Unlock()
 	if fk, ok := pty.(ForegroundKiller); ok {
-		return fk.KillFg()
+		return fk.KillFg(expectAgent)
 	}
 	return nil
 }
