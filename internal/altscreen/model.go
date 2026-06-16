@@ -468,3 +468,68 @@ func Reconstruct(ring []byte, rows, cols int) (repaint []byte, faithful bool) {
 	s.Feed(ring)
 	return s.Repaint(), s.faithful
 }
+
+// RepaintRows serializes rows [from, to) as a CURSOR-NEUTRAL in-place redraw:
+// ESC7 (save cursor + attrs), then per row `ESC[r;1H` + SGR runs + text + `ESC[K`
+// (erase any stale tail), then ESC8 (restore). No screen clear — it refreshes
+// those rows in place, so re-emitting it into the live stream doesn't disturb
+// the cursor/attrs of other attached clients. Rows are clamped to the grid.
+func (s *Screen) RepaintRows(from, to int) []byte {
+	from = clamp(from, 0, s.rows)
+	to = clamp(to, 0, s.rows)
+	if from >= to {
+		return nil
+	}
+	out := []byte("\x1b7") // DECSC — save cursor + attributes
+	last := attr{fg: -2}   // force the first SGR emit
+	emit := func(a attr) {
+		if a == last {
+			return
+		}
+		out = append(out, []byte("\x1b[")...)
+		codes := a.sgrCodes()
+		for i, c := range codes {
+			if i > 0 {
+				out = append(out, ';')
+			}
+			out = append(out, []byte(strconv.Itoa(c))...)
+		}
+		out = append(out, 'm')
+		last = a
+	}
+	rbuf := make([]byte, 4)
+	for r := from; r < to; r++ {
+		out = append(out, []byte("\x1b["+strconv.Itoa(r+1)+";1H")...)
+		end := -1
+		for c := s.cols - 1; c >= 0; c-- {
+			g := s.grid[r][c]
+			if g.r != ' ' || g.a != defaultAttr {
+				end = c
+				break
+			}
+		}
+		for c := 0; c <= end; c++ {
+			g := s.grid[r][c]
+			emit(g.a)
+			n := utf8.EncodeRune(rbuf, g.r)
+			out = append(out, rbuf[:n]...)
+		}
+		emit(defaultAttr) // reset before EL so the erased tail is default bg
+		out = append(out, []byte("\x1b[K")...)
+	}
+	out = append(out, []byte("\x1b8")...) // DECRC — restore cursor + attributes
+	return out
+}
+
+// ReconstructBottomRows replays ring through a fresh Screen and returns a
+// cursor-neutral redraw of the bottom n rows (the footer block), plus whether
+// the model stayed faithful. The caller injects the redraw into the output ring
+// on attach so a reattaching client gets the footer from the normal replay.
+func ReconstructBottomRows(ring []byte, rows, cols, n int) (redraw []byte, faithful bool) {
+	s := New(rows, cols)
+	s.Feed(ring)
+	if n > rows {
+		n = rows
+	}
+	return s.RepaintRows(rows-n, rows), s.faithful
+}

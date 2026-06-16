@@ -23,13 +23,22 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	rows, cols := 42, 45
+	rows, cols, bottomN := 42, 45, 0
 	if len(os.Args) >= 4 {
 		rows, _ = strconv.Atoi(os.Args[2])
 		cols, _ = strconv.Atoi(os.Args[3])
 	}
-	r, faithful := altscreen.Reconstruct(ring, rows, cols)
+	if len(os.Args) >= 5 {
+		bottomN, _ = strconv.Atoi(os.Args[4]) // >0 → emit the bottom-N footer redraw instead of full repaint
+	}
+	var r []byte
+	var faithful bool
+	if bottomN > 0 {
+		r, faithful = altscreen.ReconstructBottomRows(ring, rows, cols, bottomN)
+	} else {
+		r, faithful = altscreen.Reconstruct(ring, rows, cols)
+	}
 	_, _ = os.Stdout.Write(r)
-	fmt.Fprintf(os.Stderr, "reconstructed %dx%d from %d ring bytes -> %d byte repaint (faithful=%v)\n",
-		rows, cols, len(ring), len(r), faithful)
+	fmt.Fprintf(os.Stderr, "reconstructed %dx%d bottomN=%d from %d ring bytes -> %d bytes (faithful=%v)\n",
+		rows, cols, bottomN, len(ring), len(r), faithful)
 }

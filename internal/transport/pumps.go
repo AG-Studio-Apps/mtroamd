@@ -46,7 +46,7 @@ type frameWriter func(t uint8, body []byte) error
 // delivered reliably). A delayed CancelWrite backstop keeps the
 // F-D guarantee that a Write pinned on a dead peer's flow-control
 // window can't hold the goroutine past teardown.
-func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, fromSeq uint64, graceful *atomic.Bool, replayOverride []byte) error {
+func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, fromSeq uint64, graceful *atomic.Bool) error {
 	cancelOnDone(ctx, func() {
 		if graceful != nil && graceful.Load() {
 			_ = s.Close()
@@ -60,25 +60,6 @@ func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameW
 		return nil
 	}
 	seq := fromSeq
-	// Alt-screen attach reconstruction: when the attach handler supplies a
-	// synthetic full-screen repaint (a raw byte window can't rebuild a 2-D
-	// alt-screen whose stable rows — status footer/borders — predate the
-	// window), emit it as the replay, labelled over [fromSeq, fromSeq+len)
-	// so the client acks `head` and live output continues seamlessly. The
-	// override IS the window for an alt attach; `seq` lands on `head`, so the
-	// live loop below picks up exactly where it left off. nil for non-alt.
-	for off := 0; off < len(replayOverride); {
-		end := off + protocol.MaxOutputFramePayload
-		if end > len(replayOverride) {
-			end = len(replayOverride)
-		}
-		chunk := replayOverride[off:end]
-		if err := write(protocol.FrameTypeStdout, protocol.EncodeStdoutBody(seq, chunk)); err != nil {
-			return err
-		}
-		seq += uint64(len(chunk))
-		off = end
-	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

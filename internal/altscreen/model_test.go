@@ -136,3 +136,49 @@ func TestUnfaithfulOnRestructuringOps(t *testing.T) {
 		t.Error("Claude-style ops should be faithful")
 	}
 }
+
+func TestRepaintRowsCursorNeutralAndScoped(t *testing.T) {
+	s := feed(6, 12, "\x1b[H\x1b[2J\x1b[3;1Hbody\x1b[6;1H\x1b[38;5;9mfooter\x1b[39m")
+	r := string(s.RepaintRows(4, 6)) // bottom 2 rows (indices 4,5 = 1-based 5,6)
+	if !strings.HasPrefix(r, "\x1b7") || !strings.HasSuffix(r, "\x1b8") {
+		t.Fatalf("not cursor-neutral (ESC7…ESC8): %q", r)
+	}
+	if strings.Contains(r, "\x1b[2J") {
+		t.Fatalf("must not clear the screen: %q", r)
+	}
+	for _, want := range []string{"\x1b[6;1H", "footer", "38;5;9", "\x1b[K"} {
+		if !strings.Contains(r, want) {
+			t.Fatalf("footer redraw missing %q: %q", want, r)
+		}
+	}
+	if strings.Contains(r, "body") {
+		t.Fatalf("leaked a non-bottom row: %q", r)
+	}
+}
+
+// TestReconstructBottomRowsRestoresFooter is the v2 core guarantee: the bottom-
+// rows redraw, applied onto a screen that has the body but lost the footer,
+// restores the footer WITHOUT clobbering the body (cursor-neutral, scoped).
+func TestReconstructBottomRowsRestoresFooter(t *testing.T) {
+	rows, cols := 8, 24
+	var b strings.Builder
+	b.WriteString("\x1b[H\x1b[2J\x1b[8;1H-- esc to interrupt")
+	for i := 0; i < 200; i++ {
+		b.WriteString("\x1b[3;1H\x1b[Kspin")
+	}
+	redraw, faithful := ReconstructBottomRows([]byte(b.String()), rows, cols, 4)
+	if !faithful {
+		t.Fatal("Claude-style ops should be faithful")
+	}
+	if !strings.Contains(string(redraw), "esc to interrupt") {
+		t.Fatalf("bottom-rows redraw missing footer: %q", redraw)
+	}
+	// A client screen that has the header/body but a blank footer row.
+	out := feed(rows, cols, "\x1b[H\x1b[2J\x1b[1;1Hheader body", string(redraw))
+	if got := out.rowText(7); !strings.Contains(got, "esc to interrupt") {
+		t.Fatalf("footer not restored: row8=%q", got)
+	}
+	if got := out.rowText(0); !strings.Contains(got, "header body") {
+		t.Fatalf("body clobbered: row1=%q", got)
+	}
+}

@@ -863,6 +863,24 @@ func (s *Session) Buffer() *RingBuffer {
 	return s.buf
 }
 
+// InjectOutput writes p into the session's OUTPUT ring as if the PTY had
+// produced it: it advances headSeq and reaches every attached client, and
+// serializes with the PTY pump on the ring's own mutex (RingBuffer.Write), so
+// an injected sequence can't interleave mid-escape with real PTY output. Used
+// to re-emit stable alt-screen rows (the footer block) into the stream on
+// attach, so a reattaching client reconstructs them from the NORMAL replay
+// window — no synthetic seqs, no client change. Returns the new head seq.
+func (s *Session) InjectOutput(p []byte) (uint64, error) {
+	buf := s.Buffer()
+	if buf == nil {
+		return 0, ErrSessionClosed
+	}
+	if _, err := buf.Write(p); err != nil {
+		return 0, err
+	}
+	return buf.HeadSeq(), nil
+}
+
 // WriteStdin forwards bytes from the client to the PTY's input.
 // Updates the activity timestamp so GC doesn't reap an active session
 // just because output has gone quiet.
