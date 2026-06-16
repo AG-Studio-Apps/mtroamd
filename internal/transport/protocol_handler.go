@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AG-Studio-Apps/mtroamd/internal/altscreen"
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
@@ -219,6 +220,37 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
 	start, head, trunc := computeReplayWindow(
 		buf, att.AckSeq, att.ReplayBudget, altActive)
+
+	// For an alt-screen attach, a raw byte window can't rebuild the 2-D
+	// screen: stable rows (status footer, box borders) the TUI drew once and
+	// never re-emits live are older than any bounded window, so a client that
+	// clears + replays drops them. Reconstruct the current screen from the
+	// retained ring and ship that repaint AS the replay (outputPump emits the
+	// override over [start, head), then live continues from head). Non-alt
+	// scrollback replay is untouched. Deterministic; no protocol/iOS change.
+	var replayOverride []byte
+	if altActive {
+		// Bound the ring read to `head` (the seq the AttachAck advertises and the
+		// live pump resumes from) so the reconstruction reflects exactly
+		// [tail, head): no double-apply of bytes a concurrent writer appends after
+		// computeReplayWindow sampled head. `tail` is read once and reused.
+		tail := buf.TailSeq()
+		if ring, _, _ := buf.ReadSince(tail, int(head-tail)); len(ring) > 0 {
+			rows, cols := sess.WindowSize()
+			// Substitute the reconstruction only when (a) the model stayed
+			// FAITHFUL — it saw no content-restructuring op it can't emulate, so
+			// it's a Claude-style screen, not vim/htop — and (b) the repaint fits
+			// in [tail, head): then start = head-len(r) ≥ tail, the pump's seq
+			// lands exactly on `head`, and there's no uint64 underflow. Otherwise
+			// the raw byte-window replay stands (SwiftTerm renders it itself).
+			if r, faithful := altscreen.Reconstruct(ring, int(rows), int(cols)); faithful &&
+				len(r) > 0 && head >= tail+uint64(len(r)) {
+				replayOverride = r
+				start = head - uint64(len(r))
+				trunc = false
+			}
+		}
+	}
 
 	// Sync writes on the single stream — outputPump and the read
 	// pump's control responses (Pong, AttachAck etc.) both call
@@ -463,7 +495,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		defer wg.Done()
 		defer pumpsCancel()
 		defer recoverPump("output")
-		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start, &wasDisplaced); err != nil && !errors.Is(err, context.Canceled) {
+		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start, &wasDisplaced, replayOverride); err != nil && !errors.Is(err, context.Canceled) {
 			log.DebugContext(pumpsCtx, "output pump exit", "err", err)
 		}
 	}()
