@@ -63,8 +63,7 @@
 <h2>Debian / Ubuntu (apt)</h2>
 
 <h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
-<p class="note">Production channel — tracks the App Store app's pinned daemon version
-  (currently v1.5.x).</p>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version.</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>curl -fsSL https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.gpg \
   | sudo tee /usr/share/keyrings/mtroamd-archive-keyring.gpg > /dev/null
@@ -91,8 +90,7 @@ sudo apt update && sudo apt install mtroamd</pre></div>
 <h2>Fedora (dnf)</h2>
 
 <h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
-<p class="note">Production channel — tracks the App Store app's pinned daemon version
-  (currently v1.5.x).</p>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version.</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>sudo tee /etc/yum.repos.d/mtroamd.repo <<'EOF'
 [mtroamd]
@@ -124,8 +122,8 @@ sudo dnf install mtroamd</pre></div>
 <h2>Alpine (apk)</h2>
 
 <h3>Stable<span class="badge live">live · x86_64 · from v1.5.4</span></h3>
-<p class="note">Production channel — tracks the App Store app's pinned daemon version
-  (currently v1.5.x). aarch64 / armv7 coming soon.</p>
+<p class="note">Production channel — tracks the App Store app's pinned daemon version.
+  aarch64 / armv7 coming soon.</p>
 <p class="note">Alpine has no systemd, so mtroamd runs as an <strong>OpenRC</strong> service under <code class="inline">MTROAMD_USER</code> — set it in <code class="inline">/etc/conf.d/mtroamd</code> (the daemon spawns your shells as that user). Run as root.</p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre>wget -qO /etc/apk/keys/mtroamd-apk.rsa.pub \
@@ -151,7 +149,7 @@ rc-update add mtroamd && rc-service mtroamd start</pre></div>
 
 <h3>Stable<span class="badge live">live · from v1.5.0</span></h3>
 <p class="note">Production channel — the flake on the default branch tracks the App Store
-  app's pinned daemon version (currently v1.5.x). Try it:
+  app's pinned daemon version. Try it:
   <code class="inline">nix run github:AG-Studio-Apps/mtroamd -- version</code></p>
 <div class="codeblock"><button class="copy">Copy</button>
 <pre># flake.nix
