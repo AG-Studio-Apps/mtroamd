@@ -179,7 +179,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's mtRo
   - Attach events (session ID, peer address)
   - Resize events (rows/cols only)
   - GC events (session ID, age at reap)
-- An optional `--debug-frames` flag (off by default, requires `MTROAMD_DEBUG=1`) logs frame headers (type, length, seq) but not payloads.
+- The `-v` flag on `mtroamd serve` raises the slog level to DEBUG (finer-grained connection / attach / resize / GC events). It never logs session output payloads.
 
 ## Reproducible builds
 

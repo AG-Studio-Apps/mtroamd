@@ -1,6 +1,6 @@
 % MTROAMD(8) | mtroamd
 % mtroamd authors
-% May 2026
+% June 2026
 
 # NAME
 
@@ -97,7 +97,7 @@ real scrollback through every disconnect.
 :   Change a session's user-visible Name. PTY and scrollback buffer
     are unaffected.
 
-**update** [**\-\-check**] [**\-\-yes**] [**\-\-tag** *vX.Y.Z*] [**\-\-allow-downgrade**]
+**update** [**\-\-check**] [**\-\-yes**] [**\-\-tag** *vX.Y.Z*] [**\-\-allow-downgrade**] [**\-\-force**]
 :   Apply a signed self-update from GitHub Releases. Same verification
     chain as **mtroam update**: minisign signature on **SHA256SUMS** via
     the embedded primary + emergency key roster, per-binary SHA-256
@@ -142,6 +142,11 @@ Common flags accepted by most subcommands:
     version. Off by default so a flipped GitHub "latest" pointer or a
     typoed **\-\-tag** can't silently roll back to a known-vulnerable
     build.
+
+**\-\-force**
+:   For **update**: reinstall the target tag even when it already
+    matches the running version (bypasses the up-to-date short-circuit;
+    signature + checksum verification still apply).
 
 # FILES
 
