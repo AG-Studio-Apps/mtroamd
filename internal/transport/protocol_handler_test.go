@@ -366,6 +366,61 @@ func TestProtocolHandlerReplaysBufferedOutputOnReattach(t *testing.T) {
 	}
 }
 
+// TestProtocolHandlerReconstructsAltScreenFooterOnReattach is the
+// regression for the bottom-row-drop bug: an alt-screen TUI draws a
+// stable footer once, then only animates the active region. A raw
+// byte-window replay (small budget) drops the footer because its draw is
+// older than the window; the alt-screen reconstruction must put it back.
+// We assert the replay STREAM contains the footer text — true only when
+// the screen was reconstructed, not when a raw window was shipped.
+func TestProtocolHandlerReconstructsAltScreenFooterOnReattach(t *testing.T) {
+	t.Parallel()
+	h := newHandlerHarness(t)
+	defer h.cleanup()
+
+	const rows, cols = 8, 24
+	const footer = "-- esc to interrupt"
+	var out []byte
+	// Enter alt screen + clear, then draw the footer ONCE on the last row.
+	out = append(out, []byte("\x1b[?1049h\x1b[2J")...)
+	out = append(out, []byte("\x1b[8;1H"+footer)...)
+	// Spinner on row 3 only: ~720B total stays inside the 4096 ring (footer
+	// retained), but pushes the footer-draw past the 256B budget so a raw
+	// byte-window replay would miss it.
+	for i := 0; i < 40; i++ {
+		out = append(out, []byte("\x1b[3;1H\x1b[Kspinning")...)
+	}
+	h.pty.push(out)
+	time.Sleep(50 * time.Millisecond) // let Pump copy to ring + flag alt-screen
+
+	tok, _ := h.reg.IssueAttachToken(h.sess.ID())
+	sid := h.sess.ID()
+	conn, stream, ack := dialAndAttachFrame(t, h, protocol.Attach{
+		V:            1,
+		Token:        tok[:],
+		SessionID:    sid[:],
+		Rows:         rows,
+		Cols:         cols,
+		ReplayBudget: 256, // smaller than the spinner output → footer-draw is out of a raw window
+	})
+	defer conn.CloseWithError(0, "")
+	defer stream.Close()
+	if !ack.OK {
+		t.Fatalf("attach failed: %s %s", ack.Err, ack.Msg)
+	}
+
+	// Drain the replay window [Start, BufSeq) and assert the footer is in it.
+	want := int(ack.BufSeq - ack.Start)
+	replay := make([]byte, 0, want)
+	for len(replay) < want {
+		_, payload := readNextStdoutFrame(t, stream)
+		replay = append(replay, payload...)
+	}
+	if !bytes.Contains(replay, []byte(footer)) {
+		t.Fatalf("reconstructed replay missing footer %q (got %d bytes)", footer, len(replay))
+	}
+}
+
 // TestComputeReplayWindow covers the v1.6.0 budget + alt-screen
 // clamp matrix on top of the original three ack cases. Uses a real
 // RingBuffer so the seq arithmetic (monotonic byte offsets, tail =

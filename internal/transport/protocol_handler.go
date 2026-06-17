@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AG-Studio-Apps/mtroamd/internal/altscreen"
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
@@ -217,6 +218,29 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// budget-gated) — skip the two mutex hops for budget-less CLI
 	// attaches.
 	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
+
+	// Footer re-emit: the status footer + the prompt's border block are
+	// event-driven (drawn once, not on every output frame like the spinner /
+	// conversation), so they age out of the recency-based replay window and a
+	// reattaching client rebuilds the screen WITHOUT them. Reconstruct the
+	// bottom rows from the ring and INJECT them into the output ring as real
+	// bytes BEFORE computing the window — so they're the newest content and ride
+	// the NORMAL replay (real seqs, no client/protocol change). Gated on the
+	// model staying FAITHFUL: vim/htop (scroll region / IL / DL) get nothing —
+	// they have no such footer and the model can't model their ops. The redraw
+	// is cursor-neutral (ESC7/ESC8), so other attached clients see only an
+	// idempotent in-place refresh of the bottom rows.
+	if altActive {
+		tail := buf.TailSeq()
+		if ring, _, _ := buf.ReadSince(tail, int(buf.HeadSeq()-tail)); len(ring) > 0 {
+			rows, cols := sess.WindowSize()
+			if redraw, faithful := altscreen.ReconstructBottomRows(
+				ring, int(rows), int(cols), altScreenFooterRows); faithful && len(redraw) > 0 {
+				_, _ = sess.InjectOutput(redraw)
+			}
+		}
+	}
+
 	start, head, trunc := computeReplayWindow(
 		buf, att.AckSeq, att.ReplayBudget, altActive)
 
@@ -759,6 +783,14 @@ func closeMsgFor(code uint64) string {
 // v1.6.0 RC. Budget-less clients (mtroam attach/tail) are never
 // clamped — full replay stays their contract.
 const AltScreenReplayCap = 128 * 1024
+
+// altScreenFooterRows is how many bottom rows the daemon re-emits into the ring
+// on an alt-screen attach (the footer block: status footer + separator + prompt
+// border + prompt line, with margin). Generous so it covers the event-driven
+// bottom region across terminal heights; the rows above it are output-driven and
+// reliably already inside the replay window. Re-emit is idempotent, so a too-large
+// value only costs a few bytes, never correctness.
+const altScreenFooterRows = 8
 
 // computeReplayWindow figures out where on the buffer the replay
 // stream should start, given the client's last-acked seq and its

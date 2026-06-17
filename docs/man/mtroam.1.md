@@ -1,6 +1,6 @@
 % MTROAM(1) | mtroamd
 % mtroamd authors
-% May 2026
+% June 2026
 
 # NAME
 
@@ -52,7 +52,7 @@ needs to be running on the remote host; **mtroam** is a client only.
     for this specific session; absent means inherit the daemon
     default (typically on).
 
-**attach** [**\-\-host** *user@host*] [**\-\-mode** {*exclusive*|*readonly*|*exclusive-if-free*}] [**\-\-predict** {*always*|*adaptive*|*never*}] [**\-\-persist** | **\-\-no-persist**] *id-or-name*
+**attach** [**\-\-host** *user@host*] [**\-\-mode** {*exclusive*|*readonly*|*exclusive-if-free*}] [**\-\-predict** {*always*|*adaptive*|*never*}] [**\-\-persist** | **\-\-no-persist**] [**\-\-name** *NAME*] [**\-\-idle-timeout** *DUR*] [**\-\-shell** *PATH*] *id-or-name*
 :   Attach to a session as your local terminal. If the named session
     doesn't exist, **attach** creates it. Use **\-\-mode readonly** to
     watch without sending input. **\-\-predict** controls predictive
@@ -60,7 +60,10 @@ needs to be running on the remote host; **mtroam** is a client only.
     *adaptive* (default) underlines only when smoothed RTT exceeds
     ~80ms, *never* disables prediction entirely. **\-\-persist** /
     **\-\-no-persist** apply only on fresh spawn — reattach inherits
-    whatever the original session was created with.
+    whatever the original session was created with. When **attach**
+    creates a session (the selector names none that exists),
+    **\-\-name**, **\-\-idle-timeout**, and **\-\-shell** shape the
+    fresh spawn and are ignored on reattach.
 
     In an attached session, two escape chords are honoured on a
     fresh line:
@@ -96,19 +99,22 @@ needs to be running on the remote host; **mtroam** is a client only.
 
 **kill** [**\-\-host** *user@host*] *id-or-name*
 :   Reap a session by SessionID or by user-visible Name. Glob patterns
-    (`*`, `?`, `[...]`) and **\-\-all** are supported.
+    (`*`, `?`, `[...]`) are supported (forwarded to the daemon as a
+    single selector).
 
 **rename** [**\-\-host** *user@host*] *id-or-name* *new-name*
 :   Change a session's user-visible name. PTY and scrollback buffer
     are unaffected.
 
-**update** [**\-\-check**] [**\-\-yes**] [**\-\-tag** *vX.Y.Z*] [**\-\-allow-downgrade**]
+**update** [**\-\-check**] [**\-\-yes**] [**\-\-tag** *vX.Y.Z*] [**\-\-allow-downgrade**] [**\-\-force**]
 :   Apply a signed self-update from GitHub Releases. Verifies the
     SHA-256 manifest's minisign signature against the embedded primary
     + emergency public-key roster, then verifies the binary's SHA-256
     against the manifest, then atomically swaps **~/.local/bin/mtroam**.
     Anti-rollback is on by default; pass **\-\-allow-downgrade** to
-    install an older tag.
+    install an older tag. **\-\-force** reinstalls the target tag even
+    when it already matches the running version (signature + checksum
+    verification still apply).
 
 **restart** [**\-\-host** *user@host*] [**\-\-timeout** *DUR*]
 :   Cycle the remote daemon via its supervisor (systemd-user, launchd,
@@ -141,8 +147,10 @@ needs to be running on the remote host; **mtroam** is a client only.
     detach.
 
 **\-\-mode** *MODE*
-:   For **attach**: *exclusive* (default; sends stdin) or *readonly*
-    (watcher; renders output, drops local stdin).
+:   For **attach**: *exclusive* (default; sends stdin), *readonly*
+    (watcher; renders output, drops local stdin), or *exclusive-if-free*
+    (polite: exclusive iff no live exclusive client is attached, else
+    readonly — never displaces anyone).
 
 # ENVIRONMENT
 

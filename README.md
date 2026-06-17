@@ -8,7 +8,7 @@ Start a build on your phone in the morning, reattach from a laptop in the aftern
 
 ## Status
 
-Pre-1.0. The wire protocol is documented but not frozen; we may break it before v1.0.0 with a wire-version bump and a synchronized iOS app release. Bug reports against tagged releases are welcome and get triaged.
+Stable. mtroamd is well past v1.0 (current: v1.7.x) and ships in lockstep with the meshTerm iOS app. The wire protocol ([`docs/mtroam-protocol.md`](docs/mtroam-protocol.md)) is the frozen v1 contract within the `meshterm/0` ALPN epoch — additive changes only (unknown message types and fields are ignored, never repurposed). Bug reports against tagged releases are welcome and get triaged.
 
 ## Compared to
 
@@ -25,7 +25,7 @@ Pre-1.0. The wire protocol is documented but not frozen; we may break it before 
 
 The daemon is the source of truth; the clients are interchangeable. That's the line wezterm's multiplexer can't easily cross — it requires their emulator on both ends.
 
-† **meshTerm iOS status**: the QUIC-speaking meshTerm client is currently in TestFlight as the v2.0 release; the App Store version (v1.x) is the pre-mtRoam SSH client. The two ship in lockstep — when v2.0 hits the App Store, mtroamd cuts its first coordinated public release (see Install below).
+† **meshTerm iOS status**: the QUIC-speaking meshTerm app is live on the App Store. The app and daemon ship in lockstep — mtroamd cuts coordinated public releases alongside meshTerm app updates.
 
 ## What it does
 
@@ -38,7 +38,7 @@ The daemon is the source of truth; the clients are interchangeable. That's the l
 
 ## Install
 
-**Currently live (manual install only):** prebuilt binaries from [GitHub Releases](https://github.com/AG-Studio-Apps/mtroamd/releases/latest) for seven targets — linux amd64/arm64/armv7, darwin amd64/arm64, freebsd amd64/arm64. Releases include the daemon, the `mtroam` CLI, man pages, and shell completions for bash/zsh/fish.
+**Prebuilt binaries** from [GitHub Releases](https://github.com/AG-Studio-Apps/mtroamd/releases/latest) for seven targets — linux amd64/arm64/armv7, darwin amd64/arm64, freebsd amd64/arm64. Releases include the daemon, the `mtroam` CLI, man pages, and shell completions for bash/zsh/fish.
 
 ```sh
 # Pick the right asset for your platform from the latest release.
@@ -49,7 +49,7 @@ install -m 755 mtroam-<platform>     ~/.local/bin/mtroam
 
 The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/release-public-key.txt`](docs/release-public-key.txt).
 
-**Coming with the v2.0 coordinated release** (alongside meshTerm iOS v2.0 hitting the App Store):
+**Package managers** — signed repositories on the same release line as the App Store app:
 
 - **Debian / Ubuntu (apt)** — a signed apt repo on the same release line as the App Store app:
 
@@ -117,7 +117,7 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
   sudo rc-update add mtroamd && sudo rc-service mtroamd start
   ```
 
-The formula, `PKGBUILD`s, and apt packaging (`nfpm` config + repo setup) are already staged under [`packaging/`](packaging/) so anyone curious can preview the install shape; the live channels go up on co-release day.
+The Homebrew formula, `PKGBUILD`s, and apt/rpm/apk packaging (`nfpm` config + repo setup) live under [`packaging/`](packaging/); the signed channels are published with each release.
 
 Once installed, the daemon usually runs under a supervisor — systemd-user on Linux, launchd on macOS, or a `nohup` fallback. The supervisor unit is dropped automatically by the iOS app's auto-installer on first connect, by the distro packages on `pacman -S` / `brew install`, or by hand:
 
@@ -161,7 +161,7 @@ Bugs and questions about the daemon, `mtroam`, or the wire protocol: file an iss
 
 Bugs about the **meshTerm iOS app** (UI, host management, anything that isn't the daemon): use the in-app help/feedback channel — the meshTerm app source is private, so issues here aren't the right venue for app-side problems.
 
-Feature requests during the v0.x phase get triaged but may get rejected on grounds of "not yet" while the wire protocol is in flux. Bug reports against released versions are always welcome.
+Feature requests are triaged; since the wire protocol is stable (v1), additive changes are preferred. Bug reports against released versions are always welcome.
 
 ## Reporting security issues
 

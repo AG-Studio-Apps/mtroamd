@@ -30,8 +30,10 @@ go.work
 .local-state/
 testdata/keys/
 
-# Local review notes
-/docs/security-review-local.md
-
-/docs/pre-v1.4-codex-security-audit.md
-/docs/1.4.2-codex-security-audit.md
+# Private working areas — never published (gitignored recursively).
+# Raw security scan/audit reports, working docs & plans, and debug
+# captures live here. We periodically review .security/ and promote
+# FIXED findings into the public docs/security-improvements.md.
+.security/
+.notes/
+.debug/

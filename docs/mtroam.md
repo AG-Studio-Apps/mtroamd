@@ -101,6 +101,10 @@ mtroam session-info user@host <id>   # one session: rows, cols, idle, attached c
 mtroam rename user@host <id> new-name
 mtroam kill user@host <id-or-name>   # reap; PTY + buffer go away
 mtroam new user@host --name backend  # create without attaching
+mtroam search user@host <id> <regex> # grep a session's scrollback
+mtroam tail user@host <id>           # passive watch — invisible to other clients
+mtroam doctor user@host              # daemon/host health snapshot
+mtroam restart user@host             # save sessions & restart the daemon
 ```
 
 ## Self-update

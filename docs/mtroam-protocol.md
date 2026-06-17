@@ -340,9 +340,9 @@ Raw bytes from the client to the PTY. No framing, no acks. QUIC's reliable deliv
 
 The client SHOULD NOT send unbounded bursts; respect QUIC's flow control.
 
-## 10. Datagrams
+## 10. Datagrams (reserved — not used in the v0 epoch)
 
-QUIC datagrams (RFC 9221) are used for low-latency unreliable signals where a stream's in-order reliability would add unnecessary latency.
+QUIC datagrams (RFC 9221) were reserved for low-latency unreliable signals, but the shipped daemon disables them (`EnableDatagrams = false`). The two signals once slotted here — EchoConfirm (§10.1) and heartbeats (§10.2) — travel on the control stream / are subsumed by QUIC keepalive instead. This section is retained for forward-compatibility; a future minor version may add a datagram fast path.
 
 ### 10.1 EchoConfirm (server → client)
 
@@ -360,13 +360,9 @@ Sent when the daemon detects the shell's echo mode changed (e.g., entering a pas
 
 **Best-effort:** the server MAY omit EchoConfirm entirely (older daemons, daemons whose PTY implementation doesn't support tcgetattr). Clients that don't receive EchoConfirm fall back to the prompt-sniff heuristic. Clients that don't recognise EchoConfirm (older versions) silently drop the unknown control type — forward-compat is built in.
 
-### 10.2 Heartbeat datagrams
+### 10.2 Heartbeat datagrams — reserved, not used
 
-```cbor
-{ "t": "Hb", "ts": 1715260000.123 }
-```
-
-Sent every ~5 s during idle. Loss is tolerable; only used for monitoring.
+The shipped daemon sends no heartbeat datagrams; QUIC's own keepalive / idle-timeout governs liveness. This slot is reserved for a future datagram fast path and is documented for forward-compatibility only.
 
 ## 11. Session lifecycle (server-side)
 
@@ -399,6 +395,8 @@ Default capacity 4 MiB. When full, oldest bytes are dropped (FIFO). The daemon t
 - If `N < tail_seq`: replay from `tail_seq`, set `trunc = true` in AttachAck
 
 When the Attach carried `replay_budget > 0` (v1.6.0+, § 7.2), a final cap is applied on top of the base cases: the window may start no more than `cap` bytes behind `head_seq`, where `cap = replay_budget`, tightened to `AltScreenReplayCap` (128 KiB) while the session's alt screen is active. If the cap moves the start forward, `trunc = true`. The cap never moves a start backward — a resume whose gap is already smaller than the cap replays exactly the gap. `replay_budget` absent/0 skips this step entirely (full pre-v1.6.0 replay; the `mtroam` CLI's contract).
+
+**Alt-screen footer re-emit (v1.7.1+):** while the alt screen is active, the daemon reconstructs the current screen's bottom rows — the stable status footer / prompt border a TUI draws once and rarely re-emits — and injects them into the output ring *before* the replay window is computed. They ride the normal replay as real ring bytes (real seqs, no new frame or field), so a reattaching client rebuilds the footer even when the original draw has aged out of the capped window. Gated on the reconstruction staying faithful: Claude-style screens are reconstructed; full-screen apps the model can't reproduce (vim, htop) are left untouched and fall back to the raw window.
 
 ### 11.6 Persistence across daemon restart (v0.5.0+)
 
@@ -501,23 +499,22 @@ one via `Allocate.Name`; if unset, the daemon synthesises
 unique per daemon — colliding names on a fresh-spawn request return
 `ipc.ErrNameInUse`.
 
-### Daemon-restart semantics — explicit caveat
+### Daemon-restart semantics
 
-**Sessions do not survive a `mtroamd serve` restart.** PTY child
-processes are direct children of the daemon process; killing the
-daemon SIGHUPs every child and unmaps every ring buffer. There is no
-disk persistence. A restarted daemon presents an empty session list;
-clients with cached SessionIDs hit `ErrUnknownSession` and the iOS
-flow falls back to spawning a fresh session.
+Persisted sessions **survive** a `mtroamd serve` restart (persistence is
+default-on; see §11.6 for the full model). Scrollback + metadata are
+checkpointed to disk and rehydrated on the next start. The shell child
+can't survive daemon death (SIGHUP on PTY close), so the daemon
+lazy-spawns a fresh shell on first reattach and sets `r: true` in
+AttachAck so clients can show a "Restored from previous session" banner.
 
-This is an intentional architectural choice — mtroamd is a
-transparent byte-passthrough layer, and persistent-layout-without-
-processes (the Zellij approach) doesn't fit that posture. Operators
-who need restart survival should run `mtroamd serve` under a
-supervisor (systemd-user, launchd) so it's restarted promptly, but
-must accept that any in-flight session is lost. Reattach-style
-persistence works **across QUIC drops** (network mtroam, app
-foreground/background, force-quit), not across daemon process death.
+Non-persisted sessions — spawned with persistence opted out, or while the
+daemon runs `--persistence-default off` (shared / multi-user hosts) — are
+lost on restart: clients with cached SessionIDs hit `ErrUnknownSession`
+and the iOS flow falls back to spawning a fresh session. Either way, run
+`mtroamd serve` under a supervisor (systemd-user, launchd) so it restarts
+promptly. Reattach-style continuity across QUIC drops (network roam, app
+foreground/background, force-quit) is independent of this and always applies.
 
 ## 14b. v0.6.2 wire additions (backwards-compat)
 
