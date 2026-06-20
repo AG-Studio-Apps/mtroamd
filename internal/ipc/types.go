@@ -95,6 +95,15 @@ type AllocateRequest struct {
 	// session — persistence is fixed at spawn; opt-out a running
 	// session by killing + respawning.
 	Persist *bool `cbor:"p,omitempty"`
+
+	// Kind, when non-empty, routes this allocate to a registered
+	// AllocateExtension (see daemon.AllocateExtension) instead of the core
+	// PTY-shell path. The core never interprets it beyond matching the
+	// registered Kind; a stock terminal daemon registers none, so any Kind is
+	// rejected. ExtBody is an opaque CBOR payload whose schema is owned by the
+	// extension that handles Kind.
+	Kind    string `cbor:"kind,omitempty"`
+	ExtBody []byte `cbor:"ext,omitempty"`
 }
 
 // AllocateResponse carries the fields that go into the bootstrap
@@ -159,6 +168,12 @@ type SessionInfo struct {
 	// Raw process NAME only (no arguments) — agent taxonomy stays
 	// client-side.
 	Fg string `cbor:"fg,omitempty" json:"fg,omitempty"`
+
+	// Labels are generic client-facing key/value metadata an embedder attached
+	// to the session (e.g. "kind"=agent, "interactive"=1), so a client can
+	// categorise sessions in its picker. Opaque to the core; optional, so older
+	// daemons/clients round-trip cleanly.
+	Labels map[string]string `cbor:"labels,omitempty" json:"labels,omitempty"`
 
 	// Wedge-watcher cumulative counters. Optional so older daemon
 	// builds (pre-v0.9.4) can round-trip with newer mtroam clients

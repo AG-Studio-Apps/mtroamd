@@ -369,6 +369,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		FgSince:    fgSinceToNanos(fgSince),
 		FgSinceSeq: fgSinceSeq,
 		Cwd:        fgCwd,
+		Backend:    backendFor(sess),
 	})
 	if err != nil {
 		log.WarnContext(ctx, "marshal AttachAck", "err", err)
@@ -481,13 +482,20 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		}
 	}()
 
-	// Output pump: read from the session's ring buffer and emit
-	// FrameTypeStdout frames on the single stream.
+	// Output pump: a PTY session streams its ring buffer as FrameTypeStdout;
+	// a stream-backed session forwards its opaque published frames as control
+	// frames (see streamOutputPump). Selection is server-side per session type.
 	go func() {
 		defer wg.Done()
 		defer pumpsCancel()
 		defer recoverPump("output")
-		if err := outputPump(pumpsCtx, sess, ctrl, writeFrame, start, &wasDisplaced); err != nil && !errors.Is(err, context.Canceled) {
+		var err error
+		if sess.IsStreamBacked() {
+			err = streamOutputPump(pumpsCtx, sess, ctrl, writeFrame, &wasDisplaced)
+		} else {
+			err = outputPump(pumpsCtx, sess, ctrl, writeFrame, start, &wasDisplaced)
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.DebugContext(pumpsCtx, "output pump exit", "err", err)
 		}
 	}()

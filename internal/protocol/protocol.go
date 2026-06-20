@@ -384,6 +384,14 @@ type AttachAck struct {
 	// yet consumed by current clients. Ongoing changes flow via
 	// AgentNotify alongside Fg.
 	Cwd string `cbor:"cwd,omitempty"`
+
+	// Backend tells the client which session backend it attached to:
+	// "" (default) = a PTY byte stream (FrameTypeStdout); "stream" = an
+	// embedder-supplied opaque-frame stream delivered as control frames (see
+	// the session stream backend). Lets a client confirm whether to expect
+	// stdout bytes or application frames. Backward-compatible: older clients
+	// ignore it.
+	Backend string `cbor:"backend,omitempty"`
 }
 
 // Ack reports the highest output sequence number the client has

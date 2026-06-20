@@ -80,6 +80,47 @@ func outputPump(ctx context.Context, sess *session.Session, s Conn, write frameW
 	}
 }
 
+// streamOutputPump is the stream-backed counterpart to outputPump: it forwards a
+// session's opaque published frames (session.PublishFrame) to the client as
+// control frames, replaying the retained log from the start and then following
+// live. Used when sess.IsStreamBacked(). The frames are application-level units
+// (the producer's opaque bytes) written as-is — no stdout seq framing. The core
+// never interprets a frame body; the embedder that publishes and the client that
+// consumes agree on its meaning.
+func streamOutputPump(ctx context.Context, sess *session.Session, s Conn, write frameWriter, graceful *atomic.Bool) error {
+	cancelOnDone(ctx, func() {
+		if graceful != nil && graceful.Load() {
+			_ = s.Close()
+			time.AfterFunc(gracefulCancelBackstop, func() { s.CancelWrite(0) })
+			return
+		}
+		s.CancelWrite(0)
+	})
+	from := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		frames, next, closed, err := sess.ReadFramesSince(ctx, from)
+		if err != nil {
+			return err
+		}
+		for _, body := range frames {
+			if err := write(protocol.FrameTypeControl, body); err != nil {
+				return err
+			}
+		}
+		from = next
+		if closed {
+			// Stream ended. Keep the connection open (like outputPump blocking
+			// on the ring) so the client can keep viewing the replayed frames
+			// until it detaches or ctx cancels.
+			<-ctx.Done()
+			return ctx.Err()
+		}
+	}
+}
+
 // readPump reads tagged frames from the single bidi stream and
 // dispatches by type:
 //
@@ -120,7 +161,13 @@ func readPump(ctx context.Context, sess *session.Session, s Conn, write frameWri
 				continue // silently drop
 			}
 			if len(body) > 0 {
-				if _, werr := sess.WriteStdin(body); werr != nil {
+				// Stream-backed sessions have no PTY — client input goes to the
+				// embedder's input sink instead of WriteStdin.
+				if sess.IsStreamBacked() {
+					if werr := sess.SendInput(body); werr != nil {
+						return werr
+					}
+				} else if _, werr := sess.WriteStdin(body); werr != nil {
 					return werr
 				}
 			}
@@ -164,6 +211,11 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 			slog.Debug("resize: dropped (non-exclusive client)",
 				"sid", sess.ID().String(), "mode", mode)
 			return nil
+		}
+		// Stream-backed sessions have no PTY to size — hand the resize to the
+		// embedder's control sink (which may ignore it) rather than touch a nil pty.
+		if sess.IsStreamBacked() {
+			return sess.SendControl("resize", body)
 		}
 		var m protocol.Resize
 		if err := protocol.StrictDecMode.Unmarshal(body, &m); err != nil {
@@ -209,6 +261,11 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 				"sid", sess.ID().String(), "mode", mode)
 			return nil
 		}
+		// PTY-wedge recovery is meaningless for a stream-backed session (no PTY);
+		// hand it to the embedder's control sink instead of the pty recover path.
+		if sess.IsStreamBacked() {
+			return sess.SendControl("recover", body)
+		}
 		var m protocol.Recover
 		if err := protocol.StrictDecMode.Unmarshal(body, &m); err != nil {
 			slog.Warn("recover: malformed CBOR — dropped",
@@ -228,9 +285,28 @@ func handleControlFrame(sess *session.Session, body []byte, write frameWriter, m
 	case protocol.TypeGoodbye:
 		return io.EOF // signal graceful close to readPump
 	default:
-		// Unknown control message type — ignore for forward compat.
+		// A control type the core doesn't handle. For a stream-backed session
+		// this is the generic app-control channel: forward it (opaque kind +
+		// body) to the embedder's control sink so a producer can define its own
+		// control messages without the core knowing them. PTY sessions ignore
+		// unknown control types for forward compat, as before.
+		if sess.IsStreamBacked() {
+			if mode != session.AttachExclusive || !sess.IsCurrentExclusive(gen) {
+				return nil // only the driving client sends app controls
+			}
+			return sess.SendControl(t, body)
+		}
 		return nil
 	}
+}
+
+// backendFor returns the AttachAck.Backend value for a session: "stream" for a
+// stream-backed session, "" (PTY default) otherwise.
+func backendFor(sess *session.Session) string {
+	if sess.IsStreamBacked() {
+		return "stream"
+	}
+	return ""
 }
 
 // cancelOnDone fires `cancel` when ctx is cancelled. Used by pumps

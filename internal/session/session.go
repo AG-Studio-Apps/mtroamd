@@ -341,6 +341,42 @@ type Session struct {
 	recoverCancel context.CancelFunc
 	recoverGen    uint64
 
+	// Ext is a generic per-session extension slot for an embedding binary
+	// to attach its own state to a session. The core never reads or
+	// interprets it — a terminal-only daemon leaves it nil. (Used by
+	// downstream embedders to hang per-session state off a session without
+	// the core needing to know what that state is.)
+	Ext any
+
+	// --- stream backend (see stream.go) ---
+	// A session is either PTY-backed (pty != nil; output via Pump→buf) OR
+	// stream-backed (streamBacked; output via PublishFrame→frameLog). The
+	// frames are OPAQUE: the core buffers + delivers them to attachers; the
+	// embedder that publishes them decides what they mean. streamMu guards
+	// these; it is never held together with s.mu (PublishFrame releases streamMu
+	// before taking s.mu for the lastActiveAt bump), so the two can't deadlock.
+	streamMu      sync.Mutex
+	streamBacked  bool
+	frameLog      [][]byte // ordered opaque frame bodies (bounded, drop-oldest)
+	frameLogBytes int      // sum of len(frameLog[i])
+	frameDropped  int      // frames evicted from the front (absolute-cursor base)
+	streamClosed  bool
+	streamNotify  chan struct{}                        // close-and-replace wake for blocked readers
+	inputSink     func([]byte) error                   // reverse channel: client input → producer
+	controlSink   func(kind string, body []byte) error // out-of-band control → producer
+
+	// closeHooks run once (outside the lock) when the session is Closed or
+	// Killed. A generic per-session cleanup seam: an embedder registers
+	// teardown of a session-scoped resource (e.g. cancel a producer goroutine,
+	// reap an external process). Guarded by s.mu.
+	closeHooks []func()
+
+	// labels are generic client-facing key/value metadata an embedder attaches
+	// to a session (e.g. "kind"=agent), surfaced in SessionInfo.Labels so a
+	// client can categorise sessions. Set before the session enters the
+	// registry; the core never interprets them. Guarded by s.mu.
+	labels map[string]string
+
 	closed bool
 }
 
@@ -945,6 +981,11 @@ func (s *Session) Resize(rows, cols uint16) error {
 	pty := s.pty
 	s.lastActiveAt = time.Now()
 	s.mu.Unlock()
+	if pty == nil {
+		// Stream-backed session (or one whose PTY isn't spawned yet): geometry
+		// is recorded above, but there's no terminal to size. No-op, not a panic.
+		return nil
+	}
 	if oldRows == rows && oldCols == cols {
 		slog.Debug("session.Resize: dimensions unchanged — calling SetSize anyway",
 			"sid", s.id.String(), "rows", rows, "cols", cols)
@@ -1285,6 +1326,8 @@ func (s *Session) Close() error {
 	for _, c := range s.passiveClients {
 		cancels = append(cancels, c.cancel)
 	}
+	hooks := s.closeHooks
+	s.closeHooks = nil
 	s.clients = nil
 	s.passiveClients = nil
 	s.mu.Unlock()
@@ -1299,10 +1342,50 @@ func (s *Session) Close() error {
 	for _, c := range cancels {
 		c()
 	}
+	for _, h := range hooks {
+		h()
+	}
 	if pty != nil {
 		return pty.Close()
 	}
 	return nil
+}
+
+// RegisterCloseHook adds fn to the set run once (outside the lock) when the
+// session is Closed or Killed. Generic per-session cleanup: an embedder uses it
+// to tear down a session-scoped resource it created. No-op after the session has
+// already closed (the hook would never fire), so callers should register before
+// the session can be reaped.
+func (s *Session) RegisterCloseHook(fn func()) {
+	s.mu.Lock()
+	s.closeHooks = append(s.closeHooks, fn)
+	s.mu.Unlock()
+}
+
+// SetLabel attaches a generic client-facing label to the session (surfaced in
+// SessionInfo.Labels). Intended to be called once, before the session enters
+// the registry; the core never interprets the key or value.
+func (s *Session) SetLabel(key, val string) {
+	s.mu.Lock()
+	if s.labels == nil {
+		s.labels = make(map[string]string)
+	}
+	s.labels[key] = val
+	s.mu.Unlock()
+}
+
+// Labels returns a copy of the session's client-facing labels, or nil if none.
+func (s *Session) Labels() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.labels) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.labels))
+	for k, v := range s.labels {
+		out[k] = v
+	}
+	return out
 }
 
 // PTYKiller is the optional capability a session.PTY can implement
@@ -1337,6 +1420,8 @@ func (s *Session) Kill() error {
 	for _, c := range s.passiveClients {
 		cancels = append(cancels, c.cancel)
 	}
+	hooks := s.closeHooks
+	s.closeHooks = nil
 	s.clients = nil
 	s.passiveClients = nil
 	s.mu.Unlock()
@@ -1345,6 +1430,9 @@ func (s *Session) Kill() error {
 
 	for _, c := range cancels {
 		c()
+	}
+	for _, h := range hooks {
+		h()
 	}
 	if pty == nil {
 		return nil
