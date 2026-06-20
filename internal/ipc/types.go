@@ -95,6 +95,15 @@ type AllocateRequest struct {
 	// session — persistence is fixed at spawn; opt-out a running
 	// session by killing + respawning.
 	Persist *bool `cbor:"p,omitempty"`
+
+	// Kind, when non-empty, routes this allocate to a registered
+	// AllocateExtension (see daemon.AllocateExtension) instead of the core
+	// PTY-shell path. The core never interprets it beyond matching the
+	// registered Kind; a stock terminal daemon registers none, so any Kind is
+	// rejected. ExtBody is an opaque CBOR payload whose schema is owned by the
+	// extension that handles Kind.
+	Kind    string `cbor:"kind,omitempty"`
+	ExtBody []byte `cbor:"ext,omitempty"`
 }
 
 // AllocateResponse carries the fields that go into the bootstrap

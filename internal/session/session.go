@@ -341,6 +341,29 @@ type Session struct {
 	recoverCancel context.CancelFunc
 	recoverGen    uint64
 
+	// Ext is a generic per-session extension slot for an embedding binary
+	// to attach its own state to a session. The core never reads or
+	// interprets it — a terminal-only daemon leaves it nil. (Used by
+	// downstream embedders to hang per-session state off a session without
+	// the core needing to know what that state is.)
+	Ext any
+
+	// --- stream backend (see stream.go) ---
+	// A session is either PTY-backed (pty != nil; output via Pump→buf) OR
+	// stream-backed (streamBacked; output via PublishFrame→frameLog). The
+	// frames are OPAQUE: the core buffers + delivers them to attachers; the
+	// embedder that publishes them decides what they mean. streamMu guards
+	// these and is acquired AFTER s.mu when both are needed.
+	streamMu      sync.Mutex
+	streamBacked  bool
+	frameLog      [][]byte // ordered opaque frame bodies (bounded, drop-oldest)
+	frameLogBytes int      // sum of len(frameLog[i])
+	frameDropped  int      // frames evicted from the front (absolute-cursor base)
+	streamClosed  bool
+	streamNotify  chan struct{}                        // close-and-replace wake for blocked readers
+	inputSink     func([]byte) error                   // reverse channel: client input → producer
+	controlSink   func(kind string, body []byte) error // out-of-band control → producer
+
 	closed bool
 }
 
