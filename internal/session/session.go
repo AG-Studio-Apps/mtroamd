@@ -353,7 +353,8 @@ type Session struct {
 	// stream-backed (streamBacked; output via PublishFrame→frameLog). The
 	// frames are OPAQUE: the core buffers + delivers them to attachers; the
 	// embedder that publishes them decides what they mean. streamMu guards
-	// these and is acquired AFTER s.mu when both are needed.
+	// these; it is never held together with s.mu (PublishFrame releases streamMu
+	// before taking s.mu for the lastActiveAt bump), so the two can't deadlock.
 	streamMu      sync.Mutex
 	streamBacked  bool
 	frameLog      [][]byte // ordered opaque frame bodies (bounded, drop-oldest)
@@ -363,6 +364,12 @@ type Session struct {
 	streamNotify  chan struct{}                        // close-and-replace wake for blocked readers
 	inputSink     func([]byte) error                   // reverse channel: client input → producer
 	controlSink   func(kind string, body []byte) error // out-of-band control → producer
+
+	// closeHooks run once (outside the lock) when the session is Closed or
+	// Killed. A generic per-session cleanup seam: an embedder registers
+	// teardown of a session-scoped resource (e.g. cancel a producer goroutine,
+	// reap an external process). Guarded by s.mu.
+	closeHooks []func()
 
 	closed bool
 }
@@ -1313,6 +1320,8 @@ func (s *Session) Close() error {
 	for _, c := range s.passiveClients {
 		cancels = append(cancels, c.cancel)
 	}
+	hooks := s.closeHooks
+	s.closeHooks = nil
 	s.clients = nil
 	s.passiveClients = nil
 	s.mu.Unlock()
@@ -1327,10 +1336,24 @@ func (s *Session) Close() error {
 	for _, c := range cancels {
 		c()
 	}
+	for _, h := range hooks {
+		h()
+	}
 	if pty != nil {
 		return pty.Close()
 	}
 	return nil
+}
+
+// RegisterCloseHook adds fn to the set run once (outside the lock) when the
+// session is Closed or Killed. Generic per-session cleanup: an embedder uses it
+// to tear down a session-scoped resource it created. No-op after the session has
+// already closed (the hook would never fire), so callers should register before
+// the session can be reaped.
+func (s *Session) RegisterCloseHook(fn func()) {
+	s.mu.Lock()
+	s.closeHooks = append(s.closeHooks, fn)
+	s.mu.Unlock()
 }
 
 // PTYKiller is the optional capability a session.PTY can implement
@@ -1365,6 +1388,8 @@ func (s *Session) Kill() error {
 	for _, c := range s.passiveClients {
 		cancels = append(cancels, c.cancel)
 	}
+	hooks := s.closeHooks
+	s.closeHooks = nil
 	s.clients = nil
 	s.passiveClients = nil
 	s.mu.Unlock()
@@ -1373,6 +1398,9 @@ func (s *Session) Kill() error {
 
 	for _, c := range cancels {
 		c()
+	}
+	for _, h := range hooks {
+		h()
 	}
 	if pty == nil {
 		return nil

@@ -62,6 +62,12 @@ func (s *Session) IsStreamBacked() bool { return s.streamBacked }
 // goroutine. Oversized history is trimmed front-first (drop-oldest); the
 // absolute cursor base (frameDropped) advances so a lagging reader is clamped
 // forward rather than silently re-reading evicted frames.
+//
+// CONTRACT: each frame is delivered to clients WHOLE as a single control frame,
+// so a frame body must fit protocol.MaxControlFrameBytes (64 KiB). The core
+// can't chunk an opaque frame (it doesn't know its structure); a producer that
+// publishes a larger frame will tear the client attach down at write time. The
+// producer is responsible for fitting each frame (e.g. truncating large fields).
 func (s *Session) PublishFrame(body []byte) {
 	s.streamMu.Lock()
 	s.frameLog = append(s.frameLog, body)
