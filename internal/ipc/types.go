@@ -169,6 +169,12 @@ type SessionInfo struct {
 	// client-side.
 	Fg string `cbor:"fg,omitempty" json:"fg,omitempty"`
 
+	// Labels are generic client-facing key/value metadata an embedder attached
+	// to the session (e.g. "kind"=agent, "interactive"=1), so a client can
+	// categorise sessions in its picker. Opaque to the core; optional, so older
+	// daemons/clients round-trip cleanly.
+	Labels map[string]string `cbor:"labels,omitempty" json:"labels,omitempty"`
+
 	// Wedge-watcher cumulative counters. Optional so older daemon
 	// builds (pre-v0.9.4) can round-trip with newer mtroam clients
 	// without protocol breakage. Populated for every live session;

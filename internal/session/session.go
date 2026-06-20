@@ -371,6 +371,12 @@ type Session struct {
 	// reap an external process). Guarded by s.mu.
 	closeHooks []func()
 
+	// labels are generic client-facing key/value metadata an embedder attaches
+	// to a session (e.g. "kind"=agent), surfaced in SessionInfo.Labels so a
+	// client can categorise sessions. Set before the session enters the
+	// registry; the core never interprets them. Guarded by s.mu.
+	labels map[string]string
+
 	closed bool
 }
 
@@ -1354,6 +1360,32 @@ func (s *Session) RegisterCloseHook(fn func()) {
 	s.mu.Lock()
 	s.closeHooks = append(s.closeHooks, fn)
 	s.mu.Unlock()
+}
+
+// SetLabel attaches a generic client-facing label to the session (surfaced in
+// SessionInfo.Labels). Intended to be called once, before the session enters
+// the registry; the core never interprets the key or value.
+func (s *Session) SetLabel(key, val string) {
+	s.mu.Lock()
+	if s.labels == nil {
+		s.labels = make(map[string]string)
+	}
+	s.labels[key] = val
+	s.mu.Unlock()
+}
+
+// Labels returns a copy of the session's client-facing labels, or nil if none.
+func (s *Session) Labels() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.labels) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.labels))
+	for k, v := range s.labels {
+		out[k] = v
+	}
+	return out
 }
 
 // PTYKiller is the optional capability a session.PTY can implement
