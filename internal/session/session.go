@@ -968,6 +968,11 @@ func (s *Session) Resize(rows, cols uint16) error {
 	pty := s.pty
 	s.lastActiveAt = time.Now()
 	s.mu.Unlock()
+	if pty == nil {
+		// Stream-backed session (or one whose PTY isn't spawned yet): geometry
+		// is recorded above, but there's no terminal to size. No-op, not a panic.
+		return nil
+	}
 	if oldRows == rows && oldCols == cols {
 		slog.Debug("session.Resize: dimensions unchanged — calling SetSize anyway",
 			"sid", s.id.String(), "rows", rows, "cols", cols)
