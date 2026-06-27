@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // TestStreamSession_ToyClockProducer is the seam's "generic" acceptance test:
@@ -129,5 +131,33 @@ func TestStreamSession_InputSink(t *testing.T) {
 	s.CloseStream()
 	if err := s.SendInput([]byte("late")); err == nil {
 		t.Fatal("expected error sending input after close")
+	}
+}
+
+// TestPublishFrame_RejectsOversized verifies the 64 KiB control-frame contract
+// is ENFORCED at publish time: an oversized frame is rejected with an error and
+// never retained, so a buggy/compromised producer can't blow the frame-log cap
+// or tear down client attaches at write time.
+func TestPublishFrame_RejectsOversized(t *testing.T) {
+	id, _ := NewSessionID()
+	s, err := NewStreamSession(id, "x", 0, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A frame exactly at the limit is accepted (matches the wire writer/reader).
+	if err := s.PublishFrame(make([]byte, protocol.MaxControlFrameBytes)); err != nil {
+		t.Fatalf("frame at limit rejected: %v", err)
+	}
+	// One byte over is rejected with an error and NOT appended.
+	if err := s.PublishFrame(make([]byte, protocol.MaxControlFrameBytes+1)); err == nil {
+		t.Fatal("oversized frame accepted, want error")
+	}
+	// Only the accepted frame is retained.
+	frames, _, _, rerr := s.ReadFramesSince(context.Background(), 0)
+	if rerr != nil {
+		t.Fatalf("ReadFramesSince: %v", rerr)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frame log has %d frames, want 1 (oversized must not be retained)", len(frames))
 	}
 }

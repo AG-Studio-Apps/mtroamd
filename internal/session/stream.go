@@ -3,7 +3,10 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
 // streamMaxLogBytes bounds a stream-backed session's retained frame history.
@@ -65,13 +68,22 @@ func (s *Session) IsStreamBacked() bool { return s.streamBacked }
 //
 // CONTRACT: each frame is delivered to clients WHOLE as a single control frame,
 // so a frame body must fit protocol.MaxControlFrameBytes (64 KiB). The core
-// can't chunk an opaque frame (it doesn't know its structure); a producer that
-// publishes a larger frame will tear the client attach down at write time. The
-// producer is responsible for fitting each frame (e.g. truncating large fields).
-func (s *Session) PublishFrame(body []byte) {
+// can't chunk an opaque frame (it doesn't know its structure). This is now
+// ENFORCED here (not just documented): an oversized frame is REJECTED with an
+// error and never retained, so a buggy/compromised producer can't blow the
+// frame-log cap with one huge frame or reliably tear down client attaches at
+// write time. The producer is responsible for fitting each frame (e.g.
+// truncating large fields) and should handle the returned error.
+func (s *Session) PublishFrame(body []byte) error {
+	if len(body) > protocol.MaxControlFrameBytes {
+		return fmt.Errorf("session: stream frame %d bytes exceeds the %d-byte control-frame limit",
+			len(body), protocol.MaxControlFrameBytes)
+	}
 	s.streamMu.Lock()
 	s.frameLog = append(s.frameLog, body)
 	s.frameLogBytes += len(body)
+	// Every frame is now <= MaxControlFrameBytes (<< streamMaxLogBytes), so the
+	// drop-oldest trim can always bring the total back under the cap.
 	for s.frameLogBytes > streamMaxLogBytes && len(s.frameLog) > 1 {
 		s.frameLogBytes -= len(s.frameLog[0])
 		s.frameLog[0] = nil
@@ -86,6 +98,7 @@ func (s *Session) PublishFrame(body []byte) {
 	s.mu.Lock()
 	s.lastActiveAt = time.Now()
 	s.mu.Unlock()
+	return nil
 }
 
 // ReadFramesSince returns frames from absolute cursor `from`, blocking until at
