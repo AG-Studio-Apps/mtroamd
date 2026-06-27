@@ -9,6 +9,15 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 (osv-scanner / Dependabot), static analysis (CodeQL / CI-workflow audits), binary
 scans, and manual code review (including adversarial multi-agent review).
 
+## v1.7.2 (2026-06-27)
+
+_Independent Codex security audit of the `develop` branch (the new extension-seam batch). No Critical or High findings; two Medium hardening items, first shipping in `v1.7.2-rc2`._
+
+| Finding | Severity | Source | Fix |
+|---|---|---|---|
+| Plaintext-TCP listener could bind an unspecified address (`0.0.0.0` / `::` / host-less `:N`), exposing the un-TLS'd protocol and attach tokens on every interface | Medium | Codex audit | `guardPlaintextBind` now **fails closed** on unspecified binds (refused unless `MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED=1`); the `tailnet:<port>` sentinel and loopback/private/tailnet binds still pass, and concrete globally-routable is still refused. Extends the v1.4.11 globally-routable guard. |
+| Stream-extension 64 KiB frame contract was documented but not enforced: one oversized frame slipped past the drop-oldest trim, exceeding the 4 MiB log cap and tearing down client attaches at write time | Medium | Codex audit | `Session.PublishFrame` now returns an error and **rejects** any frame over `protocol.MaxControlFrameBytes` (never retained). Not reachable in the stock daemon (no extensions registered); hardens the generic seam the agent fork drives. |
+
 ## v1.7.0 — 2026-06-15
 
 _Adversarial multi-agent code review of the recover / attach paths._
