@@ -95,6 +95,12 @@ type Config struct {
 	// reasonable on a dev box; multi-MiB hits are fine even on a Pi.
 	SessionBufferBytes int
 
+	// AllocateExtensions are registered by an embedding binary to handle
+	// allocate requests carrying a matching AllocateRequest.Kind. The core
+	// (a stock terminal daemon) sets none, so the Kind dispatch is inert.
+	// See ext.go / AllocateExtension.
+	AllocateExtensions []AllocateExtension
+
 	// PersistenceDefault controls whether new sessions opt into
 	// cross-restart persistence when the client didn't specify
 	// (AllocateRequest.Persist == nil). True (the default-on
@@ -134,7 +140,11 @@ type Daemon struct {
 	cert     tls.Certificate
 	certFP   cert.Fingerprint
 	registry *session.Registry
-	quic     *transport.Server
+	// allocateExts maps AllocateRequest.Kind → the embedder extension that
+	// handles it. Nil/empty for a stock terminal daemon (no agent/MCP code in
+	// core). Populated in New() from Config.AllocateExtensions.
+	allocateExts map[string]AllocateExtension
+	quic         *transport.Server
 	// tcp is the optional plain-TCP listener used by iOS clients
 	// in embedded-Tailscale mode. Nil when Config.TCPAddr is "" or
 	// when a "tailnet:" sentinel is pending resolution.
@@ -257,6 +267,22 @@ func New(cfg Config) (*Daemon, error) {
 		registry:  reg,
 		stateDir:  stateDir,
 		startedAt: time.Now(),
+	}
+
+	// Index any embedder-registered allocate extensions by Kind. The core
+	// registers none, so a stock terminal daemon leaves this empty/nil.
+	for _, ext := range cfg.AllocateExtensions {
+		k := ext.Kind()
+		if k == "" {
+			return nil, fmt.Errorf("daemon: AllocateExtension has empty Kind")
+		}
+		if _, dup := d.allocateExts[k]; dup {
+			return nil, fmt.Errorf("daemon: duplicate AllocateExtension kind %q", k)
+		}
+		if d.allocateExts == nil {
+			d.allocateExts = make(map[string]AllocateExtension, len(cfg.AllocateExtensions))
+		}
+		d.allocateExts[k] = ext
 	}
 
 	// Hydrate sessions that were persisted by a prior daemon run.
@@ -745,6 +771,7 @@ func (d *Daemon) HandleListSessions(ctx context.Context, _ ipc.ListSessionsReque
 			Rows:                    rows,
 			Cols:                    cols,
 			Fg:                      sess.ForegroundComm(),
+			Labels:                  sess.Labels(),
 			WedgeTotalOutBytes:      totalOut,
 			WedgeResizesObserved:    resizes,
 			WedgeSilentWedges:       silent,
@@ -943,6 +970,16 @@ func (d *Daemon) resolveSessionBySelector(sel string) (*session.Session, error) 
 // AllocateResponse fields.
 func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Session, error) {
 	if req.SessionID == "" || req.SessionID == "new" {
+		// Extension-handled allocate: a non-empty Kind routes to a
+		// registered AllocateExtension (downstream embedder). The core
+		// registers none, so a stock terminal daemon rejects any Kind.
+		if req.Kind != "" {
+			ext, ok := d.allocateExts[req.Kind]
+			if !ok {
+				return nil, &allocateErr{Code: ipc.ErrBadRequest, Msg: "unknown allocate kind: " + req.Kind}
+			}
+			return ext.Spawn(context.Background(), d.spawnEnv(), req)
+		}
 		// Name-driven path: prefer reattach to an existing session
 		// with this name, fall back to spawn. Empty Name → plain
 		// anonymous spawn (legacy).

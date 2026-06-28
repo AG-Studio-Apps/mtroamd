@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"strings"
 )
 
 type interfaceEntry struct {
@@ -117,9 +119,11 @@ func IsTailnetIP(ip net.IP) bool {
 //
 //   - allow loopback, RFC1918-private, link-local, and tailnet addresses
 //     (confined to a trusted network) silently;
-//   - loudly warn on an unspecified bind (0.0.0.0 / :: / host-less ":port"),
-//     which can't be classified at bind time — refusing it would break
-//     legitimate private-LAN setups, so we leave the operator a breadcrumb;
+//   - FAIL CLOSED on an unspecified bind (0.0.0.0 / :: / host-less ":port"),
+//     which exposes the cleartext protocol on EVERY interface (including
+//     non-tailnet/public ones); the operator must instead bind a
+//     loopback/private/tailnet address (or "tailnet:<port>"), or explicitly
+//     opt in via MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED;
 //   - refuse a concrete globally-routable address, where plaintext exposure
 //     would be unambiguous.
 func guardPlaintextBind(ip net.IP) error {
@@ -128,8 +132,14 @@ func guardPlaintextBind(ip net.IP) error {
 		if ip != nil {
 			addr = ip.String()
 		}
-		slog.Warn("transport: plaintext (un-TLS'd) TCP listener bound to an unspecified address; "+
-			"ensure it is firewalled to a tailnet/LAN — for public exposure use the QUIC listener",
+		if !plaintextUnspecifiedAllowed() {
+			return fmt.Errorf("refusing to bind the plaintext (un-TLS'd) TCP listener to unspecified address %s: "+
+				"it would expose the cleartext terminal protocol (and attach tokens) on every interface. "+
+				"Bind a loopback/private/tailnet address (or \"tailnet:<port>\"), use the QUIC listener (TLS 1.3) "+
+				"for public exposure, or set MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED=1 to override", addr)
+		}
+		slog.Warn("transport: plaintext (un-TLS'd) TCP listener bound to an unspecified address via "+
+			"MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED override; ensure it is firewalled to a tailnet/LAN",
 			"addr", addr)
 		return nil
 	}
@@ -140,12 +150,26 @@ func guardPlaintextBind(ip net.IP) error {
 		"bind a loopback/private/tailnet address, or use the QUIC listener (TLS 1.3) for public exposure", ip.String())
 }
 
+// plaintextUnspecifiedAllowed reports whether the operator has explicitly opted
+// into binding the un-TLS'd TCP listener to an unspecified address (every
+// interface). Off by default so a misconfiguration fails closed rather than
+// silently leaking cleartext terminal traffic.
+func plaintextUnspecifiedAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // ResolveBindAddr expands the "tailnet:<port>" sentinel into a
 // concrete "<tailnet-ip>:<port>" bind address using
 // ResolveTailnetBindIP. Any other input is returned unchanged — the
 // daemon's serve loop calls this once at startup so operators can
-// still pass fully-specified host:port pairs (including "0.0.0.0:N"
-// with the documented security caveat).
+// still pass fully-specified host:port pairs. Note an unspecified bind
+// ("0.0.0.0:N" / ":N") is now refused by guardPlaintextBind unless
+// MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED is set.
 //
 // Returns the resolved address and the resolved IP (or nil + the
 // original addr if no resolution happened). Errors from the resolver

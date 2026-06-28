@@ -225,10 +225,13 @@ func TestGuardPlaintextBind(t *testing.T) {
 		}
 	}
 
-	// Unspecified / host-less binds warn but are permitted.
-	for _, ip := range []net.IP{nil, net.IPv4zero, net.IPv6unspecified} {
-		if err := guardPlaintextBind(ip); err != nil {
-			t.Errorf("guardPlaintextBind(%v) = %v, want permitted-with-warning (nil)", ip, err)
+	// Unspecified / host-less binds FAIL CLOSED by default: they'd expose the
+	// cleartext protocol on every interface, so they're refused without an
+	// explicit opt-in.
+	unspecified := []net.IP{nil, net.IPv4zero, net.IPv6unspecified}
+	for _, ip := range unspecified {
+		if err := guardPlaintextBind(ip); err == nil {
+			t.Errorf("guardPlaintextBind(%v) = nil, want refusal (fail-closed)", ip)
 		}
 	}
 
@@ -243,5 +246,17 @@ func TestGuardPlaintextBind(t *testing.T) {
 		if err := guardPlaintextBind(ip); err == nil {
 			t.Errorf("guardPlaintextBind(%v) = nil, want refusal", ip)
 		}
+	}
+
+	// With the explicit override, unspecified binds are permitted (warn only).
+	t.Setenv("MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED", "1")
+	for _, ip := range unspecified {
+		if err := guardPlaintextBind(ip); err != nil {
+			t.Errorf("guardPlaintextBind(%v) with override = %v, want permitted (nil)", ip, err)
+		}
+	}
+	// The override does NOT loosen a concrete globally-routable refusal.
+	if err := guardPlaintextBind(net.ParseIP("8.8.8.8")); err == nil {
+		t.Error("guardPlaintextBind(8.8.8.8) with override = nil, want refusal")
 	}
 }
