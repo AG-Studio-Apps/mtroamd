@@ -165,6 +165,15 @@ Don't continue.
 terminal to drive raw mode + window-size queries; running it from a
 script with redirected stdin won't work.
 
+**"failed to sufficiently increase receive buffer size" in the daemon
+log**: a benign quic-go notice, not a real error. It asked for a larger
+UDP receive buffer than the OS default (`net.core.rmem_max`) permits,
+which is harmless for terminal traffic (low bandwidth, bursty), so no
+action is needed. If you run `mtroamd` as a high-throughput QUIC endpoint
+and want the extra headroom, raise it on the host, e.g.
+`sudo sysctl -w net.core.rmem_max=7500000` (persist via a
+`/etc/sysctl.d/` drop-in).
+
 ## Compatibility
 
 `mtroam` and `mtroamd` ship in the same release. Pair `mtroam-vX.Y.Z`
