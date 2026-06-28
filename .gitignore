@@ -37,3 +37,6 @@ testdata/keys/
 .security/
 .notes/
 .debug/
+
+# Local adoption/download tracking (not for publication)
+.adoption/
