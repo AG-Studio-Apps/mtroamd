@@ -18,9 +18,9 @@ The protocol's security perimeter is the **iOS client → daemon** channel. Insi
 
 ## What we trust
 
-- **The user's SSH host key chain.** Bootstrap happens over an existing SSH session. If the user's known_hosts trusts the host, we inherit that trust. If SSH is being MITM'd at bootstrap time, every secret SSH carries is already compromised — this protocol cannot improve on that.
+- **The user's SSH host key chain.** Bootstrap happens over an existing SSH session. If the user's known_hosts trusts the host, we inherit that trust. If SSH is being MITM'd at bootstrap time, every secret SSH carries is already compromised - this protocol cannot improve on that.
 
-  ⚠️ **First-use caveat (TOFU).** `mtroam` sets `StrictHostKeyChecking=accept-new` for usability — a host fingerprint that isn't in the user's `~/.ssh/known_hosts` is auto-trusted on first connection. If a network MITM is positioned at the moment of that very first SSH dial, they can supply their own host key, return a fake `MTRM_QUIC` bootstrap line, and surface a cert fingerprint that the QUIC client then pins. Subsequent connections are protected (the spoofed key gets stored in known_hosts and any later real host triggers a verification failure), but the window exists. Users on hostile first-use networks should populate `known_hosts` out-of-band (e.g. `ssh-keyscan` from a trusted location, or copy from a known-good machine) before running `mtroam` for the first time. Codex audit 2026-05-19 LOW.
+  ⚠️ **First-use caveat (TOFU).** `mtroam` sets `StrictHostKeyChecking=accept-new` for usability - a host fingerprint that isn't in the user's `~/.ssh/known_hosts` is auto-trusted on first connection. If a network MITM is positioned at the moment of that very first SSH dial, they can supply their own host key, return a fake `MTRM_QUIC` bootstrap line, and surface a cert fingerprint that the QUIC client then pins. Subsequent connections are protected (the spoofed key gets stored in known_hosts and any later real host triggers a verification failure), but the window exists. Users on hostile first-use networks should populate `known_hosts` out-of-band (e.g. `ssh-keyscan` from a trusted location, or copy from a known-good machine) before running `mtroam` for the first time. Codex audit 2026-05-19 LOW.
 - **Apple's `Security.framework` (TLS 1.3 implementation).** Used by `Network.framework` for all QUIC TLS operations on the iOS client.
 - **Go's `crypto/tls` (TLS 1.3 implementation).** Used by `quic-go` on the daemon.
 - **Apple's `CryptoKit` (SHA-256, P-256).** Used by the iOS client for fingerprint computation.
@@ -33,7 +33,7 @@ The protocol's security perimeter is the **iOS client → daemon** channel. Insi
 - Other processes on the host that are not the user's UID. They cannot read `~/.local/share/mtroamd/key.pem` without privilege escalation, which is out of our threat model.
 - The bootstrap line in transit through a non-SSH path. The protocol mandates SSH bootstrap; emitting `MTRM_QUIC ...` to any other transport is undefined behaviour.
 
-## Cryptographic primitives — none of which we wrote
+## Cryptographic primitives - none of which we wrote
 
 | Use | Primitive | Library |
 |---|---|---|
@@ -70,7 +70,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's mtRo
 | | |
 |---|---|
 | Capability | Intercepts SSH, replaces the `MTRM_QUIC` line with a different fingerprint |
-| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user — mtRoam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
+| Defense | This requires defeating SSH's host-key trust. If they can do that, they already have a shell as the user - mtRoam adds nothing to their attack surface. The bootstrap pivot is no weaker than SSH itself. |
 
 ### D. Replay of captured bootstrap line
 
@@ -108,7 +108,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's mtRo
 |---|---|
 | Capability | Attacker has access to the unlocked iOS device |
 | Outcome | Same as today's meshTerm: SSH credentials in Keychain, all sessions accessible. |
-| Defense | Outside mtRoam's threat model — same as the existing app. |
+| Defense | Outside mtRoam's threat model - same as the existing app. |
 
 ### I. Traffic analysis (typing inference)
 
@@ -126,15 +126,15 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's mtRo
 | Concern | A user audits our binary and asks "does this thing exfiltrate my data" |
 | Defense | Only data flowing through the active terminal session reaches the QUIC connection. The daemon does not read files outside `~/.local/share/mtroamd/` (its own state) and the PTY of its child process. The source is auditable; the binary build is reproducible (Go build flags pinned). |
 
-### K. IPC surface — read access (information disclosure)
+### K. IPC surface - read access (information disclosure)
 
 | | |
 |---|---|
-| Concern | The IPC unix socket carries more than `Allocate` now — it grew `ListSessions` (full inventory) and `Status` (daemon-wide stats) as part of the named-multi-session work. A local process that can read the socket sees every active session's name, ID, created/last-active timestamps, attached-or-not flag, and PTY geometry. |
-| Defense | The socket is filesystem-protected: mode 0600, parent dir verified at mode ≤ 0700 with `uid == getuid()` (see `verifyParentDir` in `internal/ipc/server.go`). Any other local user with read access to the parent dir is already trusted at the OS level — they could `ptrace`/`cat /proc/<pid>/mem` the daemon directly. SSH-as-auth-boundary stands: if you can reach the socket, you're the user the daemon serves. |
+| Concern | The IPC unix socket carries more than `Allocate` now - it grew `ListSessions` (full inventory) and `Status` (daemon-wide stats) as part of the named-multi-session work. A local process that can read the socket sees every active session's name, ID, created/last-active timestamps, attached-or-not flag, and PTY geometry. |
+| Defense | The socket is filesystem-protected: mode 0600, parent dir verified at mode ≤ 0700 with `uid == getuid()` (see `verifyParentDir` in `internal/ipc/server.go`). Any other local user with read access to the parent dir is already trusted at the OS level - they could `ptrace`/`cat /proc/<pid>/mem` the daemon directly. SSH-as-auth-boundary stands: if you can reach the socket, you're the user the daemon serves. |
 | Residual | Session **names** are user-chosen and may carry secrets ("prod-db-recovery-2026-05-10"). They're disclosed to anything reading the socket, but no further. |
 
-### L. IPC surface — destructive ops
+### L. IPC surface - destructive ops
 
 | | |
 |---|---|
@@ -153,7 +153,7 @@ There is no application-layer cryptography in `mtroamd` or the iOS client's mtRo
 ## Cert lifecycle
 
 - Generated on first daemon startup, stored at `~/.local/share/mtroamd/{cert,key}.pem` with mode 0600.
-- ECDSA P-256 with SHA-256 (cert sigalg `ecdsa_secp256r1_sha256`, TLS code 0x0403). No CN/SAN required — the cert is identified by fingerprint, not name. Ed25519 was the original choice and is cryptographically equivalent, but iOS Network.framework's QUIC ClientHello does not list `ed25519` (0x0807) in its `signature_algorithms` extension, so an Ed25519 server cert is rejected with `CRYPTO_ERROR 0x128` before the client's verify block runs. P-256 sidesteps this without weakening the security posture.
+- ECDSA P-256 with SHA-256 (cert sigalg `ecdsa_secp256r1_sha256`, TLS code 0x0403). No CN/SAN required - the cert is identified by fingerprint, not name. Ed25519 was the original choice and is cryptographically equivalent, but iOS Network.framework's QUIC ClientHello does not list `ed25519` (0x0807) in its `signature_algorithms` extension, so an Ed25519 server cert is rejected with `CRYPTO_ERROR 0x128` before the client's verify block runs. P-256 sidesteps this without weakening the security posture.
 - Validity: 365 days. On daemon startup, if the on-disk cert is within 30 days of expiry (or already expired), `LoadOrGenerate` regenerates a fresh cert+key in place. The new fingerprint travels through the SSH bootstrap on the next attach, so iOS clients re-pin transparently.
 - The fingerprint is the SHA-256 of the DER-encoded certificate.
 - Rotation is start-up driven, not continuous: a daemon with multi-year uptime keeps serving the same cert. Operators who want guaranteed-fresh certs should restart the daemon at least once a year (systemd Restart= will do this on any update). Continuous rotation + a dual-fingerprint window are tracked as a future hardening item.
@@ -187,7 +187,7 @@ The release process pins the Go version, flags `-trimpath -ldflags="-buildid="`,
 
 ## Known limitations
 
-1. **Traffic analysis** — see threat I above. Not addressed in v0.
+1. **Traffic analysis** - see threat I above. Not addressed in v0.
 2. **No defence against a compromised host.** Same as `tmux`, `screen`, `sshd`. mtRoam is not a sandboxing tool.
 3. **Cert pinning is per-host, not per-user.** All users on a host share the daemon's cert. If multiple users connect to the same host and one is compromised, the cert fingerprint is shared.
 4. **No multi-factor for the bootstrap.** SSH's auth methods are the only gate. If you require additional factors, layer them at the SSH level (PAM, hardware tokens).
@@ -209,6 +209,6 @@ This is the checklist we run before each release. Contributors are encouraged to
 - [ ] `~/.local/share/mtroamd/key.pem` marked backup-excluded (best-effort `FS_NODUMP` on Linux; no-op elsewhere)
 - [ ] `/proc/<pid>/environ`, `/proc/<pid>/cmdline` do not contain secrets
 - [ ] IPC socket bound at mode 0600 with `verifyParentDir` covering the containing dir
-- [ ] `Status` response does not leak fields that aren't already user-derivable (cert FP and QUIC addr are fine — they appear in the bootstrap line anyway)
+- [ ] `Status` response does not leak fields that aren't already user-derivable (cert FP and QUIC addr are fine - they appear in the bootstrap line anyway)
 - [ ] `RenameSession` rejects empty new-name (would orphan the session from the picker)
-- [ ] `KillSession` resolves selector through `ParseSessionID` first, then `LookupByName` — never executes shell strings
+- [ ] `KillSession` resolves selector through `ParseSessionID` first, then `LookupByName` - never executes shell strings

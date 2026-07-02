@@ -1,12 +1,12 @@
-# mtRoam Protocol — wire specification
+# mtRoam Protocol - wire specification
 
-**Status**: stable as of mtroamd v1.0.0. The wire format below is the v1 contract: future versions may add new control-message types or fields (forward-compatible — unknown types are ignored per §5), but existing types, field semantics, and constants will not change without bumping the ALPN to `meshterm/1`.
+**Status**: stable as of mtroamd v1.0.0. The wire format below is the v1 contract: future versions may add new control-message types or fields (forward-compatible - unknown types are ignored per §5), but existing types, field semantics, and constants will not change without bumping the ALPN to `meshterm/1`.
 
 ## 1. Goals
 
 - Persistent terminal sessions across client disconnect, foreground network mtroam, and iOS app backgrounding
 - Server-side session ownership: the daemon (`mtroamd`) holds the PTY + child process + output ring buffer; clients reattach by ID
-- Trust bootstrapped over an existing SSH session — no new credential surface
+- Trust bootstrapped over an existing SSH session - no new credential surface
 - All transport security delegated to TLS 1.3 inside QUIC; **no application-layer cryptography**
 - Wire format simple enough to fuzz exhaustively and review in a day
 
@@ -119,7 +119,7 @@ MTRM_DAEMON_VERSION v0.4.0\n
 | `MTRM_DAEMON_VERSION` | literal | sentinel string |
 | `<version>` | raw `build.Version` | typically `vX.Y.Z`; dev builds may have a `-dirty` / `-N-gSHA` suffix |
 
-Forward-compat: clients MAY parse this line to surface a "daemon update available" affordance. Older daemons that don't emit it MUST be tolerated by absence — treat as version-unknown and skip the badge. Clients MUST NOT depend on this line for connect-success; the `MTRM_QUIC` line above is the only bootstrap-load-bearing output.
+Forward-compat: clients MAY parse this line to surface a "daemon update available" affordance. Older daemons that don't emit it MUST be tolerated by absence - treat as version-unknown and skip the badge. Clients MUST NOT depend on this line for connect-success; the `MTRM_QUIC` line above is the only bootstrap-load-bearing output.
 
 ### 4.3 Stderr
 
@@ -213,13 +213,13 @@ A maximum frame length of 64 KiB is enforced. Exceeding it is a fatal protocol v
 
 **Attach modes** (the `mode` field):
 
-- `"exclusive"` (default; missing/empty/unknown values map here): the client receives output, sends stdin, and owns the PTY size via Resize. A new exclusive Attach **displaces** any prior exclusive client — the daemon cancels the displaced client's stream context and the client sees its connection close cleanly. Existing readonly clients are unaffected by exclusive turnover.
-- `"readonly"`: the client receives output only. Stdin frames from a readonly client are silently dropped by the daemon (NOT a protocol violation — a misbehaving keystroke shouldn't tear the connection down). Resize frames are also dropped: the exclusive client owns the geometry. Multiple readonly clients can coexist with each other AND with one exclusive client.
-- `"exclusive-if-free"` (v1.7.0+): polite exclusive — first-attach-wins. Grants `exclusive` iff no live exclusive client is attached at the moment of the Attach, otherwise grants `readonly`. Resolved atomically inside the daemon's session lock (no probe/upgrade race); `AttachAck.mode` echoes the **granted** role, never the requested string. Never displaces anyone. On pre-1.7.0 daemons the unknown string maps to plain `exclusive` per the compat posture above — i.e. the legacy displacement behaviour, never worse. When the daemon displaces an exclusive client (a plain-`exclusive` Attach arrived), the displaced client is sent `Goodbye{reason:"replaced"}` (v1.7.0+; reason code existed since v0 but was never emitted) before its stream closes, so it can distinguish displacement from a network drop and rejoin readonly instead of redialing exclusive.
+- `"exclusive"` (default; missing/empty/unknown values map here): the client receives output, sends stdin, and owns the PTY size via Resize. A new exclusive Attach **displaces** any prior exclusive client - the daemon cancels the displaced client's stream context and the client sees its connection close cleanly. Existing readonly clients are unaffected by exclusive turnover.
+- `"readonly"`: the client receives output only. Stdin frames from a readonly client are silently dropped by the daemon (NOT a protocol violation - a misbehaving keystroke shouldn't tear the connection down). Resize frames are also dropped: the exclusive client owns the geometry. Multiple readonly clients can coexist with each other AND with one exclusive client.
+- `"exclusive-if-free"` (v1.7.0+): polite exclusive - first-attach-wins. Grants `exclusive` iff no live exclusive client is attached at the moment of the Attach, otherwise grants `readonly`. Resolved atomically inside the daemon's session lock (no probe/upgrade race); `AttachAck.mode` echoes the **granted** role, never the requested string. Never displaces anyone. On pre-1.7.0 daemons the unknown string maps to plain `exclusive` per the compat posture above - i.e. the legacy displacement behaviour, never worse. When the daemon displaces an exclusive client (a plain-`exclusive` Attach arrived), the displaced client is sent `Goodbye{reason:"replaced"}` (v1.7.0+; reason code existed since v0 but was never emitted) before its stream closes, so it can distinguish displacement from a network drop and rejoin readonly instead of redialing exclusive.
 
 The pre-`mode` field client posture is preserved exactly: an Attach with no `mode` field is treated as exclusive, identical to v0 behaviour.
 
-**Replay budget** (the `replay_budget` field, v1.6.0+): bounded-display clients (iOS derives it from the user's scrollback setting) cap how much ring-buffer history the server replays — without it, a fresh attach (`ack: 0`) to a long-lived session replays the full ring (4 MiB default), most of which the client cannot display. Semantics (see § 11.5): the replay window never starts more than `replay_budget` bytes behind the buffer head; while the session's **alt screen is active** (and a budget was supplied — the tighten never applies on its own) the server tightens the cap to `AltScreenReplayCap` (128 KiB) since the alt screen has no scrollback and only the final frame matters. The budget never widens a window (a small-gap resume still replays just the gap); when it narrows one, `trunc: true` is set. Missing/zero = no cap — pre-v1.6.0 behaviour, and what `mtroam attach`/`tail` rely on. Same additive-compat posture as `mode`: older daemons ignore the unknown key.
+**Replay budget** (the `replay_budget` field, v1.6.0+): bounded-display clients (iOS derives it from the user's scrollback setting) cap how much ring-buffer history the server replays - without it, a fresh attach (`ack: 0`) to a long-lived session replays the full ring (4 MiB default), most of which the client cannot display. Semantics (see § 11.5): the replay window never starts more than `replay_budget` bytes behind the buffer head; while the session's **alt screen is active** (and a budget was supplied - the tighten never applies on its own) the server tightens the cap to `AltScreenReplayCap` (128 KiB) since the alt screen has no scrollback and only the final frame matters. The budget never widens a window (a small-gap resume still replays just the gap); when it narrows one, `trunc: true` is set. Missing/zero = no cap - pre-v1.6.0 behaviour, and what `mtroam attach`/`tail` rely on. Same additive-compat posture as `mode`: older daemons ignore the unknown key.
 
 ### 7.3 `AttachAck` (server → client, response to Attach)
 
@@ -247,17 +247,17 @@ If `trunc = true`, the client should display a one-line "[…some output lost du
 
 #### 7.3.1 Restored sessions
 
-`r: true` indicates the session this attach is connecting to was **reconstructed from on-disk state** at the daemon's most-recent startup — its scrollback was hydrated from a previous daemon run's snapshot, and the shell process the client is now attached to was lazily spawned on this attach (the prior shell died with the prior daemon). Set on the first attach after a daemon restart; subsequent reattaches within the same daemon run see `r: false` (or the field absent — CBOR omitempty).
+`r: true` indicates the session this attach is connecting to was **reconstructed from on-disk state** at the daemon's most-recent startup - its scrollback was hydrated from a previous daemon run's snapshot, and the shell process the client is now attached to was lazily spawned on this attach (the prior shell died with the prior daemon). Set on the first attach after a daemon restart; subsequent reattaches within the same daemon run see `r: false` (or the field absent - CBOR omitempty).
 
 Clients SHOULD surface a transient "Restored from previous session" banner so users understand the scrollback above the current prompt is replayed history, not output from a still-running command.
 
 #### 7.3.2 Foreground command (`fg`, v1.6.1+)
 
 `fg` is the bare command name of the session PTY's current foreground process
-group ("claude", "codex", "vim", …) — kernel truth (tcgetpgrp → `/proc/<pgid>/comm`)
+group ("claude", "codex", "vim", …) - kernel truth (tcgetpgrp → `/proc/<pgid>/comm`)
 sampled by the session's sidecar every 5 seconds. Raw NAME by design: agent
 taxonomy (badges, recovery copy) stays client-side, so new agents need no
-protocol change. Process names only — never arguments or terminal content.
+protocol change. Process names only - never arguments or terminal content.
 Empty/absent = unknown (pre-v1.6.1 sidecar, non-Linux host, restored session
 before lazy spawn, or unresolvable). Ongoing changes flow via `AgentNotify`.
 
@@ -330,7 +330,7 @@ Stdout is **not** a raw byte stream; each chunk emitted by the PTY is wrapped wi
 
 - `seq` monotonically increases per byte: if `seq=100` covers 50 bytes, the next frame's seq is `150`. **Sequence numbers count bytes, not frames.**
 - `len` is the byte length of `payload`. A single frame is capped at 16 KiB; longer chunks are split.
-- `payload` is the raw bytes from the PTY (UTF-8, escape sequences, anything — the daemon does not interpret).
+- `payload` is the raw bytes from the PTY (UTF-8, escape sequences, anything - the daemon does not interpret).
 
 Replay: when the client sends `Attach{ack: N}`, the server seeks its ring buffer to byte position `N` and emits frames starting from there. Frame boundaries on replay may differ from frame boundaries during original transmission.
 
@@ -340,16 +340,16 @@ Raw bytes from the client to the PTY. No framing, no acks. QUIC's reliable deliv
 
 The client SHOULD NOT send unbounded bursts; respect QUIC's flow control.
 
-## 10. Datagrams (reserved — not used in the v0 epoch)
+## 10. Datagrams (reserved - not used in the v0 epoch)
 
-QUIC datagrams (RFC 9221) were reserved for low-latency unreliable signals, but the shipped daemon disables them (`EnableDatagrams = false`). The two signals once slotted here — EchoConfirm (§10.1) and heartbeats (§10.2) — travel on the control stream / are subsumed by QUIC keepalive instead. This section is retained for forward-compatibility; a future minor version may add a datagram fast path.
+QUIC datagrams (RFC 9221) were reserved for low-latency unreliable signals, but the shipped daemon disables them (`EnableDatagrams = false`). The two signals once slotted here - EchoConfirm (§10.1) and heartbeats (§10.2) - travel on the control stream / are subsumed by QUIC keepalive instead. This section is retained for forward-compatibility; a future minor version may add a datagram fast path.
 
 ### 10.1 EchoConfirm (server → client)
 
 ```cbor
 {
   "t": "EchoConfirm",
-  "sin": 0,                        // stdin_seq — not used in v0; reserved
+  "sin": 0,                        // stdin_seq - not used in v0; reserved
   "es": "on"                       // echo_state: "on" | "off" | "unknown"
 }
 ```
@@ -358,9 +358,9 @@ Sent when the daemon detects the shell's echo mode changed (e.g., entering a pas
 
 **v0 transport: control-stream frame.** This slot was originally reserved as a QUIC datagram for lower latency; the v0 implementation uses the existing tagged-frame control stream so the same dispatch path handles it on both ends without datagram plumbing. EchoConfirm payloads are ~20 bytes CBOR; head-of-line blocking behind stdout chunks (max 16 KiB) is bounded and acceptable for the use case. A future minor-version bump may add a datagram fast path while keeping the control-stream path as fallback.
 
-**Best-effort:** the server MAY omit EchoConfirm entirely (older daemons, daemons whose PTY implementation doesn't support tcgetattr). Clients that don't receive EchoConfirm fall back to the prompt-sniff heuristic. Clients that don't recognise EchoConfirm (older versions) silently drop the unknown control type — forward-compat is built in.
+**Best-effort:** the server MAY omit EchoConfirm entirely (older daemons, daemons whose PTY implementation doesn't support tcgetattr). Clients that don't receive EchoConfirm fall back to the prompt-sniff heuristic. Clients that don't recognise EchoConfirm (older versions) silently drop the unknown control type - forward-compat is built in.
 
-### 10.2 Heartbeat datagrams — reserved, not used
+### 10.2 Heartbeat datagrams - reserved, not used
 
 The shipped daemon sends no heartbeat datagrams; QUIC's own keepalive / idle-timeout governs liveness. This slot is reserved for a future datagram fast path and is documented for forward-compatibility only.
 
@@ -394,15 +394,15 @@ Default capacity 4 MiB. When full, oldest bytes are dropped (FIFO). The daemon t
 - If `N >= tail_seq`: replay from `N`, no truncation
 - If `N < tail_seq`: replay from `tail_seq`, set `trunc = true` in AttachAck
 
-When the Attach carried `replay_budget > 0` (v1.6.0+, § 7.2), a final cap is applied on top of the base cases: the window may start no more than `cap` bytes behind `head_seq`, where `cap = replay_budget`, tightened to `AltScreenReplayCap` (128 KiB) while the session's alt screen is active. If the cap moves the start forward, `trunc = true`. The cap never moves a start backward — a resume whose gap is already smaller than the cap replays exactly the gap. `replay_budget` absent/0 skips this step entirely (full pre-v1.6.0 replay; the `mtroam` CLI's contract).
+When the Attach carried `replay_budget > 0` (v1.6.0+, § 7.2), a final cap is applied on top of the base cases: the window may start no more than `cap` bytes behind `head_seq`, where `cap = replay_budget`, tightened to `AltScreenReplayCap` (128 KiB) while the session's alt screen is active. If the cap moves the start forward, `trunc = true`. The cap never moves a start backward - a resume whose gap is already smaller than the cap replays exactly the gap. `replay_budget` absent/0 skips this step entirely (full pre-v1.6.0 replay; the `mtroam` CLI's contract).
 
-**Alt-screen footer re-emit (v1.7.1+):** while the alt screen is active, the daemon reconstructs the current screen's bottom rows — the stable status footer / prompt border a TUI draws once and rarely re-emits — and injects them into the output ring *before* the replay window is computed. They ride the normal replay as real ring bytes (real seqs, no new frame or field), so a reattaching client rebuilds the footer even when the original draw has aged out of the capped window. Gated on the reconstruction staying faithful: Claude-style screens are reconstructed; full-screen apps the model can't reproduce (vim, htop) are left untouched and fall back to the raw window.
+**Alt-screen footer re-emit (v1.7.1+):** while the alt screen is active, the daemon reconstructs the current screen's bottom rows - the stable status footer / prompt border a TUI draws once and rarely re-emits - and injects them into the output ring *before* the replay window is computed. They ride the normal replay as real ring bytes (real seqs, no new frame or field), so a reattaching client rebuilds the footer even when the original draw has aged out of the capped window. Gated on the reconstruction staying faithful: Claude-style screens are reconstructed; full-screen apps the model can't reproduce (vim, htop) are left untouched and fall back to the raw window.
 
 ### 11.6 Persistence across daemon restart (v0.5.0+)
 
 Sessions can opt into **cross-restart persistence**: the daemon checkpoints scrollback + metadata to disk on a 30s cadence (configurable via `mtroamd serve --persistence-flush-interval`), plus one final write on graceful shutdown. On the next daemon start, persisted sessions are reconstructed in the registry with their scrollback intact. The shell process can't survive a daemon restart (SIGHUP on PTY close); instead, the daemon lazy-spawns a fresh shell when the first client attaches and announces `r: true` in AttachAck so clients can surface a "Restored from previous session" banner.
 
-**Opt-in:** clients set `AllocateRequest.Persist` (a tri-state `*bool` over IPC) — `nil` inherits the daemon-wide default; explicit `true`/`false` overrides. The default-on policy matches the iOS `SSHHost.persistMTRoamSessions` default; operators flip the daemon-wide default to off via `mtroamd serve --persistence-default off` for shared / multi-user hosts. Persistence is fixed at session spawn time — reattach inherits the existing session's bit, and opt-out for a running session means kill + respawn.
+**Opt-in:** clients set `AllocateRequest.Persist` (a tri-state `*bool` over IPC) - `nil` inherits the daemon-wide default; explicit `true`/`false` overrides. The default-on policy matches the iOS `SSHHost.persistMTRoamSessions` default; operators flip the daemon-wide default to off via `mtroamd serve --persistence-default off` for shared / multi-user hosts. Persistence is fixed at session spawn time - reattach inherits the existing session's bit, and opt-out for a running session means kill + respawn.
 
 **On-disk layout** (under the daemon's existing state dir, default `$XDG_DATA_HOME/mtroamd` or `~/.local/share/mtroamd`, mode 0700):
 
@@ -415,7 +415,7 @@ sessions/
 
 `meta.cbor` carries: `fv` (format version, currently 1), `sid` (16-byte SessionID), `name`, `created` + `last_active` (Unix nanos), `rows` + `cols`, `idle_timeout` (nanos), `persist` (bool), `buf_capacity` (int), `head_seq` + `write_pos` + `full` (the three fields needed to reconstruct the FIFO from `scrollback.bin`). Files are written via temp-file-then-rename; a reader observing `meta.cbor` sees a consistent snapshot even if the daemon crashes mid-flush.
 
-**Threat surface**: identical to the daemon's existing TLS private key (same directory, same mode-0600 permissions). Same-UID attacker reads scrollback (already true for live in-memory state per SECURITY.md threat G); other-UID processes are blocked by file permissions. No application-layer encryption — adding it would either require interactive passphrase entry (breaks unattended restart) or platform-specific keyring integration (fragile across user-session boundaries). See SECURITY.md for the threat-model rationale.
+**Threat surface**: identical to the daemon's existing TLS private key (same directory, same mode-0600 permissions). Same-UID attacker reads scrollback (already true for live in-memory state per SECURITY.md threat G); other-UID processes are blocked by file permissions. No application-layer encryption - adding it would either require interactive passphrase entry (breaks unattended restart) or platform-specific keyring integration (fragile across user-session boundaries). See SECURITY.md for the threat-model rationale.
 
 **Lifecycle**:
 
@@ -461,7 +461,7 @@ The server logs every termination with the error code and (where safe) the offen
 The unix socket between `mtroamd connect` (the SSH-side helper) and
 `mtroamd serve` (the long-running daemon) carries the same CBOR
 framing as the QUIC control stream. The IPC surface is intentionally
-broader than what `connect` alone needs — `mtroamd list` and
+broader than what `connect` alone needs - `mtroamd list` and
 `mtroamd kill` use it directly, and a future `mtroam` CLI can speak
 either CBOR-over-IPC (when SSH-tunnelling the socket) or shell out to
 `mtroamd list --json` over SSH.
@@ -496,7 +496,7 @@ on a single line ending with `\n`. Field names match the JSON tags on
 Every session has a non-empty user-visible name. Clients can request
 one via `Allocate.Name`; if unset, the daemon synthesises
 `session-<6-hex-of-id>` so picker UIs never see blank rows. Names are
-unique per daemon — colliding names on a fresh-spawn request return
+unique per daemon - colliding names on a fresh-spawn request return
 `ipc.ErrNameInUse`.
 
 ### Daemon-restart semantics
@@ -508,8 +508,8 @@ can't survive daemon death (SIGHUP on PTY close), so the daemon
 lazy-spawns a fresh shell on first reattach and sets `r: true` in
 AttachAck so clients can show a "Restored from previous session" banner.
 
-Non-persisted sessions — spawned with persistence opted out, or while the
-daemon runs `--persistence-default off` (shared / multi-user hosts) — are
+Non-persisted sessions - spawned with persistence opted out, or while the
+daemon runs `--persistence-default off` (shared / multi-user hosts) - are
 lost on restart: clients with cached SessionIDs hit `ErrUnknownSession`
 and the iOS flow falls back to spawning a fresh session. Either way, run
 `mtroamd serve` under a supervisor (systemd-user, launchd) so it restarts
@@ -540,7 +540,7 @@ new clients surface as "requires mtroamd v0.6.2+".
 - Passive attaches don't displace anyone; an exclusive replacement
   doesn't kick passive watchers off.
 
-Use case: `mtroam tail <session>` — observe a session's live byte
+Use case: `mtroam tail <session>` - observe a session's live byte
 stream without taking an attach slot the user's other tools render.
 
 ### IPC: TypeSessionSearch
@@ -577,7 +577,7 @@ SessionSearchResponse = {
 Anchors (`^`, `$`) follow Go RE2 semantics: by default they match
 start-of-input / end-of-input. The `anc` flag wraps the pattern in
 a `(?m:…)` non-capturing group so `^`/`$` track physical newlines.
-The truncated start of the ring is NOT treated as `^` — the buffer's
+The truncated start of the ring is NOT treated as `^` - the buffer's
 first retained byte may be mid-line.
 
 ### Doctor command
@@ -617,7 +617,7 @@ Daemon-side: the per-attach termios watcher (one syscall per 100ms
 poll) reads both bits at once. Emit suppression on unknown-flapping
 is per-channel: an emit fires when ECHO or ICANON makes a real
 on↔off transition, with unknown-involving transitions filtered.
-The wire never carries an explicit "canon unknown" — clients default
+The wire never carries an explicit "canon unknown" - clients default
 `CanonMode=false` when the field is absent, which is the cautious
 choice (no backspace prediction).
 
@@ -647,7 +647,7 @@ and triggers QUIC path migration when the local-address set changes.
 Mechanism: open a fresh UDP socket → `conn.AddPath(transport)` →
 `path.Probe(ctx)` → `path.Switch()`. The daemon requires no changes
 beyond NOT setting `DisableActiveMigration` in its `quic.Config`
-(which it doesn't — default behaviour). The attach token is
+(which it doesn't - default behaviour). The attach token is
 RemoteAddr-agnostic, so the new path retains the existing session
 without re-Attach.
 
@@ -659,7 +659,7 @@ session keeps running.
 
 - Should `EchoConfirm` carry stdin_seq for client-side echo prediction synchronisation? (Currently reserved.)
 - Should we support a "snapshot at attach" frame that includes the current cursor position, alt-screen state, etc.? Necessary for clean reattach to a vim/htop session that has scrolled past the buffer's tail.
-- Multi-client attach (read-only watcher) — wire format support before we build UX.
+- Multi-client attach (read-only watcher) - wire format support before we build UX.
 - Compression on Stdout stream for high-throughput cases (build output, `find /` etc.). QUIC compresses nothing by default; gzip per-frame would help.
 
 These are deferred to v1; v0 stays simple.

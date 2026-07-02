@@ -1,10 +1,10 @@
-# apt repo — one-time maintainer setup
+# apt repo - one-time maintainer setup
 
 The apt repo is served from the **`gh-pages`** branch at
 `https://ag-studio-apps.github.io/mtroamd` (two suites: `stable`, `dev`).
 The release workflow's `apt-repo` job publishes to it automatically, but only
 once these one-time steps are done. **Do not enable `stable` publishing until
-App Store 2.0 is live** — the `dev` suite can go live first for testing.
+App Store 2.0 is live** - the `dev` suite can go live first for testing.
 
 ## 1. Generate the archive-signing GPG key
 
@@ -17,9 +17,9 @@ gpg --batch --quick-generate-key "mtroamd apt repo" ed25519 sign never
 # Private key → GitHub Actions secret APT_GPG_KEY (Settings → Secrets → Actions)
 gpg --armor --export-secret-keys "mtroamd apt repo"      # paste into APT_GPG_KEY
 #   Leave APT_GPG_PASSPHRASE unset for a passphraseless key. If you DO use a
-#   passphrase, set APT_GPG_PASSPHRASE too — CI presets it via gpg loopback.
+#   passphrase, set APT_GPG_PASSPHRASE too - CI presets it via gpg loopback.
 
-# Public keyring (dearmored) — this is what apt clients trust:
+# Public keyring (dearmored) - this is what apt clients trust:
 gpg --export "mtroamd apt repo" > mtroamd-archive-keyring.gpg
 ```
 

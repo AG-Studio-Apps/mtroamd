@@ -1,4 +1,4 @@
-# mtroamd v0.3.0 — what's new
+# mtroamd v0.3.0 - what's new
 
 ## `mtroam` ships in the release artifacts
 
@@ -11,18 +11,18 @@ Install: download → verify signature → drop in `~/.local/bin/mtroam`.
 Full guide in `docs/mtroam.md`.
 
 This unblocks attaching to a remote mtRoam session from your laptop's
-terminal — same persistent-shell experience the iOS app gives you,
+terminal - same persistent-shell experience the iOS app gives you,
 but on a real keyboard.
 
 ## `mtroam update` and `mtroam uninstall`
 
 Mirroring `mtroamd update` / `mtroamd uninstall`:
 
-- `mtroam update` — checks GitHub Releases, verifies the minisign
+- `mtroam update` - checks GitHub Releases, verifies the minisign
   signature on the new SHA256SUMS, verifies the binary's SHA-256,
   atomically swaps `~/.local/bin/mtroam` in place. Anti-rollback is
-  on by default — `--allow-downgrade` to override.
-- `mtroam uninstall` — removes the binary. No state directory to
+  on by default - `--allow-downgrade` to override.
+- `mtroam uninstall` - removes the binary. No state directory to
   worry about; mtroam has no cert/key/socket of its own.
 
 ## Shared internal/release package

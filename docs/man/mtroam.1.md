@@ -59,7 +59,7 @@ needs to be running on the remote host; **mtroam** is a client only.
     local echo: *always* always underlines unconfirmed predictions,
     *adaptive* (default) underlines only when smoothed RTT exceeds
     ~80ms, *never* disables prediction entirely. **\-\-persist** /
-    **\-\-no-persist** apply only on fresh spawn — reattach inherits
+    **\-\-no-persist** apply only on fresh spawn - reattach inherits
     whatever the original session was created with. When **attach**
     creates a session (the selector names none that exists),
     **\-\-name**, **\-\-idle-timeout**, and **\-\-shell** shape the
@@ -68,16 +68,16 @@ needs to be running on the remote host; **mtroam** is a client only.
     In an attached session, two escape chords are honoured on a
     fresh line:
 
-    - `~.` — detach. Closes the QUIC connection cleanly; the remote
+    - `~.` - detach. Closes the QUIC connection cleanly; the remote
       shell stays alive on the daemon.
-    - `~?` — print a one-shot info block to stderr: smoothed RTT,
+    - `~?` - print a one-shot info block to stderr: smoothed RTT,
       session ID, attach mode, peer count.
 
 **tail** [**\-\-host** *user@host*] [**\-\-timeout** *DUR*] *id-or-name*
-:   Passive-attach a session's live output — receives bytes only,
+:   Passive-attach a session's live output - receives bytes only,
     sends nothing, leaves the local terminal in cooked mode so the
     invocation can be piped (`mtroam tail dev | grep ERROR`). Unlike
-    **attach**, **tail** does NOT create-if-missing — it refuses
+    **attach**, **tail** does NOT create-if-missing - it refuses
     unknown selectors so a typo can't spawn a phantom shell. The
     passive mode is invisible to other clients (doesn't appear in
     **list**'s `AttachedModes`). Up to 8 passive attachers per
@@ -118,7 +118,7 @@ needs to be running on the remote host; **mtroam** is a client only.
 
 **restart** [**\-\-host** *user@host*] [**\-\-timeout** *DUR*]
 :   Cycle the remote daemon via its supervisor (systemd-user, launchd,
-    or nohup fallback). In-flight sessions survive the restart — see
+    or nohup fallback). In-flight sessions survive the restart - see
     **mtroamd**(8) for the v0.6 pty-sidecar architecture. Default
     timeout 45s (exceeds the daemon's own 30s restart timeout so the
     SSH side outlasts the inner call).
@@ -150,7 +150,7 @@ needs to be running on the remote host; **mtroam** is a client only.
 :   For **attach**: *exclusive* (default; sends stdin), *readonly*
     (watcher; renders output, drops local stdin), or *exclusive-if-free*
     (polite: exclusive iff no live exclusive client is attached, else
-    readonly — never displaces anyone).
+    readonly - never displaces anyone).
 
 # ENVIRONMENT
 
@@ -206,7 +206,7 @@ Self-update to the latest signed release:
 # SECURITY
 
 The trust chain mirrors the iOS app. Authentication and host trust
-piggyback on standard SSH — **mtroam** never sees your password or key.
+piggyback on standard SSH - **mtroam** never sees your password or key.
 The QUIC connection's certificate fingerprint is pinned via the
 bootstrap line printed by **mtroamd connect** on the remote side; a
 mismatch (MITM, regenerated cert) is hard-fail. Self-update verifies
