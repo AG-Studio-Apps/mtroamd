@@ -106,7 +106,7 @@ real scrollback through every disconnect.
 
 **restart** [**\-\-timeout** *DUR*]
 :   Cycle the daemon via the detected supervisor (systemd-user, launchd,
-    or nohup fallback). In-flight sessions survive the restart — the
+    or nohup fallback). In-flight sessions survive the restart - the
     v0.6 pty-sidecar architecture keeps PTYs alive in sidecar processes
     while the daemon reattaches them via FrameResume on next boot. No
     confirmation prompt; matches **systemctl restart**'s UX. Default
@@ -188,7 +188,7 @@ peers receive CONNECTION_CLOSE with application code 0x10F.
 Every QUIC attach requires a single-use 16-byte attach token with a
 30-second TTL. Tokens are minted by **mtroamd connect** in response
 to an SSH-authenticated request from the user-controlled SSH client.
-There is no separate PSK, password, or key configured in the daemon —
+There is no separate PSK, password, or key configured in the daemon -
 the trust model is "you control SSH, you control the daemon."
 
 # EXIT STATUS
@@ -204,7 +204,7 @@ the trust model is "you control SSH, you control the daemon."
 
 3
 :   Verification failure (treat as a security event when emitted from
-    **update** — signature didn't match, key not in roster, or
+    **update** - signature didn't match, key not in roster, or
     SHA-256 mismatch).
 
 4

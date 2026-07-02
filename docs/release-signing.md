@@ -15,7 +15,7 @@ The signature lives alongside the binaries on the GitHub Release as
 
 The meshTerm iOS app embeds **two** trusted public keys: a **primary**
 and an **emergency**. Either signature satisfies verification. This
-lets us rotate the primary without shipping a new iOS build — sign the
+lets us rotate the primary without shipping a new iOS build - sign the
 next release with the emergency key, ship a new iOS build that swaps
 in a fresh primary, then retire the old emergency.
 
@@ -30,5 +30,5 @@ A one-shot script in `scripts/provision-keys.sh` generates the roster,
 encrypts the private halves with age, uploads the primary unencrypted
 private + passphrase to this repo's Actions secrets (`MINISIGN_KEY`,
 `MINISIGN_PASSWORD`), and pushes the encrypted backups to
-`meshterm_keys`. Read the script before running — it has interactive
+`meshterm_keys`. Read the script before running - it has interactive
 passphrase prompts and an explicit dependency check.

@@ -1,7 +1,7 @@
 # Security improvements
 
 A running log of security findings that have been **fixed** in `mtroamd`, with the
-detection source for each. We publish *fixed* findings only — open or unconfirmed
+detection source for each. We publish *fixed* findings only - open or unconfirmed
 issues are handled privately under our [security policy](SECURITY.md) (coordinated
 disclosure) and are added here once they ship in a release. Entries are listed newest-first.
 
@@ -9,6 +9,14 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 (osv-scanner / Dependabot), static analysis (CodeQL / CI-workflow audits), binary
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
+
+## v1.7.3 (2026-07-02, hardening)
+
+_Manual audit of the `v1.7.2..v1.7.3-rc1` diff: no findings. One availability-hardening change (details + a pre-stable release gate in `.security/security-audit-v1.7.3.md`)._
+
+| Finding | Severity | Source | Fix |
+|---|---|---|---|
+| A runaway session could push the daemon's uncapped cgroup over the box's memory and get `mtroamd` (or another session's sidecar) OOM-killed, dropping persistent sessions - or hard-crash a swapless box | Hardening (availability) | box OOM incident 2026-07-02 | Each `pty-sidecar` raises its own `oom_score_adj` (inherited by the child shell + descendants) strictly ABOVE the daemon's, so the kernel OOM-killer sacrifices the runaway **session**, never `mtroamd`. Relative (inherited baseline + 300), not absolute: a systemd user manager defaults its services to a non-zero score (200 on Ubuntu), so an absolute value below that would be backwards - caught by on-box verification before the stable cut (rc1 `+100` -> rc2 relative-raise). Unprivileged (a protective negative adjust would need `CAP_SYS_RESOURCE`); best-effort + Linux-only. |
 
 ## v1.7.2 (2026-06-27)
 
@@ -19,7 +27,7 @@ _Independent Codex 5.5 (gpt-5.5) security audit of the `develop` branch (the new
 | Plaintext-TCP listener could bind an unspecified address (`0.0.0.0` / `::` / host-less `:N`), exposing the un-TLS'd protocol and attach tokens on every interface | Medium | Codex 5.5 audit | `guardPlaintextBind` now **fails closed** on unspecified binds (refused unless `MTROAMD_ALLOW_PLAINTEXT_UNSPECIFIED=1`); the `tailnet:<port>` sentinel and loopback/private/tailnet binds still pass, and concrete globally-routable is still refused. Extends the v1.4.11 globally-routable guard. |
 | Stream-extension 64 KiB frame contract was documented but not enforced: one oversized frame slipped past the drop-oldest trim, exceeding the 4 MiB log cap and tearing down client attaches at write time | Medium | Codex 5.5 audit | `Session.PublishFrame` now returns an error and **rejects** any frame over `protocol.MaxControlFrameBytes` (never retained). Not reachable in the stock daemon (no extensions registered); hardens the generic seam the agent fork drives. |
 
-## v1.7.0 — 2026-06-15
+## v1.7.0 - 2026-06-15
 
 _Adversarial multi-agent code review of the recover / attach paths._
 
@@ -35,13 +43,13 @@ _Adversarial multi-agent code review of the recover / attach paths._
 | `ClientID` match was not constant-time | Low | code review | Switched to `subtle.ConstantTimeCompare` |
 | Decoded-but-unused `SavePrompt` (latent command-injection footgun) | Low | code review | Documented as reserved / never injected |
 
-## v1.5.2 — 2026-06-04
+## v1.5.2 - 2026-06-04
 
 | Finding | Severity | Source | Fix |
 |---|---|---|---|
 | quic-go HTTP/3 QPACK trailer memory-exhaustion (GHSA-vvgj-x9jq-8cj9; not reachable in our build) | Medium | dependency advisory | Bumped quic-go 0.59.0 → 0.59.1 |
 
-## v1.4.11 — 2026-06-01 (hardening release)
+## v1.4.11 - 2026-06-01 (hardening release)
 
 _Combined manual audit + tooling-driven scan before the develop → main merge._
 
@@ -57,7 +65,7 @@ _Combined manual audit + tooling-driven scan before the develop → main merge._
 | TLS private key swept into ordinary home backups | Low | manual review | Best-effort `FS_NODUMP` on `key.pem` (Linux) + SECURITY.md checklist line |
 | `EnableDatagrams` enabled but unused on a network-reachable listener | Low | manual review | Disabled (removed unused attack surface) |
 
-## v1.4.4 — 2026-05-29 (recover hardening)
+## v1.4.4 - 2026-05-29 (recover hardening)
 
 _Manual code review (static review + follow-up)._
 
@@ -66,7 +74,7 @@ _Manual code review (static review + follow-up)._
 | Recover requests could create unbounded detached session work | Medium | manual review | Per-session recovery slot; cancel previous on new start; cap recover grace at 2 minutes |
 | Recover cancellation slot could be cleared by an older canceled recovery | Medium | manual review | Generation-token identity guard frees the slot only for the matching generation |
 
-## v1.1.4 — 2026-05-19
+## v1.1.4 - 2026-05-19
 
 _Manual code review (static review)._
 

@@ -1,6 +1,6 @@
-# mtroamd apk — development channel (Alpine)
+# mtroamd apk - development channel (Alpine)
 
-> ⚠️ **DEVELOPMENT CHANNEL — UNSTABLE. MAY BREAK YOUR SYSTEM.**
+> ⚠️ **DEVELOPMENT CHANNEL - UNSTABLE. MAY BREAK YOUR SYSTEM.**
 > The `dev` suite carries pre-release builds from `develop` (versioned
 > `…~rc`/`…~dev`). It pairs with the **TestFlight** meshTerm app, not the App
 > Store release, and can ship protocol changes ahead of the stable daemon. Use
@@ -23,7 +23,7 @@ echo "https://ag-studio-apps.github.io/mtroamd/apk/dev" \
 
 sudo apk update && sudo apk add mtroamd
 
-# Set MTROAMD_USER (and optionally MTROAMD_ADDR / MTROAMD_TCP_ADDR) — the
+# Set MTROAMD_USER (and optionally MTROAMD_ADDR / MTROAMD_TCP_ADDR) - the
 # daemon spawns shells AS this user, so make it your login user, not root on a
 # multi-user box:
 sudo vi /etc/conf.d/mtroamd
@@ -61,7 +61,7 @@ hand for a full wipe (the iOS app would then need to re-pair).
 ## Note on the OpenRC service
 
 `mtroamd doctor` reports the supervisor as `nohup` on Alpine (there's no
-systemd `--user` bus and no OpenRC backend in the daemon's own detection yet) —
+systemd `--user` bus and no OpenRC backend in the daemon's own detection yet) -
 that's cosmetic; OpenRC supervises the process. A restart preserves running
 sessions: `supervise-daemon` signals only the daemon, and the per-session
 pty-sidecar children live in their own sessions (the OpenRC parallel to the

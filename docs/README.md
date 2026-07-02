@@ -4,7 +4,7 @@
 | Document | Purpose |
 |---|---|
 | [mtroam.md](mtroam.md) | `mtroamd` / `mtroam` overview |
-| [mtroam-protocol.md](mtroam-protocol.md) | Wire specification — the mtRoam protocol over QUIC |
+| [mtroam-protocol.md](mtroam-protocol.md) | Wire specification - the mtRoam protocol over QUIC |
 
 ## Security
 | Document | Purpose |

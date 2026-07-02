@@ -1,6 +1,6 @@
-# mtroamd dnf — development channel (Fedora)
+# mtroamd dnf - development channel (Fedora)
 
-> ⚠️ **DEVELOPMENT CHANNEL — UNSTABLE. MAY BREAK YOUR SYSTEM.**
+> ⚠️ **DEVELOPMENT CHANNEL - UNSTABLE. MAY BREAK YOUR SYSTEM.**
 > The `dev` channel carries pre-release builds from `develop` (versioned
 > `…~rc`/`…~dev`). It pairs with the **TestFlight** meshTerm app, not the App
 > Store release, and can ship protocol changes ahead of the stable daemon. Use
@@ -12,7 +12,7 @@
 ```sh
 sudo tee /etc/yum.repos.d/mtroamd-dev.repo <<'EOF'
 [mtroamd-dev]
-name=mtroamd (development — unstable)
+name=mtroamd (development - unstable)
 baseurl=https://ag-studio-apps.github.io/mtroamd/rpm/dev/$basearch
 enabled=1
 gpgcheck=1
@@ -20,7 +20,7 @@ gpgkey=https://ag-studio-apps.github.io/mtroamd/mtroamd-archive-keyring.asc
 EOF
 
 sudo dnf install mtroamd
-# That's it — the package enables + starts the daemon for your login user and
+# That's it - the package enables + starts the daemon for your login user and
 # turns on linger so it survives logout + reboot. Check with: mtroamd doctor
 #
 # Installed as root / non-interactively (no $SUDO_USER)? Finish as your user:
@@ -42,7 +42,7 @@ sudo dnf distro-sync mtroamd
 ```
 
 (If you're on a `~rc` newer than the latest stable, `dnf` won't downgrade
-automatically — `sudo dnf downgrade mtroamd` once stable has a release.)
+automatically - `sudo dnf downgrade mtroamd` once stable has a release.)
 
 ## Uninstall
 
@@ -56,6 +56,6 @@ Other users on the box manage their own service.
 
 ## Note on signatures
 
-Packages are signed with an **ed25519** GPG key — verified fine by modern Fedora
+Packages are signed with an **ed25519** GPG key - verified fine by modern Fedora
 (rpm 4.18+ / F38+). Older RPM stacks (RHEL 8/9) may not verify ed25519 package
 signatures; this channel targets Fedora.
