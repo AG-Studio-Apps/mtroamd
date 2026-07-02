@@ -56,6 +56,18 @@ func runPtySidecar(args []string) int {
 
 	logger := buildSidecarLogger(*logPath)
 
+	// Memory safety: this sidecar owns a session's PTY + child shell, and every
+	// process the user runs in that session is a descendant of it — so all of a
+	// session's memory lives under this process tree. Raise our oom_score_adj so
+	// that, under memory pressure, the kernel OOM-killer sacrifices a runaway
+	// SESSION rather than the mtroamd daemon (small, default score → never the
+	// victim) or other, lower-memory sessions. The child shell inherits this
+	// score, so the whole session subtree is the preferred victim. RAISING is
+	// unprivileged (a negative/protective adjust would need CAP_SYS_RESOURCE a
+	// user systemd service lacks); memory usage dominates the badness score, so
+	// the session that ballooned is the one picked. Best-effort, Linux-only.
+	makeSessionOOMPreferred(logger)
+
 	cfg := ptysidecar.Config{
 		SocketPath:  *socket,
 		PidfilePath: *pidfile,
@@ -81,6 +93,27 @@ func runPtySidecar(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// sessionOOMScoreAdj is the oom_score_adj we set on each pty-sidecar. A modest
+// positive value (range is -1000..1000, default 0) biases the kernel OOM-killer
+// toward reaping a runaway session over the daemon and over other, lower-memory
+// processes on the box — the daemon's sessions should give way first. Memory
+// usage still dominates the badness score, so a low-memory session isn't picked
+// just for carrying this adjustment.
+const sessionOOMScoreAdj = "100"
+
+// makeSessionOOMPreferred raises this sidecar's oom_score_adj (inherited by the
+// child shell + everything the user runs) so a memory-hungry session is the OOM
+// victim, never mtroamd. Best-effort: the file is Linux-only and the write may
+// be denied in constrained sandboxes — a failure just leaves the default score,
+// which is still safer than the pre-fix state (no swap + uncapped cgroup).
+func makeSessionOOMPreferred(logger *slog.Logger) {
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte(sessionOOMScoreAdj), 0o644); err != nil {
+		logger.Debug("could not raise session oom_score_adj", "err", err.Error())
+		return
+	}
+	logger.Debug("session oom_score_adj raised", "value", sessionOOMScoreAdj)
 }
 
 // stringSliceFlag is a flag.Value that accumulates repeated --flag=val
