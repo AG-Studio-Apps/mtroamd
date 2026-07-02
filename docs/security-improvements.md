@@ -16,7 +16,7 @@ _Manual audit of the `v1.7.2..v1.7.3-rc1` diff: no findings. One availability-ha
 
 | Finding | Severity | Source | Fix |
 |---|---|---|---|
-| A runaway session could push the daemon's uncapped cgroup over the box's memory and get `mtroamd` (or another session's sidecar) OOM-killed, dropping persistent sessions - or hard-crash a swapless box | Hardening (availability) | box OOM incident 2026-07-02 | Each `pty-sidecar` raises its own `oom_score_adj` to `+100` (inherited by the child shell + descendants) so the kernel OOM-killer sacrifices the runaway **session**, never the small default-scored daemon or lower-memory sessions. Unprivileged (a protective negative adjust would need `CAP_SYS_RESOURCE` a user service lacks); best-effort + Linux-only. |
+| A runaway session could push the daemon's uncapped cgroup over the box's memory and get `mtroamd` (or another session's sidecar) OOM-killed, dropping persistent sessions - or hard-crash a swapless box | Hardening (availability) | box OOM incident 2026-07-02 | Each `pty-sidecar` raises its own `oom_score_adj` (inherited by the child shell + descendants) strictly ABOVE the daemon's, so the kernel OOM-killer sacrifices the runaway **session**, never `mtroamd`. Relative (inherited baseline + 300), not absolute: a systemd user manager defaults its services to a non-zero score (200 on Ubuntu), so an absolute value below that would be backwards - caught by on-box verification before the stable cut (rc1 `+100` -> rc2 relative-raise). Unprivileged (a protective negative adjust would need `CAP_SYS_RESOURCE`); best-effort + Linux-only. |
 
 ## v1.7.2 (2026-06-27)
 
