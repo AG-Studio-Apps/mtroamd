@@ -10,6 +10,14 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
 
+## v1.7.3 (2026-07-02, hardening)
+
+_Manual audit of the `v1.7.2..v1.7.3-rc1` diff: no findings. One availability-hardening change (details + a pre-stable release gate in `.security/security-audit-v1.7.3.md`)._
+
+| Finding | Severity | Source | Fix |
+|---|---|---|---|
+| A runaway session could push the daemon's uncapped cgroup over the box's memory and get `mtroamd` (or another session's sidecar) OOM-killed, dropping persistent sessions - or hard-crash a swapless box | Hardening (availability) | box OOM incident 2026-07-02 | Each `pty-sidecar` raises its own `oom_score_adj` to `+100` (inherited by the child shell + descendants) so the kernel OOM-killer sacrifices the runaway **session**, never the small default-scored daemon or lower-memory sessions. Unprivileged (a protective negative adjust would need `CAP_SYS_RESOURCE` a user service lacks); best-effort + Linux-only. |
+
 ## v1.7.2 (2026-06-27)
 
 _Independent Codex 5.5 (gpt-5.5) security audit of the `develop` branch (the new extension-seam batch). No Critical or High findings; two Medium hardening items, first shipping in `v1.7.2-rc2`._
