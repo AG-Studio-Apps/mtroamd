@@ -37,6 +37,27 @@ func isInterpreterComm(name string) bool {
 	return false
 }
 
+// agentMarker recognizes a known coding-agent CLI from a single argv token (a
+// path or bare name), mirroring the iOS client's TmuxForegroundParser.canonical
+// so the mtRoam daemon classifies node-wrapped agents IDENTICALLY to the
+// plain-SSH poller. It catches both `.../bin/claude` (basename / suffix) AND
+// `.../@anthropic-ai/claude-code/cli.js` (marker substring); the latter is the
+// case a plain basename would mis-resolve to "cli.js". "" when not an agent.
+func agentMarker(s string) string {
+	l := strings.ToLower(s)
+	base := filepath.Base(l)
+	switch {
+	case strings.Contains(l, "claude-code") || base == "claude" || strings.HasSuffix(l, "/claude"):
+		return "claude"
+	case base == "codex" || strings.HasSuffix(l, "/codex") ||
+		strings.Contains(l, "/codex/") || strings.Contains(l, "codex-cli"):
+		return "codex"
+	case base == "agy" || strings.HasSuffix(l, "/agy") || strings.Contains(l, "antigravity"):
+		return "agy"
+	}
+	return ""
+}
+
 // commFromCString trims a fixed-size C char array (e.g. kinfo_proc
 // P_comm) at its first NUL and strips surrounding whitespace.
 func commFromCString(b []byte) string {
@@ -56,11 +77,20 @@ func commFromArgs(args [][]byte) string {
 		return ""
 	}
 	if len(args) >= 2 && isInterpreterComm(filepath.Base(string(args[0]))) {
-		// Find the script. Prefer a path-like arg (contains a separator
-		// or has an extension) so a value that belongs to a preceding
-		// option — e.g. the "utf8" in `python -X utf8 app.py` — doesn't
-		// get mistaken for the script. Fall back to the first non-flag
-		// arg if none look like a path.
+		// A known agent wins first, recognized by marker in ANY arg, so a
+		// node-installed `node .../@anthropic-ai/claude-code/cli.js` resolves to
+		// "claude" instead of the script basename "cli.js" (the case the daemon
+		// used to miss vs the iOS client, which already marker-matches).
+		for _, a := range args[1:] {
+			if m := agentMarker(string(a)); m != "" {
+				return m
+			}
+		}
+		// Otherwise find the script. Prefer a path-like arg (contains a
+		// separator or has an extension) so a value that belongs to a preceding
+		// option, e.g. the "utf8" in `python -X utf8 app.py`, does not get
+		// mistaken for the script. Fall back to the first non-flag arg if none
+		// look like a path.
 		var firstNonFlag string
 		for _, a := range args[1:] {
 			s := string(a)

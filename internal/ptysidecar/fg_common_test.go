@@ -102,10 +102,19 @@ func TestCommFromArgs(t *testing.T) {
 	}{
 		{"plain", bb("/usr/bin/vim"), "vim"},
 		{"interpreter+script", bb("node", "/usr/local/bin/claude"), "claude"},
-		{"interpreter+flags+script", bb("/usr/bin/python3", "-X", "utf8", "/opt/codex/cli.py"), "cli.py"},
+		{"interpreter+flags+script", bb("/usr/bin/python3", "-X", "utf8", "/opt/app/main.py"), "main.py"},
 		{"interpreter-only", bb("node"), "node"}, // no script arg → argv0 basename
 		{"empty", bb(), ""},
 		{"empty-argv0", bb(""), ""},
+		// Agent markers: node-installed agents whose SCRIPT basename would
+		// otherwise mis-resolve (cli.js) must classify by their package marker,
+		// matching the iOS client's TmuxForegroundParser.canonical.
+		{"node-claude-code-clijs", bb("node", "/home/u/.npm/@anthropic-ai/claude-code/cli.js"), "claude"},
+		{"node-claude-bin", bb("node", "/home/u/.local/bin/claude"), "claude"},
+		{"node-codex-clijs", bb("node", "/opt/codex/cli.js"), "codex"},
+		{"node-codex-cli-pkg", bb("node", "/x/codex-cli/index.js"), "codex"},
+		{"node-agy-antigravity", bb("node", "/x/antigravity/agy.js"), "agy"},
+		{"marker-beats-flag", bb("node", "--enable-source-maps", "/x/@anthropic-ai/claude-code/cli.js"), "claude"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
