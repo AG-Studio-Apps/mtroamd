@@ -240,15 +240,37 @@ func (s *Screen) csi(p []byte) int {
 		s.eraseLine(param(params, 0, 0))
 	case 'm': // SGR
 		s.sgr(params)
+	case 'r': // DECSTBM, set scroll region. A BARE reset (top<=1 and NO explicit
+		// bottom row: ESC[r, ESC[;r, ESC[1r) restores the full screen and
+		// restructures nothing (the whole screen already scrolls, which the model
+		// emulates), so it stays faithful. A shell/prompt routinely emits a bare
+		// ESC[r, which must NOT disable the footer re-emit. Any region with an
+		// explicit bottom we can't emulate, and can't even trust as "full" (the
+		// 4 MiB ring survives resizes, so a bottom captured at a prior size is
+		// ambiguous against the current rows), so it stays unfaithful. DECSTBM
+		// homes the cursor either way.
+		//
+		// Known gap: if an app set a PARTIAL region whose setup byte has since
+		// aged out of the ring but a later bare ESC[r remains, the model can't
+		// tell the grid diverged and marks it faithful. Accepted: the model
+		// never tracks scroll-region margins (Claude never sets one), and a live
+		// app's continuous footer repaints overwrite earlier bottom-row drift.
+		top := param(params, 0, 1)
+		bottom := param(params, 1, 0) // 0 = no explicit bottom row
+		if !(top <= 1 && bottom == 0) {
+			s.faithful = false
+		}
+		s.x, s.y = 0, 0
+		s.wrapNext = false
 	default:
 		// CSI we don't model. Most unknown finals are benign (cursor style,
-		// etc.), but a few RESTRUCTURE content — insert/delete line (L/M),
-		// insert/delete char (@/P), scroll up/down (S/T), scroll region (r),
-		// erase char (X). Claude emits none; vim/htop rely on them. Seeing one
-		// means the reconstruction can't be trusted, so mark unfaithful and let
-		// the caller keep the raw byte-window replay.
+		// etc.), but a few RESTRUCTURE content: insert/delete line (L/M),
+		// insert/delete char (@/P), scroll up/down (S/T), erase char (X).
+		// Claude emits none; vim/htop rely on them. Seeing one means the
+		// reconstruction can't be trusted, so mark unfaithful and let the
+		// caller keep the raw byte-window replay.
 		switch final {
-		case 'L', 'M', '@', 'P', 'S', 'T', 'r', 'X':
+		case 'L', 'M', '@', 'P', 'S', 'T', 'X':
 			s.faithful = false
 		}
 	}

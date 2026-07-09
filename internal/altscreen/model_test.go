@@ -137,6 +137,53 @@ func TestUnfaithfulOnRestructuringOps(t *testing.T) {
 	}
 }
 
+// TestFullScreenScrollRegionStaysFaithful is the regression for the "footer
+// blank until rotation" bug. A reconstruction window can still hold pre-Claude
+// SHELL output (a session whose 4 MiB ring hasn't evicted its head), and that
+// shell emits a harmless full-screen scroll-region reset (ESC[r) at startup.
+// Treating that benign DECSTBM as a restructuring op tripped the sticky
+// unfaithful flag, so the footer re-emit was skipped for the session's life and
+// a reattach where the footer had aged out showed blank bottom rows until a
+// rotation. A full-screen region restructures nothing, so it must stay faithful.
+func TestFullScreenScrollRegionStaysFaithful(t *testing.T) {
+	// A BARE reset (no explicit bottom row) restores the full screen and stays
+	// faithful, a shell/prompt routinely emits one and it must not disable the
+	// footer re-emit.
+	for _, seq := range []string{
+		"\x1b[r",  // bare reset to full screen
+		"\x1b[;r", // explicit empty params
+		"\x1b[1r", // top only, no bottom
+	} {
+		if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi"+seq), 6, 12); !faithful {
+			t.Errorf("bare full-screen scroll region %q must stay faithful", seq)
+		}
+	}
+	// A region with an EXPLICIT bottom we can't emulate (and can't trust as
+	// "full" because the ring survives resizes), so it bails, even top=1;bottom.
+	// (TestUnfaithfulOnRestructuringOps also covers the partial \x1b[2;5r.)
+	for _, seq := range []string{
+		"\x1b[2;5r",  // partial region
+		"\x1b[1;6r",  // explicit bottom (== current rows here, but ambiguous across resizes)
+		"\x1b[1;99r", // explicit bottom past the screen
+	} {
+		if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi"+seq), 6, 12); faithful {
+			t.Errorf("scroll region with explicit bottom %q must be unfaithful", seq)
+		}
+	}
+	// End to end: pre-Claude shell prompt + bare ESC[r, then Claude paints its
+	// alt screen; the footer must reconstruct faithfully.
+	rows, cols := 8, 24
+	ring := "james@box:~$ claude\r\n\x1b[r" + // shell prompt + benign full-screen reset
+		"\x1b[H\x1b[2J\x1b[1;1Hheader body\x1b[8;1H-- esc to interrupt"
+	redraw, faithful := ReconstructBottomRows([]byte(ring), rows, cols, 4)
+	if !faithful {
+		t.Fatal("pre-Claude shell ESC[r must not disqualify the reconstruction")
+	}
+	if !strings.Contains(string(redraw), "esc to interrupt") {
+		t.Fatalf("footer missing: %q", redraw)
+	}
+}
+
 func TestRepaintRowsCursorNeutralAndScoped(t *testing.T) {
 	s := feed(6, 12, "\x1b[H\x1b[2J\x1b[3;1Hbody\x1b[6;1H\x1b[38;5;9mfooter\x1b[39m")
 	r := string(s.RepaintRows(4, 6)) // bottom 2 rows (indices 4,5 = 1-based 5,6)
