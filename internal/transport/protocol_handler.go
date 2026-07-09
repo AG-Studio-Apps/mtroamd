@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -238,6 +239,27 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 				ring, int(rows), int(cols), altScreenFooterRows); faithful && len(redraw) > 0 {
 				_, _ = sess.InjectOutput(redraw)
 			}
+		}
+	}
+
+	// Sanitize stranded MOUSE mode on attach. A TUI/agent killed ungracefully
+	// (SIGKILL, host reboot) never emits its mouse-off DECRSTs, so the replayed
+	// ring carries mouse-ON but not the matching OFF, and a reattaching client
+	// comes up with the scroll wheel hijacked by mouse reporting. Inject the
+	// mouse-off DECRSTs as the NEWEST ring bytes so they ride the tail of the
+	// replay and cancel any replayed mouse-ON. Scoped to mouse only (NOT
+	// bracketed paste ?2004, which the shell's own readline enables and wants
+	// kept). Reset when EITHER:
+	//   - this attach just lazy-spawned a restored session (`wasRestored`): the
+	//     freshly spawned shell can't want mouse, and its fg poller hasn't
+	//     sampled yet (comm reads "" for the first ~5s) — this is the reboot
+	//     case, where the stranded mouse-ON was just replayed from disk; or
+	//   - the live foreground is a plain shell (the TUI exited on a still-up box).
+	// Gated so a live mouse-using TUI is never disabled out from under it.
+	if att.ReplayBudget > 0 {
+		comm, _, _, _ := sess.ForegroundSnapshot()
+		if shouldResetStrandedMouse(att.ReplayBudget, wasRestored, comm) {
+			_, _ = sess.InjectOutput([]byte("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"))
 		}
 	}
 
@@ -702,6 +724,34 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer, src
 // bloat per-session state or logs (the 64 KiB frame cap is the only other bound).
 // (Low, security audit v1.7.0.)
 const maxClientIDLen = 128
+
+// shouldResetStrandedMouse decides whether an attach should inject the mouse-off
+// DECRSTs to clear a mode a dead TUI stranded. Only replay (budget>0) carries the
+// stranded mouse-ON, so budget-less CLI attaches skip. Reset when EITHER the
+// attach just lazy-spawned a restored session (a fresh shell that can't want
+// mouse, and whose fg poller hasn't sampled yet — `fgComm` reads "" for the first
+// ~5s, the reboot case) OR the live foreground is a plain shell (a TUI exited on a
+// still-up box). A live mouse-using TUI (not restored, fg != shell) is left alone.
+func shouldResetStrandedMouse(replayBudget uint64, wasRestored bool, fgComm string) bool {
+	if replayBudget == 0 {
+		return false
+	}
+	return wasRestored || isPlainShellComm(fgComm)
+}
+
+// isPlainShellComm reports whether a foreground process comm is an interactive
+// shell (not a TUI/agent). Only when a session's foreground is a plain shell is
+// it safe to inject a mouse-mode reset on attach: a shell never wants mouse
+// reporting, whereas a live TUI (htop/vim/claude) would be broken by a blind
+// reset. Allowlist (not a TUI denylist) so a node-wrapped agent reported as
+// "node" is never mistaken for a shell. Login shells arrive as "-bash".
+func isPlainShellComm(comm string) bool {
+	switch strings.TrimPrefix(comm, "-") {
+	case "bash", "zsh", "sh", "dash", "ash", "fish", "ksh", "mksh", "tcsh", "csh":
+		return true
+	}
+	return false
+}
 
 func readAttach(s io.Reader) (protocol.Attach, error) {
 	frameType, body, err := protocol.ReadTaggedFrame(s)
