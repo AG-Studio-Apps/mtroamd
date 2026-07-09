@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Handler is the daemon-side dispatch for IPC requests. Each
@@ -43,6 +44,9 @@ type Server struct {
 	// goroutines faster than the handler returns. The semaphore
 	// caps that; overflow connections are closed immediately.
 	inflight chan struct{}
+	// handlerTimeout bounds each socket I/O op of a one-shot exchange so a
+	// stalled peer can't pin a slot (see ipcHandlerTimeout).
+	handlerTimeout time.Duration
 }
 
 // MaxConcurrentIPCHandlers caps how many in-flight IPC handlers may
@@ -52,12 +56,35 @@ type Server struct {
 // surface to defend.
 const MaxConcurrentIPCHandlers = 32
 
+// ipcHandlerTimeout bounds the socket I/O of a single one-shot IPC
+// exchange. The socket is uid-0600, but a same-uid process could otherwise
+// stall a handler forever — either by connecting and never sending a
+// request (blocks the read), or by sending a valid request and then never
+// reading a response large enough to exceed the socket send buffer (blocks
+// the write). Either way the handler goroutine never returns;
+// MaxConcurrentIPCHandlers such stalled peers exhaust the inflight
+// semaphore (denying legit allocate/list/kill IPC) and stall graceful
+// shutdown, which waits on in-flight handlers.
+//
+// It is applied as TWO independent deadlines — one on the request read
+// (handle) and a fresh one on each response write (respond) — rather than
+// one absolute deadline over the whole exchange, so that handler compute
+// between the read and the write is never charged against the reply write:
+// a legitimately slow HandleAllocate (e.g. a heavy shell spawn) keeps its
+// full write budget and its reply is never dropped. Deadlines bound socket
+// I/O only, not compute (they fire on Read/Write). Handlers are cheap by
+// contract and a legit client budgets its whole exchange at 1s
+// (DefaultDialTimeout), so a few seconds of headroom can't cut off a
+// well-behaved peer.
+const ipcHandlerTimeout = 5 * time.Second
+
 // ServerOption customises NewServer. Use the With* helpers; the type
 // itself is opaque so we can add fields without breaking callers.
 type ServerOption func(*serverOptions)
 
 type serverOptions struct {
-	maxConcurrent int
+	maxConcurrent  int
+	handlerTimeout time.Duration
 }
 
 // WithMaxConcurrent overrides the default in-flight handler cap. Used
@@ -65,6 +92,13 @@ type serverOptions struct {
 // leave it at the default.
 func WithMaxConcurrent(n int) ServerOption {
 	return func(o *serverOptions) { o.maxConcurrent = n }
+}
+
+// WithHandlerTimeout overrides the per-connection handler I/O deadline
+// (default ipcHandlerTimeout). Used by tests to exercise the stalled-peer
+// reclaim quickly; production callers should leave it at the default.
+func WithHandlerTimeout(d time.Duration) ServerOption {
+	return func(o *serverOptions) { o.handlerTimeout = d }
 }
 
 // NewServer creates a Server bound to the given Unix socket path.
@@ -81,12 +115,15 @@ func NewServer(socketPath string, handler Handler, opts ...ServerOption) (*Serve
 	if handler == nil {
 		return nil, errors.New("ipc: NewServer requires a Handler")
 	}
-	cfg := serverOptions{maxConcurrent: MaxConcurrentIPCHandlers}
+	cfg := serverOptions{maxConcurrent: MaxConcurrentIPCHandlers, handlerTimeout: ipcHandlerTimeout}
 	for _, o := range opts {
 		o(&cfg)
 	}
 	if cfg.maxConcurrent <= 0 {
 		cfg.maxConcurrent = MaxConcurrentIPCHandlers
+	}
+	if cfg.handlerTimeout <= 0 {
+		cfg.handlerTimeout = ipcHandlerTimeout
 	}
 	parent := filepath.Dir(socketPath)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -120,10 +157,11 @@ func NewServer(socketPath string, handler Handler, opts ...ServerOption) (*Serve
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
 	return &Server{
-		listener: ln,
-		handler:  handler,
-		socket:   socketPath,
-		inflight: make(chan struct{}, cfg.maxConcurrent),
+		listener:       ln,
+		handler:        handler,
+		socket:         socketPath,
+		inflight:       make(chan struct{}, cfg.maxConcurrent),
+		handlerTimeout: cfg.handlerTimeout,
 	}, nil
 }
 
@@ -244,16 +282,24 @@ func (s *Server) Close() error {
 func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 	defer conn.Close()
 
+	// Bound the request read (see ipcHandlerTimeout): a peer that connects
+	// and never sends a request would otherwise pin this slot forever.
+	_ = conn.SetReadDeadline(time.Now().Add(s.handlerTimeout))
 	body, err := ReadFrame(conn)
 	if err != nil {
-		// Peer disconnected before sending a request, or framing
-		// error. Either way we have nothing to respond with.
+		// Peer disconnected before sending a request, framing error, or
+		// deadline expiry. Either way we have nothing to respond with.
 		return
 	}
+	// Request fully read (one per connection); stop bounding reads so the
+	// handler's own work isn't racing this deadline. Each response write is
+	// separately bounded by s.respond, with the budget measured from the
+	// write itself, so a slow handler is not charged against its reply.
+	_ = conn.SetReadDeadline(time.Time{})
 
 	t, err := PeekType(body)
 	if err != nil {
-		_ = EncodeResponse(conn, AllocateResponse{
+		s.respond(conn, AllocateResponse{
 			T:   TypeAllocate,
 			Ok:  false,
 			Err: ErrBadRequest,
@@ -266,7 +312,7 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 	case TypeAllocate:
 		req, err := DecodeAllocateRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, AllocateResponse{
+			s.respond(conn, AllocateResponse{
 				T: TypeAllocate, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -274,7 +320,7 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleAllocate(ctx, req)
 		resp.T = TypeAllocate
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypePing:
 		req, err := DecodePingRequest(body)
 		if err != nil {
@@ -282,11 +328,11 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandlePing(ctx, req)
 		resp.T = TypePing
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypeListSessions:
 		req, err := DecodeListSessionsRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, ListSessionsResponse{
+			s.respond(conn, ListSessionsResponse{
 				T: TypeListSessions, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -294,11 +340,11 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleListSessions(ctx, req)
 		resp.T = TypeListSessions
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypeKillSession:
 		req, err := DecodeKillSessionRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, KillSessionResponse{
+			s.respond(conn, KillSessionResponse{
 				T: TypeKillSession, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -306,11 +352,11 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleKillSession(ctx, req)
 		resp.T = TypeKillSession
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypeRenameSession:
 		req, err := DecodeRenameSessionRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, RenameSessionResponse{
+			s.respond(conn, RenameSessionResponse{
 				T: TypeRenameSession, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -318,11 +364,11 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleRenameSession(ctx, req)
 		resp.T = TypeRenameSession
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypeStatus:
 		req, err := DecodeStatusRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, StatusResponse{
+			s.respond(conn, StatusResponse{
 				T: TypeStatus, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -330,11 +376,11 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleStatus(ctx, req)
 		resp.T = TypeStatus
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	case TypeSessionSearch:
 		req, err := DecodeSessionSearchRequest(body)
 		if err != nil {
-			_ = EncodeResponse(conn, SessionSearchResponse{
+			s.respond(conn, SessionSearchResponse{
 				T: TypeSessionSearch, Ok: false,
 				Err: ErrBadRequest, Msg: err.Error(),
 			})
@@ -342,12 +388,23 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleSessionSearch(ctx, req)
 		resp.T = TypeSessionSearch
-		_ = EncodeResponse(conn, resp)
+		s.respond(conn, resp)
 	default:
-		_ = EncodeResponse(conn, AllocateResponse{
+		s.respond(conn, AllocateResponse{
 			T: TypeAllocate, Ok: false,
 			Err: ErrBadRequest,
 			Msg: fmt.Sprintf("unknown request type %q", t),
 		})
 	}
+}
+
+// respond writes a single response frame under a fresh write deadline
+// (see ipcHandlerTimeout). The deadline starts at the write, not at
+// connect, so a peer that stops reading can't block the handler goroutine
+// indefinitely while a legitimately slow handler is charged nothing
+// against its reply. The encode error is intentionally discarded — a peer
+// that vanished mid-reply leaves nothing to recover.
+func (s *Server) respond(conn *net.UnixConn, resp any) {
+	_ = conn.SetWriteDeadline(time.Now().Add(s.handlerTimeout))
+	_ = EncodeResponse(conn, resp)
 }

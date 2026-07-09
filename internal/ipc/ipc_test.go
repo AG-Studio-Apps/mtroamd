@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -266,4 +267,75 @@ func TestServeRejectsOverCapConnections(t *testing.T) {
 	// Release the first handler and let it complete.
 	close(h.release)
 	<-firstDone
+}
+
+// waitForInflight polls the server's inflight-slot count until it equals
+// want or the timeout elapses. len(chan) is safe to read concurrently, so
+// this synchronizes on real server state instead of fixed sleeps.
+func waitForInflight(t *testing.T, srv *Server, want int, timeout time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if len(srv.inflight) == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("%s: inflight=%d, want %d after %s", msg, len(srv.inflight), want, timeout)
+}
+
+// TestStalledConnectionReleasesSlot verifies the F4 fix on the read path:
+// a peer that connects but never sends a request frame must not pin its
+// handler slot forever. With cap=1 the idle connection takes the sole
+// slot; the handler's read deadline must then reclaim it (inflight 1 -> 0)
+// so a subsequent real request succeeds. Synchronizes on the inflight
+// count, not wall-clock sleeps, so it can't flake: without the fix the
+// slot stays held and the 1->0 wait fails deterministically.
+//
+// The occupancy window is set generously (500ms via WithHandlerTimeout) so
+// the first waitForInflight poll reliably observes inflight==1 before the
+// deadline reclaims it, even on a preempted CI runner.
+//
+// NOTE: this covers only the read-stall path. The symmetric write-stall
+// (valid request, peer never drains a response big enough to fill the
+// socket send buffer) is guarded by the fresh write deadline in
+// Server.respond, but is not unit-tested here: forcing a real write block
+// requires SO_SNDBUF tuned below the 64 KiB frame cap, which isn't
+// portably reproducible without a socket-buffer hook the server doesn't
+// expose. The per-write deadline makes the guard structural rather than an
+// incidental side effect, so a refactor can't silently drop it.
+func TestStalledConnectionReleasesSlot(t *testing.T) {
+	t.Parallel()
+	dir := tempDirWith0700(t)
+	socket := filepath.Join(dir, "mtroamd.sock")
+	srv, err := NewServer(socket, &echoHandler{},
+		WithMaxConcurrent(1), WithHandlerTimeout(500*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	go srv.Serve(context.Background())
+
+	// Raw connection that connects then goes silent — the slot-pinning
+	// peer. Wait until the server has accepted it and it occupies the slot.
+	idle, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatalf("dial idle: %v", err)
+	}
+	defer idle.Close()
+	waitForInflight(t, srv, 1, 2*time.Second, "idle conn never occupied the slot")
+
+	// The handler's read deadline must reclaim the slot (this is the
+	// regression: without the deadline it stays held forever).
+	waitForInflight(t, srv, 0, 3*time.Second, "slot never reclaimed after stalled read")
+
+	// With the slot free, a real request succeeds.
+	c := NewClient(socket, time.Second)
+	resp, err := c.Allocate(context.Background(), AllocateRequest{SessionID: "afterstall"})
+	if err != nil {
+		t.Fatalf("allocate after reclaim: %v", err)
+	}
+	if !resp.Ok {
+		t.Fatalf("allocate not ok: %+v", resp)
+	}
 }
