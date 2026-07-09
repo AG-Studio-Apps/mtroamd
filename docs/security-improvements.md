@@ -10,6 +10,15 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
 
+## v1.7.4 (2026-07-09)
+
+_Pre-stable security audit of the `v1.7.3..v1.7.4` diff plus a full static / binary / dependency scan and a deep adversarial multi-agent review; details + pre-stable gate in `.security/security-audit-v1.7.4.md`. No Critical / High / Medium findings. Two Low items fixed below (first shipping in `v1.7.4-rc3`)._
+
+| Finding | Severity | Source | Fix |
+|---|---|---|---|
+| `crypto/tls` Encrypted Client Hello privacy leak (GO-2026-5856) linked in the binary and call-graph-reachable via the QUIC listener + the release-fetch HTTPS client. ECH is never configured, so there is no runtime exposure, but the advisory is source-reachable | Low | govulncheck (source) / osv-scanner | Bumped the pinned toolchain `go1.26.4` → `go1.26.5`. Also clears GO-2026-4970 (`os.Root` symlink escape) from the binary - itself unreachable (no `os.Root` use). `govulncheck ./...` is clean on go1.26.5. The `go` directive stays at the language minimum so `GOTOOLCHAIN=local` / Nix builds keep working |
+| IPC handler read the request frame with no deadline: a same-uid process (e.g. a compromised session) could open `MaxConcurrentIPCHandlers` (32) connections to the `0600` socket and never send a request, pinning every handler goroutine - denying local allocate/list/kill IPC and stalling graceful shutdown (which waits on in-flight handlers). Symmetric write-stall on the response path (a peer that never drains a send-buffer-filling reply) | Low | adversarial multi-agent code review | Bound each one-shot exchange with two independent deadlines - one on the request read, a fresh one on each response write - so a stalled peer's slot is reclaimed (5s default) while a legitimately slow handler keeps its full write budget. Not remotely reachable (socket is uid-`0600`, parent-dir verified); the attacker already shares the daemon's uid |
+
 ## v1.7.3 (2026-07-02, hardening)
 
 _Manual audit of the `v1.7.2..v1.7.3-rc1` diff: no findings. One availability-hardening change (details + a pre-stable release gate in `.security/security-audit-v1.7.3.md`)._
