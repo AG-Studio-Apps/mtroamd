@@ -144,8 +144,10 @@ func runConnect(args []string) int {
 		if errors.Is(err, ipc.ErrDaemonNotRunning) {
 			if autoStarted {
 				// The supervisor start succeeded but the daemon isn't
-				// answering — a startup crash, not "never ran".
-				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but is not responding at %s (it may have crashed on startup, check `mtroamd doctor` / the log).\n", socketPath)
+				// answering yet: either still binding (a slow cert load can
+				// outlast our wait, so a retry succeeds) or it crashed on
+				// startup. Cover both without alarming the common slow case.
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but did not come up in time at %s. It may still be starting (retry), or it crashed on startup (check `mtroamd doctor` / the log).\n", socketPath)
 			} else {
 				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve`, or install the service (see `mtroamd unit`).\n", socketPath)
 			}
