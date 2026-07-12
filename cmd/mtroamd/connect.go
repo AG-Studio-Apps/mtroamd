@@ -128,11 +128,12 @@ func runConnect(args []string) int {
 	if errors.Is(err, ipc.ErrDaemonNotRunning) && *autostart {
 		// The daemon isn't up — most often a reboot that didn't restart a
 		// non-lingering daemon (the visible symptom of the persistence
-		// gap). Bring it back via its systemd service and retry once: this
+		// gap). Bring it back via its supervisor and retry once: this
 		// self-heals both CLI users and the iOS bootstrap (which shells
 		// this command). Persisted sessions rehydrate on restart.
-		if autoStartDaemon(socketPath) {
-			autoStarted = true
+		started, live := autoStartDaemon(socketPath)
+		autoStarted = started // "started" (even if the socket never came up) selects the crash message below
+		if live {
 			client = ipc.NewClient(socketPath, *timeout) // fresh dial to the now-live socket
 			ctx2, cancel2 := context.WithTimeout(context.Background(), *timeout)
 			defer cancel2()
@@ -142,8 +143,9 @@ func runConnect(args []string) int {
 	if err != nil {
 		if errors.Is(err, ipc.ErrDaemonNotRunning) {
 			if autoStarted {
-				// Started then went away — a startup crash, not "not running".
-				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but stopped responding at %s (it may have crashed on startup — check `mtroamd doctor` / the log).\n", socketPath)
+				// The supervisor start succeeded but the daemon isn't
+				// answering — a startup crash, not "never ran".
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but is not responding at %s (it may have crashed on startup, check `mtroamd doctor` / the log).\n", socketPath)
 			} else {
 				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve`, or install the service (see `mtroamd unit`).\n", socketPath)
 			}
@@ -209,40 +211,40 @@ func runConnect(args []string) int {
 	return connectExitOK
 }
 
-// autoStartDaemon brings a down daemon back via its systemd-user service,
-// then waits for the IPC socket to accept connections. Returns true once the
-// socket is live. Best-effort: any failure returns false and the caller
-// falls back to the "daemon not running" error. Uses its own budget —
-// starting + socket-binding (systemctl start + cert load) can outlast a
-// normal connect timeout.
+// autoStartDaemon brings a down daemon back via its supervisor, then waits
+// for the IPC socket to accept connections. Returns:
 //
-// SYSTEMD ONLY, by design. `svcmgr.Detect` also has a nohup backend, but we
-// must never nohup-spawn from connect: nohup.Start execs `serve` with
-// hardcoded default flags (`--addr 0.0.0.0:49820`) — an unconsented public
-// listener on flags the operator never chose — and has no single-instance
-// guard, so a live-but-momentarily-refusing daemon (ECONNREFUSED classed as
+//	started — the supervisor's Start was invoked successfully (so a
+//	          subsequent "not responding" is a startup crash, not "never ran")
+//	live    — the socket came up and is ready to dial
+//
+// Uses its own budget: starting + socket-binding (systemctl start /
+// launchctl bootstrap + cert load) can outlast a normal connect timeout.
+//
+// NOHUP EXCLUDED by design. `svcmgr.Detect` returns a real supervisor
+// (systemd-user / launchd — both idempotent + single-instance, launching
+// from the unit/plist's own config) OR the nohup fallback. We auto-start
+// only via a real supervisor: nohup.Start execs `serve` with hardcoded
+// default flags (`--addr 0.0.0.0:49820`), an unconsented public listener on
+// flags the operator never chose, and has no single-instance guard — a
+// live-but-momentarily-refusing daemon (ECONNREFUSED classed as
 // ErrDaemonNotRunning) would get a SECOND `serve` whose ipc.NewServer
-// unlinks + rebinds the live socket, orphaning the original daemon's
-// persistent sessions. `systemctl --user start` is idempotent + single-
-// instance and uses the unit's own ExecStart, so it's safe. Non-systemd
-// hosts get the strict error; the iOS installer's persistence copy-window
-// is the path to fixing their supervision.
-func autoStartDaemon(socketPath string) bool {
+// unlinks + rebinds the live socket, orphaning the original's persistent
+// sessions. Nohup hosts get the strict error; the iOS installer's
+// persistence copy-window is their path to proper supervision. binPath is
+// unused by both real backends (they launch from the unit/plist).
+func autoStartDaemon(socketPath string) (started, live bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	mgr := svcmgr.Detect(ctx)
-	if mgr.Name() != "systemd-user" {
-		return false
+	if mgr.Name() == "nohup" {
+		return false, false
 	}
-	binPath, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	if err := mgr.Start(ctx, binPath); err != nil {
+	if err := mgr.Start(ctx, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "mtroamd connect: auto-start via %s failed: %v\n", mgr.Name(), err)
-		return false
+		return false, false
 	}
-	return waitForSocket(ctx, socketPath, 10*time.Second)
+	return true, waitForSocket(ctx, socketPath, 10*time.Second)
 }
 
 // waitForSocket polls a unix socket until a dial succeeds or the budget /

@@ -60,17 +60,18 @@ func TestSystemdUserAvailable(t *testing.T) {
 		t.Fatal("Available should be true once the systemd/private socket exists")
 	}
 
-	// ...but only with the unit installed: remove it → unavailable again.
-	// installedUnitPath() also searches /etc + /usr/lib/systemd/user
-	// (absolute paths t.Setenv can't sandbox), so skip this leg when a
-	// system-wide unit shadows the per-user one on the test host.
-	if !fileExists("/etc/systemd/user/mtroamd.service") &&
-		!fileExists("/usr/lib/systemd/user/mtroamd.service") {
-		if err := os.Remove(filepath.Join(unitDir, "mtroamd.service")); err != nil {
-			t.Fatal(err)
-		}
-		if s.Available(ctx) {
-			t.Fatal("Available should be false with no unit installed")
-		}
+	// Removing the per-user unit makes Available false — UNLESS a
+	// system-wide unit (/etc or /usr/lib/systemd/user, absolute paths
+	// t.Setenv can't sandbox) shadows it, in which case Available
+	// correctly stays true. Assert the right outcome for THIS host either
+	// way, so coverage holds on both packaged and unpackaged boxes.
+	if err := os.Remove(filepath.Join(unitDir, "mtroamd.service")); err != nil {
+		t.Fatal(err)
+	}
+	systemUnit := fileExists("/etc/systemd/user/mtroamd.service") ||
+		fileExists("/usr/lib/systemd/user/mtroamd.service")
+	if got := s.Available(ctx); got != systemUnit {
+		t.Fatalf("Available after removing the user unit = %v, want %v (system unit present = %v)",
+			got, systemUnit, systemUnit)
 	}
 }
