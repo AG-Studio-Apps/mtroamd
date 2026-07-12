@@ -62,6 +62,11 @@ func runConnect(args []string) int {
 		"keep the process running and speak the mtRoam wire protocol over stdin/stdout. "+
 			"The iOS client uses this to tunnel mtRoam through the SSH exec channel — no separate "+
 			"QUIC/TCP connection or firewall hole needed.")
+	autostart := fs.Bool("autostart", true,
+		"if the daemon isn't running, auto-start it via its systemd-user service and retry once. "+
+			"Only fires when a unit is installed AND the user manager is reachable — it never "+
+			"nohup-spawns a daemon (that would bind a public listener with flags the operator "+
+			"never chose). Pass --autostart=false for the strict 'error if down' behavior.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd connect [flags]\n\n")
 		fs.PrintDefaults()
@@ -119,13 +124,15 @@ func runConnect(args []string) int {
 		Persist:          persistPtr,
 	}
 	resp, err := client.Allocate(ctx, req)
-	if errors.Is(err, ipc.ErrDaemonNotRunning) {
+	autoStarted := false
+	if errors.Is(err, ipc.ErrDaemonNotRunning) && *autostart {
 		// The daemon isn't up — most often a reboot that didn't restart a
 		// non-lingering daemon (the visible symptom of the persistence
-		// gap). Bring it back via its supervisor and retry once: this
+		// gap). Bring it back via its systemd service and retry once: this
 		// self-heals both CLI users and the iOS bootstrap (which shells
 		// this command). Persisted sessions rehydrate on restart.
 		if autoStartDaemon(socketPath) {
+			autoStarted = true
 			client = ipc.NewClient(socketPath, *timeout) // fresh dial to the now-live socket
 			ctx2, cancel2 := context.WithTimeout(context.Background(), *timeout)
 			defer cancel2()
@@ -134,7 +141,12 @@ func runConnect(args []string) int {
 	}
 	if err != nil {
 		if errors.Is(err, ipc.ErrDaemonNotRunning) {
-			fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s and auto-start failed. Start it with `mtroamd serve` (or check `mtroamd doctor`).\n", socketPath)
+			if autoStarted {
+				// Started then went away — a startup crash, not "not running".
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but stopped responding at %s (it may have crashed on startup — check `mtroamd doctor` / the log).\n", socketPath)
+			} else {
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve`, or install the service (see `mtroamd unit`).\n", socketPath)
+			}
 			return connectExitDaemonNotRunning
 		}
 		fmt.Fprintf(os.Stderr, "mtroamd connect: %v\n", err)
@@ -197,20 +209,35 @@ func runConnect(args []string) int {
 	return connectExitOK
 }
 
-// autoStartDaemon brings a down daemon back via its supervisor, then waits
-// for the IPC socket to accept connections. Returns true once the socket is
-// live. Best-effort: any failure returns false and the caller falls back to
-// the "daemon not running" error. Uses its own budget — starting +
-// socket-binding (systemctl start / nohup spawn + cert load) can outlast a
+// autoStartDaemon brings a down daemon back via its systemd-user service,
+// then waits for the IPC socket to accept connections. Returns true once the
+// socket is live. Best-effort: any failure returns false and the caller
+// falls back to the "daemon not running" error. Uses its own budget —
+// starting + socket-binding (systemctl start + cert load) can outlast a
 // normal connect timeout.
+//
+// SYSTEMD ONLY, by design. `svcmgr.Detect` also has a nohup backend, but we
+// must never nohup-spawn from connect: nohup.Start execs `serve` with
+// hardcoded default flags (`--addr 0.0.0.0:49820`) — an unconsented public
+// listener on flags the operator never chose — and has no single-instance
+// guard, so a live-but-momentarily-refusing daemon (ECONNREFUSED classed as
+// ErrDaemonNotRunning) would get a SECOND `serve` whose ipc.NewServer
+// unlinks + rebinds the live socket, orphaning the original daemon's
+// persistent sessions. `systemctl --user start` is idempotent + single-
+// instance and uses the unit's own ExecStart, so it's safe. Non-systemd
+// hosts get the strict error; the iOS installer's persistence copy-window
+// is the path to fixing their supervision.
 func autoStartDaemon(socketPath string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mgr := svcmgr.Detect(ctx)
+	if mgr.Name() != "systemd-user" {
+		return false
+	}
 	binPath, err := os.Executable()
 	if err != nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	mgr := svcmgr.Detect(ctx)
 	if err := mgr.Start(ctx, binPath); err != nil {
 		fmt.Fprintf(os.Stderr, "mtroamd connect: auto-start via %s failed: %v\n", mgr.Name(), err)
 		return false

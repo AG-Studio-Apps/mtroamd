@@ -61,10 +61,16 @@ func TestSystemdUserAvailable(t *testing.T) {
 	}
 
 	// ...but only with the unit installed: remove it → unavailable again.
-	if err := os.Remove(filepath.Join(unitDir, "mtroamd.service")); err != nil {
-		t.Fatal(err)
-	}
-	if s.Available(ctx) {
-		t.Fatal("Available should be false with no unit installed")
+	// installedUnitPath() also searches /etc + /usr/lib/systemd/user
+	// (absolute paths t.Setenv can't sandbox), so skip this leg when a
+	// system-wide unit shadows the per-user one on the test host.
+	if !fileExists("/etc/systemd/user/mtroamd.service") &&
+		!fileExists("/usr/lib/systemd/user/mtroamd.service") {
+		if err := os.Remove(filepath.Join(unitDir, "mtroamd.service")); err != nil {
+			t.Fatal(err)
+		}
+		if s.Available(ctx) {
+			t.Fatal("Available should be false with no unit installed")
+		}
 	}
 }
