@@ -89,5 +89,10 @@ Example:
   mtroamd unit print > ~/.config/systemd/user/mtroamd.service
   systemctl --user daemon-reload
   systemctl --user enable --now mtroamd
+  loginctl enable-linger "$(whoami)"   # start at boot, survive logout
+
+The enable-linger step is what makes the daemon come back after a reboot
+(and keep running after you log out). Without it the service only runs
+while you have an active login session. Verify anytime with: mtroamd doctor
 `)
 }

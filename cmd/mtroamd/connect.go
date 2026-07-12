@@ -13,16 +13,17 @@ import (
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
 
 // Exit codes for `mtroamd connect`, matching docs/mtroam-protocol.md
 // § 4.4 so iOS-side detection can branch on them deterministically.
 const (
-	connectExitOK              = 0
-	connectExitGenericError    = 1
+	connectExitOK               = 0
+	connectExitGenericError     = 1
 	connectExitDaemonNotRunning = 2
-	connectExitUnknownSession  = 3
-	connectExitCapacity        = 4
+	connectExitUnknownSession   = 3
+	connectExitCapacity         = 4
 )
 
 // runConnect is the SSH-side helper. It dials the daemon's unix
@@ -107,7 +108,7 @@ func runConnect(args []string) int {
 		persistPtr = &v
 	}
 
-	resp, err := client.Allocate(ctx, ipc.AllocateRequest{
+	req := ipc.AllocateRequest{
 		SessionID:        *sessionID,
 		Rows:             uint16(*rows),
 		Cols:             uint16(*cols),
@@ -116,10 +117,24 @@ func runConnect(args []string) int {
 		IdleTimeoutNanos: int64(*idleTimeout),
 		Name:             *name,
 		Persist:          persistPtr,
-	})
+	}
+	resp, err := client.Allocate(ctx, req)
+	if errors.Is(err, ipc.ErrDaemonNotRunning) {
+		// The daemon isn't up — most often a reboot that didn't restart a
+		// non-lingering daemon (the visible symptom of the persistence
+		// gap). Bring it back via its supervisor and retry once: this
+		// self-heals both CLI users and the iOS bootstrap (which shells
+		// this command). Persisted sessions rehydrate on restart.
+		if autoStartDaemon(socketPath) {
+			client = ipc.NewClient(socketPath, *timeout) // fresh dial to the now-live socket
+			ctx2, cancel2 := context.WithTimeout(context.Background(), *timeout)
+			defer cancel2()
+			resp, err = client.Allocate(ctx2, req)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, ipc.ErrDaemonNotRunning) {
-			fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve` first.\n", socketPath)
+			fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s and auto-start failed. Start it with `mtroamd serve` (or check `mtroamd doctor`).\n", socketPath)
 			return connectExitDaemonNotRunning
 		}
 		fmt.Fprintf(os.Stderr, "mtroamd connect: %v\n", err)
@@ -180,6 +195,48 @@ func runConnect(args []string) int {
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
 	return connectExitOK
+}
+
+// autoStartDaemon brings a down daemon back via its supervisor, then waits
+// for the IPC socket to accept connections. Returns true once the socket is
+// live. Best-effort: any failure returns false and the caller falls back to
+// the "daemon not running" error. Uses its own budget — starting +
+// socket-binding (systemctl start / nohup spawn + cert load) can outlast a
+// normal connect timeout.
+func autoStartDaemon(socketPath string) bool {
+	binPath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mgr := svcmgr.Detect(ctx)
+	if err := mgr.Start(ctx, binPath); err != nil {
+		fmt.Fprintf(os.Stderr, "mtroamd connect: auto-start via %s failed: %v\n", mgr.Name(), err)
+		return false
+	}
+	return waitForSocket(ctx, socketPath, 10*time.Second)
+}
+
+// waitForSocket polls a unix socket until a dial succeeds or the budget /
+// context expires.
+func waitForSocket(ctx context.Context, path string, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 // runStdioMode keeps the process running, speaking the mtRoam wire
