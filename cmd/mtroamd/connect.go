@@ -67,6 +67,11 @@ func runConnect(args []string) int {
 			"Only fires when a unit is installed AND the user manager is reachable — it never "+
 			"nohup-spawns a daemon (that would bind a public listener with flags the operator "+
 			"never chose). Pass --autostart=false for the strict 'error if down' behavior.")
+	envFile := fs.String("env-file", "",
+		"path to a KEY=VAL env file (one per line, '#' comments) whose vars are added to a NEW "+
+			"session's shell environment. The file is READ then DELETED, so secret values never "+
+			"appear in this process's argv. Ignored on reattach. The iOS client SFTP-stages a 0600 "+
+			"file here to deliver host env vars / secret profiles to mtRoam sessions.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd connect [flags]\n\n")
 		fs.PrintDefaults()
@@ -113,6 +118,21 @@ func runConnect(args []string) int {
 		persistPtr = &v
 	}
 
+	// Consume the env file (read + delete) into a map for the request.
+	// Best-effort: a missing/malformed file logs and connects WITHOUT the
+	// extra env rather than failing the whole session over it - the same
+	// degrade posture the iOS staging path takes. Always attempt the delete
+	// so a staged secret never lingers, even on a parse error.
+	var envMap map[string]string
+	if *envFile != "" {
+		parsed, err := readAndDeleteEnvFile(*envFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mtroamd connect: env-file:", err)
+		} else {
+			envMap = parsed
+		}
+	}
+
 	req := ipc.AllocateRequest{
 		SessionID:        *sessionID,
 		Rows:             uint16(*rows),
@@ -122,6 +142,7 @@ func runConnect(args []string) int {
 		IdleTimeoutNanos: int64(*idleTimeout),
 		Name:             *name,
 		Persist:          persistPtr,
+		Env:              envMap,
 	}
 	resp, err := client.Allocate(ctx, req)
 	autoStarted := false
@@ -211,6 +232,33 @@ func runConnect(args []string) int {
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
 	return connectExitOK
+}
+
+// readAndDeleteEnvFile reads KEY=VAL lines (one per line; blank lines and
+// '#' comments skipped) into a map, then removes the file. The delete is
+// ALWAYS attempted (even on a parse error) so a staged secret file never
+// lingers on the host. A line without '=' or with an empty key is skipped
+// rather than failing the whole file. Values may contain '=' (only the
+// first splits KEY from VALUE), matching the sidecar's own env-file reader.
+func readAndDeleteEnvFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	// Best effort remove regardless of read outcome.
+	_ = os.Remove(path)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = val
+	}
+	return env, nil
 }
 
 // autoStartDaemon brings a down daemon back via its supervisor, then waits

@@ -104,6 +104,19 @@ type AllocateRequest struct {
 	// extension that handles Kind.
 	Kind    string `cbor:"kind,omitempty"`
 	ExtBody []byte `cbor:"ext,omitempty"`
+
+	// Env is optional extra environment for a NEW session's shell,
+	// merged over the daemon's curated per-session vars (a KEY here
+	// wins over the daemon's MESHTERM_* only if it collides, which it
+	// never should). Populated by `mtroamd connect --env-file`, which
+	// reads and deletes a 0600 file the iOS client SFTP-staged, so
+	// values never appear in the connect process's argv. Ignored on
+	// reattach (env can't apply to an already-running shell) and not
+	// persisted to session meta (a cross-restart lazy respawn comes up
+	// without it, matching attach semantics). Additive/omitempty: older
+	// daemons decoding a newer client's request drop this key via
+	// StrictDecMode; older clients simply never set it.
+	Env map[string]string `cbor:"env,omitempty"`
 }
 
 // AllocateResponse carries the fields that go into the bootstrap
