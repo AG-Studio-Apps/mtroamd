@@ -10,6 +10,10 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
 
+## v1.7.5 (2026-07-16)
+
+_Pre-stable security audit of the `v1.7.4..v1.7.5` diff (the `connect --env-file` session env-threading, auto-start-on-connect, and the systemd user-manager detection fix) plus a full static / binary / dependency scan; details + pre-stable gate in `.security/security-audit-v1.7.5.md`. **No findings — nothing to fix.** `go vet`, `govulncheck` (source + freshly rebuilt binaries on go1.26.5), `osv-scanner`, `gosec`, `staticcheck`, and `gitleaks` were all clean or prior-accepted, and a focused adversarial re-attack of the env-threading path (6 hypotheses) refuted every candidate boundary crossing. No Critical / High / Medium / Low. No dependency change (`go.mod`/`go.sum` unchanged)._
+
 ## v1.7.4 (2026-07-09)
 
 _Pre-stable security audit of the `v1.7.3..v1.7.4` diff plus a full static / binary / dependency scan and a deep adversarial multi-agent review; details + pre-stable gate in `.security/security-audit-v1.7.4.md`. No Critical / High / Medium findings. Two Low items fixed below (first shipping in `v1.7.4-rc3`)._
