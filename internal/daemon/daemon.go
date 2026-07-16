@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1092,13 +1093,28 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// in the sidecarExtraEnv comment). The mtRoam shell already
 	// persists via mtroamd's own session machinery, so skipping
 	// tmux is a no-op from the user's persistence perspective.
+	// User-supplied env (from `mtroamd connect --env-file`) merges AFTER
+	// the daemon's curated vars, so a client key can override only on a
+	// deliberate collision (never happens for the MESHTERM_* names). Keys
+	// are sorted for a deterministic env-file ordering.
+	extraEnv := sessionExtraEnvForID(sid)
+	if len(req.Env) > 0 {
+		keys := make([]string, 0, len(req.Env))
+		for k := range req.Env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			extraEnv = append(extraEnv, k+"="+req.Env[k])
+		}
+	}
 	ptyHandle, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
 		SessionID:    sid.String(),
 		Shell:        req.Shell,
 		ShellArgs:    req.Exec,
 		Rows:         rows,
 		Cols:         cols,
-		ExtraEnv:     sessionExtraEnvForID(sid),
+		ExtraEnv:     extraEnv,
 		StateDir:     d.stateDir,
 		DaemonBinary: d.daemonBinary,
 		Logger:       d.logger,

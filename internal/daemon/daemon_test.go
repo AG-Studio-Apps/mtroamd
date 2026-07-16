@@ -380,6 +380,53 @@ func TestDaemonSessionBufferBytesConfigFlowsThrough(t *testing.T) {
 	}
 }
 
+// TestDaemonAllocateEnvReachesShell verifies that AllocateRequest.Env
+// (from `mtroamd connect --env-file`) actually lands in a new session's
+// shell environment - the mtRoam half of the iOS env-var / secret-profile
+// delivery. The shell writes $TEST_ENVAR to a file we then read back.
+func TestDaemonAllocateEnvReachesShell(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("daemon assumes POSIX")
+	}
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+	d, c, cleanup := startDaemon(t)
+	defer cleanup()
+	_ = d
+
+	outPath := filepath.Join(shortTempDir(t), "envout")
+	const want = "hello-from-env-123"
+	resp, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: "new",
+		Rows:      24,
+		Cols:      80,
+		Shell:     "/bin/sh",
+		Exec:      []string{"-c", "printf %s \"$TEST_ENVAR\" > " + outPath + "; exec sleep 3600"},
+		Env:       map[string]string{"TEST_ENVAR": want},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Ok {
+		t.Fatalf("Allocate failed: %s %s", resp.Err, resp.Msg)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if data, err := os.ReadFile(outPath); err == nil {
+			if string(data) != want {
+				t.Fatalf("TEST_ENVAR in shell = %q, want %q", string(data), want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell never wrote the env output file within 2s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestDaemonAllocateNewSessionReturnsValidBootstrap(t *testing.T) {
 	t.Parallel()
 	d, c, cleanup := startDaemon(t)

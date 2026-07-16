@@ -13,16 +13,17 @@ import (
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
 
 // Exit codes for `mtroamd connect`, matching docs/mtroam-protocol.md
 // § 4.4 so iOS-side detection can branch on them deterministically.
 const (
-	connectExitOK              = 0
-	connectExitGenericError    = 1
+	connectExitOK               = 0
+	connectExitGenericError     = 1
 	connectExitDaemonNotRunning = 2
-	connectExitUnknownSession  = 3
-	connectExitCapacity        = 4
+	connectExitUnknownSession   = 3
+	connectExitCapacity         = 4
 )
 
 // runConnect is the SSH-side helper. It dials the daemon's unix
@@ -61,6 +62,16 @@ func runConnect(args []string) int {
 		"keep the process running and speak the mtRoam wire protocol over stdin/stdout. "+
 			"The iOS client uses this to tunnel mtRoam through the SSH exec channel — no separate "+
 			"QUIC/TCP connection or firewall hole needed.")
+	autostart := fs.Bool("autostart", true,
+		"if the daemon isn't running, auto-start it via its systemd-user service and retry once. "+
+			"Only fires when a unit is installed AND the user manager is reachable — it never "+
+			"nohup-spawns a daemon (that would bind a public listener with flags the operator "+
+			"never chose). Pass --autostart=false for the strict 'error if down' behavior.")
+	envFile := fs.String("env-file", "",
+		"path to a KEY=VAL env file (one per line, '#' comments) whose vars are added to a NEW "+
+			"session's shell environment. The file is READ then DELETED, so secret values never "+
+			"appear in this process's argv. Ignored on reattach. The iOS client SFTP-stages a 0600 "+
+			"file here to deliver host env vars / secret profiles to mtRoam sessions.")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd connect [flags]\n\n")
 		fs.PrintDefaults()
@@ -107,7 +118,22 @@ func runConnect(args []string) int {
 		persistPtr = &v
 	}
 
-	resp, err := client.Allocate(ctx, ipc.AllocateRequest{
+	// Consume the env file (read + delete) into a map for the request.
+	// Best-effort: a missing/malformed file logs and connects WITHOUT the
+	// extra env rather than failing the whole session over it - the same
+	// degrade posture the iOS staging path takes. Always attempt the delete
+	// so a staged secret never lingers, even on a parse error.
+	var envMap map[string]string
+	if *envFile != "" {
+		parsed, err := readAndDeleteEnvFile(*envFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "mtroamd connect: env-file:", err)
+		} else {
+			envMap = parsed
+		}
+	}
+
+	req := ipc.AllocateRequest{
 		SessionID:        *sessionID,
 		Rows:             uint16(*rows),
 		Cols:             uint16(*cols),
@@ -116,10 +142,36 @@ func runConnect(args []string) int {
 		IdleTimeoutNanos: int64(*idleTimeout),
 		Name:             *name,
 		Persist:          persistPtr,
-	})
+		Env:              envMap,
+	}
+	resp, err := client.Allocate(ctx, req)
+	autoStarted := false
+	if errors.Is(err, ipc.ErrDaemonNotRunning) && *autostart {
+		// The daemon isn't up — most often a reboot that didn't restart a
+		// non-lingering daemon (the visible symptom of the persistence
+		// gap). Bring it back via its supervisor and retry once: this
+		// self-heals both CLI users and the iOS bootstrap (which shells
+		// this command). Persisted sessions rehydrate on restart.
+		started, live := autoStartDaemon(socketPath)
+		autoStarted = started // "started" (even if the socket never came up) selects the crash message below
+		if live {
+			client = ipc.NewClient(socketPath, *timeout) // fresh dial to the now-live socket
+			ctx2, cancel2 := context.WithTimeout(context.Background(), *timeout)
+			defer cancel2()
+			resp, err = client.Allocate(ctx2, req)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, ipc.ErrDaemonNotRunning) {
-			fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve` first.\n", socketPath)
+			if autoStarted {
+				// The supervisor start succeeded but the daemon isn't
+				// answering yet: either still binding (a slow cert load can
+				// outlast our wait, so a retry succeeds) or it crashed on
+				// startup. Cover both without alarming the common slow case.
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon started but did not come up in time at %s. It may still be starting (retry), or it crashed on startup (check `mtroamd doctor` / the log).\n", socketPath)
+			} else {
+				fmt.Fprintf(os.Stderr, "mtroamd connect: daemon not running at %s. Start it with `mtroamd serve`, or install the service (see `mtroamd unit`).\n", socketPath)
+			}
 			return connectExitDaemonNotRunning
 		}
 		fmt.Fprintf(os.Stderr, "mtroamd connect: %v\n", err)
@@ -180,6 +232,90 @@ func runConnect(args []string) int {
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
 	return connectExitOK
+}
+
+// readAndDeleteEnvFile reads KEY=VAL lines (one per line; blank lines and
+// '#' comments skipped) into a map, then removes the file. The delete is
+// ALWAYS attempted (even on a parse error) so a staged secret file never
+// lingers on the host. A line without '=' or with an empty key is skipped
+// rather than failing the whole file. Values may contain '=' (only the
+// first splits KEY from VALUE), matching the sidecar's own env-file reader.
+func readAndDeleteEnvFile(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	// Best effort remove regardless of read outcome.
+	_ = os.Remove(path)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = val
+	}
+	return env, nil
+}
+
+// autoStartDaemon brings a down daemon back via its supervisor, then waits
+// for the IPC socket to accept connections. Returns:
+//
+//	started — the supervisor's Start was invoked successfully (so a
+//	          subsequent "not responding" is a startup crash, not "never ran")
+//	live    — the socket came up and is ready to dial
+//
+// Uses its own budget: starting + socket-binding (systemctl start /
+// launchctl bootstrap + cert load) can outlast a normal connect timeout.
+//
+// NOHUP EXCLUDED by design. `svcmgr.Detect` returns a real supervisor
+// (systemd-user / launchd — both idempotent + single-instance, launching
+// from the unit/plist's own config) OR the nohup fallback. We auto-start
+// only via a real supervisor: nohup.Start execs `serve` with hardcoded
+// default flags (`--addr 0.0.0.0:49820`), an unconsented public listener on
+// flags the operator never chose, and has no single-instance guard — a
+// live-but-momentarily-refusing daemon (ECONNREFUSED classed as
+// ErrDaemonNotRunning) would get a SECOND `serve` whose ipc.NewServer
+// unlinks + rebinds the live socket, orphaning the original's persistent
+// sessions. Nohup hosts get the strict error; the iOS installer's
+// persistence copy-window is their path to proper supervision. binPath is
+// unused by both real backends (they launch from the unit/plist).
+func autoStartDaemon(socketPath string) (started, live bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mgr := svcmgr.Detect(ctx)
+	if mgr.Name() == "nohup" {
+		return false, false
+	}
+	if err := mgr.Start(ctx, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "mtroamd connect: auto-start via %s failed: %v\n", mgr.Name(), err)
+		return false, false
+	}
+	return true, waitForSocket(ctx, socketPath, 10*time.Second)
+}
+
+// waitForSocket polls a unix socket until a dial succeeds or the budget /
+// context expires.
+func waitForSocket(ctx context.Context, path string, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		conn, err := net.DialTimeout("unix", path, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 // runStdioMode keeps the process running, speaking the mtRoam wire

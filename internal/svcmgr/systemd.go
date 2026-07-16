@@ -22,16 +22,23 @@ func (s *systemdUser) Available(ctx context.Context) bool {
 	if !commandExists("systemctl") {
 		return false
 	}
-	// The user-bus socket is what systemctl --user actually needs;
-	// pam_systemd creates it at login time. Without it, every
-	// systemctl --user invocation fails with "No such file or
-	// directory". Check existence rather than try-and-fail so
-	// Detect can fall back to nohup cleanly.
 	rd := userRuntimeDir()
 	if rd == "" {
 		return false
 	}
-	if _, err := os.Stat(rd + "/bus"); err != nil {
+	// Reachability signal = the systemd USER MANAGER's private control
+	// socket, NOT $XDG_RUNTIME_DIR/bus. `systemctl --user` talks to the
+	// manager over `.../systemd/private`; `/bus` is the D-Bus *session*
+	// bus, which a headless / SSH / lingering-headless login never
+	// creates. Gating on `/bus` reported a genuinely systemd-managed
+	// daemon (linger on, `systemctl --user is-active mtroamd` = active,
+	// but no `/bus`) as unmanaged → Detect fell back to nohup, so
+	// restart/update drove the wrong backend and doctor's linger/unit
+	// checks (gated on Name()=="systemd-user") were suppressed. The
+	// private socket exists iff the per-user manager is running — exactly
+	// the condition `systemctl --user` needs. Stat rather than try-and-
+	// fail so Detect can fall back to nohup cleanly.
+	if _, err := os.Stat(managerControlSocket(rd)); err != nil {
 		return false
 	}
 	// Last check: our unit must be installed in one of systemd's --user
@@ -175,4 +182,12 @@ func userRuntimeDir() string {
 	}
 	// pam_systemd's convention. Same value the iOS installer uses.
 	return fmt.Sprintf("/run/user/%d", os.Getuid())
+}
+
+// managerControlSocket is the systemd per-user manager's private control
+// socket under the runtime dir — the endpoint `systemctl --user` uses.
+// Present iff `user@<uid>.service` is running. Factored out so Available's
+// reachability gate is unit-testable against a temp runtime dir.
+func managerControlSocket(runtimeDir string) string {
+	return runtimeDir + "/systemd/private"
 }
