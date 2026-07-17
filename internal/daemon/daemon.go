@@ -705,11 +705,11 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		// already; surface it.
 		return errResponse(err)
 	}
-	// reused is nil for allocate paths that can't assert freshness (an
-	// AllocateExtension owns its own spawn/reattach decision), so the
-	// MTRM_SESSION_REUSED line is omitted and clients fall back to their
-	// conservative behavior. Copy to a local so &reused is stable.
-	reusedResp := reused
+	// reused is already a *bool: non-nil for the core PTY paths, nil for
+	// allocate paths that can't assert freshness (an AllocateExtension owns
+	// its own spawn/reattach decision). A nil Reused omits the
+	// MTRM_SESSION_REUSED line so clients fall back to their conservative
+	// behavior.
 
 	tok, err := d.registry.IssueAttachToken(sess.ID())
 	if err != nil {
@@ -741,7 +741,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		LoopbackTCPPort: loopbackPort,
 		CertFP:          d.certFP.String(),
 		Name:            sess.Name(),
-		Reused:          reusedResp,
+		Reused:          reused,
 	}
 }
 
