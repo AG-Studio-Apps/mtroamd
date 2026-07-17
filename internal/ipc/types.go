@@ -145,6 +145,17 @@ type AllocateResponse struct {
 	// request didn't supply one (see ipc/types.go AllocateRequest.Name).
 	Name string `cbor:"name,omitempty"`
 
+	// Reused reports whether this allocate resolved to an ALREADY-RUNNING
+	// session (true: by-id lookup or create-by-name that found a live
+	// session) or spawned a fresh shell (false). Pointer so absence is
+	// distinguishable from false: an older daemon simply never sets it,
+	// and `mtroamd connect` only emits the MTRM_SESSION_REUSED bootstrap
+	// line when it's present. iOS uses this to decide whether the shell
+	// already received --env-file at spawn (fresh) or needs a live
+	// injection pass (reused) - see the secret-profiles delivery flow.
+	// Additive/omitempty like Env: old peers drop the unknown key.
+	Reused *bool `cbor:"reused,omitempty"`
+
 	// On failure:
 	Err string `cbor:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty"`

@@ -121,6 +121,22 @@ MTRM_DAEMON_VERSION v0.4.0\n
 
 Forward-compat: clients MAY parse this line to surface a "daemon update available" affordance. Older daemons that don't emit it MUST be tolerated by absence - treat as version-unknown and skip the badge. Clients MUST NOT depend on this line for connect-success; the `MTRM_QUIC` line above is the only bootstrap-load-bearing output.
 
+#### Session reuse (optional, additive)
+
+`mtroamd connect` v1.7.6+ emits one more line on stdout after `MTRM_DAEMON_VERSION` (and, in `--stdio` mode, BEFORE the `MTRM_STDIO` handshake line, since everything after that line is raw wire bytes):
+
+```
+MTRM_SESSION_REUSED <0|1>\n
+```
+
+| Field | Format | Meaning |
+|---|---|---|
+| `MTRM_SESSION_REUSED` | literal | sentinel string |
+| `<0\|1>` | `1` | the allocate landed on an ALREADY-RUNNING session (by-id reattach, or create-by-name that found a live session) |
+| | `0` | the daemon spawned a fresh shell for this allocate |
+
+Purpose: `--env-file` env only applies on a real spawn, so `1` tells the client the shell predates any env it staged (a live injection pass is needed for delivery), while `0` means the fresh shell already inherited it. Same tolerance rules as `MTRM_DAEMON_VERSION`: absence (older daemon, or an older daemon process behind a newer binary) means "unknown" and clients MUST fall back conservatively; clients MUST NOT depend on this line for connect-success.
+
 ### 4.3 Stderr
 
 `mtroamd connect` may emit human-readable diagnostics on stderr. Stderr is for humans; the client SHOULD treat any stderr output as informational unless exit code is non-zero.
