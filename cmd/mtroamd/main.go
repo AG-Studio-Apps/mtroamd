@@ -52,6 +52,10 @@ func main() {
 		os.Exit(runStatus(args))
 	case "session-search":
 		os.Exit(runSessionSearch(args))
+	case "set-secrets":
+		os.Exit(runSetSecrets(args))
+	case "secret-exec":
+		os.Exit(runSecretExec(args))
 	case "doctor":
 		os.Exit(runDoctor(args))
 	case "update":
