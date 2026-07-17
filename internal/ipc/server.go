@@ -28,6 +28,8 @@ type Handler interface {
 	HandleRenameSession(ctx context.Context, req RenameSessionRequest) RenameSessionResponse
 	HandleStatus(ctx context.Context, req StatusRequest) StatusResponse
 	HandleSessionSearch(ctx context.Context, req SessionSearchRequest) SessionSearchResponse
+	HandleSetSessionSecrets(ctx context.Context, req SetSessionSecretsRequest) SetSessionSecretsResponse
+	HandleGetSecrets(ctx context.Context, req GetSecretsRequest) GetSecretsResponse
 }
 
 // Server listens on a Unix socket and dispatches incoming requests
@@ -388,6 +390,30 @@ func (s *Server) handle(ctx context.Context, conn *net.UnixConn) {
 		}
 		resp := s.handler.HandleSessionSearch(ctx, req)
 		resp.T = TypeSessionSearch
+		s.respond(conn, resp)
+	case TypeSetSessionSecrets:
+		req, err := DecodeSetSessionSecretsRequest(body)
+		if err != nil {
+			s.respond(conn, SetSessionSecretsResponse{
+				T: TypeSetSessionSecrets, Ok: false,
+				Err: ErrBadRequest, Msg: err.Error(),
+			})
+			return
+		}
+		resp := s.handler.HandleSetSessionSecrets(ctx, req)
+		resp.T = TypeSetSessionSecrets
+		s.respond(conn, resp)
+	case TypeGetSecrets:
+		req, err := DecodeGetSecretsRequest(body)
+		if err != nil {
+			s.respond(conn, GetSecretsResponse{
+				T: TypeGetSecrets, Ok: false,
+				Err: ErrBadRequest, Msg: err.Error(),
+			})
+			return
+		}
+		resp := s.handler.HandleGetSecrets(ctx, req)
+		resp.T = TypeGetSecrets
 		s.respond(conn, resp)
 	default:
 		s.respond(conn, AllocateResponse{

@@ -52,6 +52,43 @@ func (c *Client) Allocate(ctx context.Context, req AllocateRequest) (AllocateRes
 	return DecodeAllocateResponse(body)
 }
 
+// SetSessionSecrets pushes a session's full secret set to the broker.
+func (c *Client) SetSessionSecrets(ctx context.Context, req SetSessionSecretsRequest) (SetSessionSecretsResponse, error) {
+	req.T = TypeSetSessionSecrets
+	conn, err := c.dial(ctx)
+	if err != nil {
+		return SetSessionSecretsResponse{}, err
+	}
+	defer conn.Close()
+	if err := EncodeRequest(conn, req); err != nil {
+		return SetSessionSecretsResponse{}, fmt.Errorf("send: %w", err)
+	}
+	body, err := ReadFrame(conn)
+	if err != nil {
+		return SetSessionSecretsResponse{}, fmt.Errorf("recv: %w", err)
+	}
+	return DecodeSetSessionSecretsResponse(body)
+}
+
+// GetSecrets asks the broker for the env a command should be exec'd
+// with in a session. Used by `mtroamd secret-exec`.
+func (c *Client) GetSecrets(ctx context.Context, req GetSecretsRequest) (GetSecretsResponse, error) {
+	req.T = TypeGetSecrets
+	conn, err := c.dial(ctx)
+	if err != nil {
+		return GetSecretsResponse{}, err
+	}
+	defer conn.Close()
+	if err := EncodeRequest(conn, req); err != nil {
+		return GetSecretsResponse{}, fmt.Errorf("send: %w", err)
+	}
+	body, err := ReadFrame(conn)
+	if err != nil {
+		return GetSecretsResponse{}, fmt.Errorf("recv: %w", err)
+	}
+	return DecodeGetSecretsResponse(body)
+}
+
 // Ping sends a PingRequest and returns the response. Used for a
 // liveness probe before any real work.
 func (c *Client) Ping(ctx context.Context, nonce uint64) (PingResponse, error) {

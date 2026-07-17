@@ -59,6 +59,14 @@ func (h *echoHandler) HandleSessionSearch(_ context.Context, _ SessionSearchRequ
 	return SessionSearchResponse{Ok: true}
 }
 
+func (h *echoHandler) HandleSetSessionSecrets(_ context.Context, _ SetSessionSecretsRequest) SetSessionSecretsResponse {
+	return SetSessionSecretsResponse{Ok: true}
+}
+
+func (h *echoHandler) HandleGetSecrets(_ context.Context, req GetSecretsRequest) GetSecretsResponse {
+	return GetSecretsResponse{Ok: true, Env: map[string]string{req.Command: "echo"}}
+}
+
 func startServer(t *testing.T, h Handler) (*Server, string) {
 	t.Helper()
 	dir := tempDirWith0700(t)
