@@ -516,7 +516,7 @@ func TestDaemonAllocateReportsReused(t *testing.T) {
 	wantReused := func(t *testing.T, resp ipc.AllocateResponse, want bool, label string) {
 		t.Helper()
 		if resp.Reused == nil {
-			t.Fatalf("%s: Reused is nil, want %v", label, want)
+			t.Fatalf("%s: Reused is nil, want %v (core PTY allocates always report the bit)", label, want)
 		}
 		if *resp.Reused != want {
 			t.Errorf("%s: Reused = %v, want %v", label, *resp.Reused, want)

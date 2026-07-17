@@ -77,8 +77,8 @@ func TestAllocateExtension_ToyClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clock allocate: %v", err)
 	}
-	if reused {
-		t.Fatal("extension spawn reported reused=true; it creates a fresh session")
+	if reused != nil {
+		t.Fatal("extension spawn must report reused=nil (unknown); the core can't observe the extension's spawn/reattach choice")
 	}
 	if !sess.IsStreamBacked() {
 		t.Fatal("expected a stream-backed session from the extension")
