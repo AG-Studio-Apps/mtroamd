@@ -1057,29 +1057,65 @@ func (s *Session) AcquireClient(parent context.Context, mode AttachMode, clientI
 	// notifyReplaced hook does a network write (Goodbye{replaced})
 	// that can block on a dead peer's flow-control window — under
 	// s.mu that would wedge every session operation until the
-	// transport's write backstop fired. Synchronous on purpose:
-	// callers (and tests) rely on the displaced context being
-	// cancelled by the time Acquire returns. notify-before-cancel
-	// ordering is what lets the frame go out on a healthy stream.
+	// transport's write backstop fired.
+	//
+	// The notify is BOUNDED, not synchronous: the write is mutex-
+	// serialised against the displaced connection's output pump, and
+	// when that peer died without a FIN (app killed by an update, or
+	// the client's in-process tsnet node torn down in a recycle) the
+	// pump sits blocked mid-write into a full send buffer, holding the
+	// mutex indefinitely — an unbounded notify then stalls THIS Acquire,
+	// and with it the NEW attach's Ack, until the client's attach-ack
+	// timeout fires (device-observed: every post-recycle/post-install
+	// reattach paid a full timeout + retry cycle). A healthy displaced
+	// peer's Goodbye push completes in single-digit milliseconds. A
+	// live-but-backpressured peer (>1s of flow-control stall on a
+	// congested link) can miss its Goodbye and see a bare drop instead —
+	// deliberate: when it redials, the exclusive-if-free clientID rule
+	// lands it readonly with the Take Over affordance (different client)
+	// or silently reclaims its own slot (same client), so the loss is a
+	// softer banner, never an attach-war.
+	//
+	// Invariants preserved: notify-before-cancel (a completing notifier
+	// still finishes before its context is torn down, so the frame goes
+	// out on a healthy stream), and the displaced context is always
+	// cancelled by the time Acquire returns. The cancel tears the
+	// transport down, which unblocks the stuck pump write; an abandoned
+	// notifier's late writeFrame then fails fast and is discarded.
 	for _, c := range doomed {
 		if c.notifyReplaced != nil {
-			func() {
+			notified := make(chan struct{})
+			go func(notify func(), gen uint64) {
+				defer close(notified)
 				// A panicking notifier must not break the
 				// displacement chain for the remaining doomed
 				// clients (their cancel would never fire).
 				defer func() {
 					if r := recover(); r != nil {
 						slog.Warn("session: replaced-notifier panic",
-							"sid", s.ID().String(), "gen", c.gen, "panic", r)
+							"sid", s.ID().String(), "gen", gen, "panic", r)
 					}
 				}()
-				c.notifyReplaced()
-			}()
+				notify()
+			}(c.notifyReplaced, c.gen)
+			select {
+			case <-notified:
+			case <-time.After(replacedNotifyTimeout):
+				slog.Warn("session: replaced-notifier timed out — cancelling displaced client anyway",
+					"sid", s.ID().String(), "gen", c.gen)
+			}
 		}
 		c.cancel()
 	}
 	return ctx, gen, granted, err
 }
+
+// replacedNotifyTimeout bounds how long a displacement waits for the
+// Goodbye{replaced} push to a doomed client before cancelling it anyway.
+// Generous against a healthy peer (the push is a buffered write, done in
+// milliseconds) while keeping a dead peer's wedged output pump from
+// stalling the displacing attach's Ack (see AcquireClient).
+const replacedNotifyTimeout = 1 * time.Second
 
 // acquireLocked is Acquire's lock-holding core. It returns the
 // displaced clients (doomed) instead of cancelling them so the

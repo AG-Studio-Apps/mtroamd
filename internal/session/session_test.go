@@ -879,6 +879,45 @@ func TestReplacedNotifierFiresBeforeCancel(t *testing.T) {
 	}
 }
 
+func TestReplacedNotifierCannotStallDisplacingAcquire(t *testing.T) {
+	t.Parallel()
+	id, _ := NewSessionID()
+	pty := newFakePTY()
+	s, _ := NewSession(id, "", pty, 24, 80, 1024, 0)
+	defer s.Close()
+
+	firstCtx, gen1, _, err := s.Acquire(context.Background(), AttachExclusive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A notifier wedged forever — the real-world shape is a Goodbye push
+	// serialised behind an output pump blocked mid-write into a dead
+	// peer's full send buffer (app killed without FIN: update install,
+	// or the client's in-process tsnet node recycled). The displacing
+	// Acquire must NOT wait it out: pre-fix, the new attach's Ack sat
+	// behind this until the client's attach-ack timeout + retry.
+	release := make(chan struct{})
+	s.SetReplacedNotifier(gen1, func() {
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+
+	start := time.Now()
+	if _, _, _, err := s.Acquire(context.Background(), AttachExclusive); err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(start)
+	// Bounded by replacedNotifyTimeout (1s), with scheduling headroom —
+	// but nowhere near a wedged-forever wait.
+	if elapsed > replacedNotifyTimeout+2*time.Second {
+		t.Errorf("displacing Acquire stalled %v behind a wedged notifier (bound %v)",
+			elapsed, replacedNotifyTimeout)
+	}
+	if firstCtx.Err() == nil {
+		t.Error("displaced context not cancelled after bounded notify timed out")
+	}
+}
+
 func TestSetReplacedNotifierStaleGenIsNoop(t *testing.T) {
 	t.Parallel()
 	id, _ := NewSessionID()
