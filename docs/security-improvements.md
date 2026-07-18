@@ -10,6 +10,10 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
 
+## v1.7.6 (2026-07-18)
+
+_Pre-stable security audit of the `v1.7.5..v1.7.6` diff (bound the displaced-client `Goodbye` push at 1s; optional additive session-reuse reporting — `AllocateResponse.Reused` / the `MTRM_SESSION_REUSED` bootstrap line) plus a full static / binary / dependency scan; details + pre-stable gate in `.security/security-audit-v1.7.6.md`. **Clean — no findings, nothing to fix.** `go vet`, `govulncheck` (source + freshly rebuilt daemon+cli binaries on go1.26.5), `osv-scanner`, `gosec`, `staticcheck`, and `gitleaks` were all clean or prior-accepted; `go test -race` passed on the changed packages; and a focused adversarial re-attack (4 hypotheses — the bounded-notify goroutine/race/DoS, and whether the reuse bit feeds any authz or leaks cross-session) refuted every candidate. The notify bound is a DoS **reduction** (an unbounded write became ≤1s); the reuse bit is purely informational and feeds no authz decision. No Critical / High / Medium / Low. No dependency change (`go.mod`/`go.sum` unchanged). (The `wip/secret-broker` feature tagged out-of-band as `v1.7.6-rc3` is NOT in this release and will get its own review before it ships.)_
+
 ## v1.7.5 (2026-07-16)
 
 _Pre-stable security audit of the `v1.7.4..v1.7.5` diff (the `connect --env-file` session env-threading, auto-start-on-connect, and the systemd user-manager detection fix) plus a full static / binary / dependency scan; details + pre-stable gate in `.security/security-audit-v1.7.5.md`. **No findings — nothing to fix.** `go vet`, `govulncheck` (source + freshly rebuilt binaries on go1.26.5), `osv-scanner`, `gosec`, `staticcheck`, and `gitleaks` were all clean or prior-accepted, and a focused adversarial re-attack of the env-threading path (6 hypotheses) refuted every candidate boundary crossing. No Critical / High / Medium / Low. No dependency change (`go.mod`/`go.sum` unchanged)._
