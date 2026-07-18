@@ -113,12 +113,13 @@ func runSecretExec(args []string) int {
 	// Best-effort secret fetch. Every failure path here FALLS OPEN to a
 	// plain exec of the real command.
 	if sid := os.Getenv("MESHTERM_SESSION_ID"); sid != "" {
-		// 3s (not 1s): a same-host socket round-trip is sub-ms in steady
-		// state, but under daemon GC/load a 1s cap timed out and silently
-		// fell open (tool ran with no secret → intermittent auth failure).
-		// 3s tolerates a hiccup while still bounding a truly-hung daemon.
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		resp, gerr := ipc.NewClient(discoverClientSocketPath(), 3*time.Second).
+		// 2s: a same-host socket round-trip is sub-ms in steady state, so
+		// this only bites a slow/hung daemon. 1s was too tight (a GC pause
+		// falsely timed out and silently fell open → tool ran token-less);
+		// 3s made every shimmed command stall that long against a WEDGED
+		// daemon. 2s splits it - tolerates a GC hiccup, bounds a hang.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		resp, gerr := ipc.NewClient(discoverClientSocketPath(), 2*time.Second).
 			GetSecrets(ctx, ipc.GetSecretsRequest{SessionID: sid, Command: command})
 		cancel()
 		if gerr == nil && resp.Ok {
