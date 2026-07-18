@@ -83,8 +83,17 @@ func runSetSecrets(args []string) int {
 // unreachable, no secrets) falls through to exec-ing the real command
 // UNCHANGED, so a broker hiccup never breaks the user's command.
 func runSecretExec(args []string) int {
+	// Optional --shim-dir <dir> preceding the command: the generated shim
+	// passes it EXPLICITLY so we always know which dir to skip even if the
+	// MESHTERM_SHIM_DIR env was cleared (which would otherwise loop). Falls
+	// back to the env for a hand-run invocation.
+	shimDir := os.Getenv("MESHTERM_SHIM_DIR")
+	for len(args) >= 2 && args[0] == "--shim-dir" {
+		shimDir = args[1]
+		args = args[2:]
+	}
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "mtroamd secret-exec: usage: secret-exec <command> [-- args...]")
+		fmt.Fprintln(os.Stderr, "mtroamd secret-exec: usage: secret-exec [--shim-dir D] <command> [-- args...]")
 		return connectExitGenericError
 	}
 	command := args[0]
@@ -93,7 +102,6 @@ func runSecretExec(args []string) int {
 		cmdArgs = cmdArgs[1:]
 	}
 
-	shimDir := os.Getenv("MESHTERM_SHIM_DIR")
 	realPath, err := secret.ResolveReal(command, shimDir, os.Getenv("PATH"))
 	if err != nil {
 		// Can't even find the real command - surface it (this is not a
@@ -105,8 +113,12 @@ func runSecretExec(args []string) int {
 	// Best-effort secret fetch. Every failure path here FALLS OPEN to a
 	// plain exec of the real command.
 	if sid := os.Getenv("MESHTERM_SESSION_ID"); sid != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		resp, gerr := ipc.NewClient(discoverClientSocketPath(), time.Second).
+		// 3s (not 1s): a same-host socket round-trip is sub-ms in steady
+		// state, but under daemon GC/load a 1s cap timed out and silently
+		// fell open (tool ran with no secret → intermittent auth failure).
+		// 3s tolerates a hiccup while still bounding a truly-hung daemon.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		resp, gerr := ipc.NewClient(discoverClientSocketPath(), 3*time.Second).
 			GetSecrets(ctx, ipc.GetSecretsRequest{SessionID: sid, Command: command})
 		cancel()
 		if gerr == nil && resp.Ok {

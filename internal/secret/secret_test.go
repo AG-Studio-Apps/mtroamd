@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -86,14 +87,22 @@ func TestSyncShimsWritesAndPrunes(t *testing.T) {
 	if err := SyncShims(shimDir, "/opt/mtroamd", []string{"gh", "git"}); err != nil {
 		t.Fatal(err)
 	}
-	// Both shims exist, executable, and re-exec into secret-exec.
+	// Both shims exist, executable, and route through secret-exec with an
+	// EXPLICIT --shim-dir (so the shim dir is known even if the env is
+	// cleared) plus a fallback branch for a downgraded daemon.
 	for _, c := range []string{"gh", "git"} {
 		b, err := os.ReadFile(filepath.Join(shimDir, c))
 		if err != nil {
 			t.Fatalf("read shim %s: %v", c, err)
 		}
-		if want := "exec '/opt/mtroamd' secret-exec " + c + " -- \"$@\""; !contains(string(b), want) {
-			t.Errorf("shim %s body = %q, missing %q", c, b, want)
+		body := string(b)
+		// Pure `exec` (runs the command exactly once) with an explicit
+		// --shim-dir (closes the self-exec loop).
+		if want := "exec '/opt/mtroamd' secret-exec --shim-dir '" + shimDir + "' '" + c + "' -- \"$@\""; !strings.Contains(body, want) {
+			t.Errorf("shim %s body = %q, missing %q", c, body, want)
+		}
+		if strings.Contains(body, "for p in") || strings.Contains(body, "$PATH") {
+			t.Errorf("shim %s must have NO fallback loop (double-run risk): %q", c, body)
 		}
 		info, _ := os.Stat(filepath.Join(shimDir, c))
 		if info.Mode()&0o100 == 0 {
@@ -138,6 +147,13 @@ func TestResolveRealSkipsShimDir(t *testing.T) {
 	if _, err := ResolveReal("solo", shimDir, pathEnv); err == nil {
 		t.Error("expected not-found when only the shim exists")
 	}
+	// EMPTY shimDir must not error/loop: filepath.Clean("")=="." must not
+	// disable the skip in a way that mis-resolves. It skips nothing and
+	// returns the first PATH match (benign — the real shim always passes an
+	// explicit --shim-dir, so an empty value only reaches a direct call).
+	if _, err := ResolveReal("gh", "", pathEnv); err != nil {
+		t.Errorf("empty shimDir should still resolve without error, got %v", err)
+	}
 }
 
 func mustExec(t *testing.T, path string) {
@@ -147,13 +163,3 @@ func mustExec(t *testing.T, path string) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
-}
