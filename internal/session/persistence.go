@@ -93,6 +93,13 @@ type persistedSessionMeta struct {
 	// snapshots default to empty; the next observed OSC reconciles
 	// state. v1.1.5+ field.
 	LastTitle string `cbor:"last_title,omitempty"`
+
+	// HookInstalled snapshots Session.hookInstalled at save time so a
+	// reattach after a daemon restart reports the stored live-inject
+	// state on AllocateResponse.HookInstalled without a respawn.
+	// Pointer + omitempty so pre-hook snapshots round-trip as nil
+	// (unknown); the next lazy respawn reconciles the real value.
+	HookInstalled *bool `cbor:"hook,omitempty"`
 }
 
 // SaveTo writes the session's metadata + ring-buffer bytes to a
@@ -145,6 +152,7 @@ func (s *Session) SaveTo(parentDir string) error {
 		LastConsumedSidecarSeq: s.lastSidecarSeq,
 		AltScreenActive:        altActive,
 		LastTitle:              lastTitle,
+		HookInstalled:          s.hookInstalled,
 	}
 	s.mu.Unlock()
 
@@ -343,6 +351,7 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		persist:          meta.Persist,
 		lastSnapshotSeq:  meta.HeadSeq,
 		lastSidecarSeq:   meta.LastConsumedSidecarSeq,
+		hookInstalled:    meta.HookInstalled,
 		restoredFromDisk: true,
 		// Without this the wedge watcher is nil on restored sessions
 		// and every nil-guarded call site (Resize → ArmResize, Pump →

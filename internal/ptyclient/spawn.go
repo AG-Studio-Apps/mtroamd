@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,11 +103,15 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 
 	sockPath := filepath.Join(sessionDir, "sidecar.sock")
 	pidPath := filepath.Join(sessionDir, "sidecar.pid")
+	hookStatusPath := filepath.Join(sessionDir, ptysidecar.HookStatusFilename)
 	// Remove any stale socket from a previous crashed sidecar. The
 	// pidfile is gated by flock so we leave it alone — the sidecar's
 	// AcquirePidfile will return ErrPidfileLocked if a live owner
 	// still holds it.
 	_ = os.Remove(sockPath)
+	// Drop any stale hook-status from a previous sidecar so a failed
+	// re-seed reads as nil (unknown) rather than the old value.
+	_ = os.Remove(hookStatusPath)
 
 	// Write the env file. We build the same curated allowlist +
 	// defaults that pty.Spawn would have used in-process, then append
@@ -201,7 +206,33 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 	// that's fine.
 	_ = os.Remove(envPath)
 
-	return newConn(cfg.SessionID, sock, sidecarPID, logger), nil
+	conn := newConn(cfg.SessionID, sock, sidecarPID, logger)
+	// The sidecar writes the hook-status file BEFORE binding its
+	// listener, so a successful dial guarantees it is present (when the
+	// sidecar is hook-aware). Read it once and hang it on the Conn for
+	// the daemon to store on the session. A missing/garbled file → nil
+	// (unknown), the safe fallback.
+	conn.hookInstalled = readHookStatus(hookStatusPath)
+	return conn, nil
+}
+
+// readHookStatus reads the sidecar's hook-status file: "1" → *true,
+// "0" → *false, anything else (including a missing file) → nil.
+func readHookStatus(path string) *bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "1":
+		v := true
+		return &v
+	case "0":
+		v := false
+		return &v
+	default:
+		return nil
+	}
 }
 
 // dialWithBackoff polls the socket path until it's connectable or

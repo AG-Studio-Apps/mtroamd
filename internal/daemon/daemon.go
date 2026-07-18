@@ -360,7 +360,7 @@ func New(cfg Config) (*Daemon, error) {
 			// the ctx for the bounded 3 s dial-with-backoff, and a
 			// daemon-shutdown that races a fresh spawn will just
 			// see the sidecar disconnect cleanly via socket-close.
-			return ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
+			conn, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
 				SessionID:    sess.ID().String(),
 				Rows:         rows,
 				Cols:         cols,
@@ -370,6 +370,15 @@ func New(cfg Config) (*Daemon, error) {
 				Logger:       logger,
 				Stderr:       cfg.SidecarStderr,
 			})
+			if err != nil {
+				return nil, err
+			}
+			// A restored session's shell is respawned fresh here, so the
+			// hook is re-seeded: refresh the stored state to the value
+			// the new sidecar reported. A later allocate then reports the
+			// current truth rather than the pre-restart snapshot.
+			sess.SetHookInstalled(conn.HookInstalled())
+			return conn, nil
 		},
 	}
 
@@ -711,6 +720,18 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	// MTRM_SESSION_REUSED line so clients fall back to their conservative
 	// behavior.
 
+	// hookInstalled mirrors reused's nil-for-extension posture: for a
+	// core PTY spawn/reattach it is the session's stored live-inject
+	// state (set at spawn / lazy respawn, round-tripped through
+	// meta.cbor on a restored session); for an extension allocate it is
+	// nil (the extension owns its own spawn, so the core must not assert
+	// a hook state). reused != nil exactly distinguishes the core paths
+	// from the extension path here.
+	var hookInstalled *bool
+	if reused != nil {
+		hookInstalled = sess.HookInstalled()
+	}
+
 	tok, err := d.registry.IssueAttachToken(sess.ID())
 	if err != nil {
 		return ipc.AllocateResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
@@ -742,6 +763,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		CertFP:          d.certFP.String(),
 		Name:            sess.Name(),
 		Reused:          reused,
+		HookInstalled:   hookInstalled,
 	}
 }
 
@@ -1164,6 +1186,12 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// persist value.
 	persist := d.registry.ResolvePersist(req.Persist)
 	sess.SetPersist(persist)
+
+	// Record the sidecar's live-inject hook state on the session so it
+	// is persisted (meta.cbor) and surfaced on this + future allocates
+	// via AllocateResponse.HookInstalled. ptyHandle is the *ptyclient.Conn
+	// that carries the value the detached sidecar reported.
+	sess.SetHookInstalled(ptyHandle.HookInstalled())
 
 	if err := d.registry.Add(sess); err != nil {
 		_ = sess.Close()
