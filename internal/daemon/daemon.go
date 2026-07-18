@@ -218,12 +218,19 @@ func sessionExtraEnv(sess *session.Session) []string {
 // includes the dir). Caveat: a login shell that rebuilds PATH from
 // profile drops the prepend — adoption then needs one fresh
 // window/reconnect (the accepted mtRoam limitation).
-func shimSpawnEnv(stateDir, sid string) []string {
+func shimSpawnEnv(stateDir, sid, basePATH string) []string {
 	dir := filepath.Join(stateDir, "sessions", sid, "shims")
 	_ = os.MkdirAll(dir, 0o700)
+	// Prepend to the EFFECTIVE PATH: a user-supplied PATH (from
+	// --env-file) if present, else the daemon's. Prepending (not
+	// replacing) means a client that set PATH=$HOME/toolchain/bin:... in
+	// its env-file keeps those entries - the shim dir just goes first.
+	if basePATH == "" {
+		basePATH = os.Getenv("PATH")
+	}
 	return []string{
 		"MESHTERM_SHIM_DIR=" + dir,
-		"PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"PATH=" + dir + string(os.PathListSeparator) + basePATH,
 	}
 }
 
@@ -398,7 +405,7 @@ func New(cfg Config) (*Daemon, error) {
 				SessionID:    sess.ID().String(),
 				Rows:         rows,
 				Cols:         cols,
-				ExtraEnv:     append(sessionExtraEnv(sess), shimSpawnEnv(stateDir, sess.ID().String())...),
+				ExtraEnv:     append(sessionExtraEnv(sess), shimSpawnEnv(stateDir, sess.ID().String(), "")...),
 				StateDir:     stateDir,
 				DaemonBinary: daemonBinary,
 				Logger:       logger,
@@ -1216,8 +1223,9 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 			extraEnv = append(extraEnv, k+"="+req.Env[k])
 		}
 	}
-	// Shim env LAST so its PATH prepend wins over any user-supplied PATH.
-	extraEnv = append(extraEnv, shimSpawnEnv(d.stateDir, sid.String())...)
+	// Shim env LAST, prepending the shim dir to the user's PATH (req.Env
+	// PATH if set, else the daemon's) - so a client's custom PATH survives.
+	extraEnv = append(extraEnv, shimSpawnEnv(d.stateDir, sid.String(), req.Env["PATH"])...)
 	ptyHandle, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
 		SessionID:    sid.String(),
 		Shell:        req.Shell,

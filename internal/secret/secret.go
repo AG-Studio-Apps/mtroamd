@@ -199,16 +199,35 @@ func (s *Store) Commands(sid string) []string {
 	return out
 }
 
-// ShimScript renders the shim for one command. It re-execs into
-// `mtroamd secret-exec <command> -- "$@"`, which resolves the real
-// binary and injects the command's secrets. `daemonBinary` is an
-// ABSOLUTE path so the shim never depends on the shim dir being off
-// PATH to find mtroamd. Fail-open lives in secret-exec, not here.
-func ShimScript(daemonBinary, command string) string {
-	// command is ValidCommand-checked (no quotes/metachars), daemonBinary
-	// is the daemon's own resolved path; both are safe unquoted here, but
-	// single-quote the binary path defensively against spaces.
-	return "#!/bin/sh\nexec '" + daemonBinary + "' secret-exec " + command + " -- \"$@\"\n"
+// ShimScript renders the shim for one command: a pure `exec` into
+// `mtroamd secret-exec --shim-dir <dir> <command> -- "$@"`, which injects
+// the command's secrets and execs the real binary.
+//
+//   - `exec` (not a subprocess): secret-exec replaces THIS shim process,
+//     so the command runs exactly once. An earlier "run secret-exec then
+//     fall back" form double-executed the command (secret-exec ran it as a
+//     subprocess, returned, then the fallback ran it again) - caught in
+//     device testing; destructive for `git push` / `gh pr create`.
+//   - `--shim-dir` passes the shim dir EXPLICITLY (not just via the
+//     MESHTERM_SHIM_DIR env), so secret-exec always knows which dir to
+//     skip and can never resolve a command back to its own shim (the
+//     self-exec loop when the env var is cleared).
+//
+// Fail-open lives in secret-exec (it execs the real command even when it
+// can't fetch secrets), so under ANY current daemon a tool never breaks.
+// KNOWN limitation: if the daemon BINARY at this path is DOWNGRADED below
+// the broker version while a session persists with these shims, the old
+// binary rejects `secret-exec` (exit 2) and the shimmed command breaks
+// until the session is recreated. Accepted: rollback below the broker tag
+// is a rare explicit operator action, and a shell fallback to cover it
+// reintroduced the far-worse double-execution above.
+//
+// `daemonBinary`, `shimDir` and `command` are our own controlled values
+// (absolute path / ValidCommand basename), single-quoted defensively.
+func ShimScript(daemonBinary, shimDir, command string) string {
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	return "#!/bin/sh\nexec " + q(daemonBinary) + " secret-exec --shim-dir " +
+		q(shimDir) + " " + q(command) + ` -- "$@"` + "\n"
 }
 
 // SyncShims makes `dir` contain EXACTLY one 0755 shim per command in
@@ -228,7 +247,7 @@ func SyncShims(dir, daemonBinary string, commands []string) error {
 		}
 		want[c] = struct{}{}
 		path := filepath.Join(dir, c)
-		if err := os.WriteFile(path, []byte(ShimScript(daemonBinary, c)), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(ShimScript(daemonBinary, dir, c)), 0o755); err != nil {
 			return fmt.Errorf("secret: write shim %s: %w", c, err)
 		}
 	}
@@ -259,12 +278,21 @@ func ResolveReal(command, shimDir, pathEnv string) (string, error) {
 		// An explicit path was given; honor it verbatim.
 		return command, nil
 	}
-	shimDir = filepath.Clean(shimDir)
+	// Clean the shim dir ONLY when non-empty: filepath.Clean("") == ".",
+	// which would otherwise make the skip below match a "." PATH entry (or,
+	// worse, disable the skip and let a command resolve back to its own
+	// shim - the self-exec loop). Empty shimDir = "skip nothing"; the shim
+	// always passes a real --shim-dir, so the empty case is only a direct
+	// `secret-exec` invocation with no shim on PATH.
+	var cleanShim string
+	if shimDir != "" {
+		cleanShim = filepath.Clean(shimDir)
+	}
 	for _, dir := range filepath.SplitList(pathEnv) {
 		if dir == "" {
 			continue
 		}
-		if shimDir != "." && filepath.Clean(dir) == shimDir {
+		if cleanShim != "" && filepath.Clean(dir) == cleanShim {
 			continue // don't resolve back into the shim dir
 		}
 		candidate := filepath.Join(dir, command)
