@@ -68,14 +68,17 @@ func TestAllocateExtension_ToyClock(t *testing.T) {
 	}
 
 	// Unknown kind → rejected (the dispatch is inert without a registration).
-	if _, err := d.lookupOrCreateSession(ipc.AllocateRequest{Kind: "nope"}); err == nil {
+	if _, _, err := d.lookupOrCreateSession(ipc.AllocateRequest{Kind: "nope"}); err == nil {
 		t.Fatal("expected unknown allocate kind to error")
 	}
 
 	// Registered kind → dispatched to the toy extension.
-	sess, err := d.lookupOrCreateSession(ipc.AllocateRequest{Kind: "clock"})
+	sess, reused, err := d.lookupOrCreateSession(ipc.AllocateRequest{Kind: "clock"})
 	if err != nil {
 		t.Fatalf("clock allocate: %v", err)
+	}
+	if reused != nil {
+		t.Fatal("extension spawn must report reused=nil (unknown); the core can't observe the extension's spawn/reattach choice")
 	}
 	if !sess.IsStreamBacked() {
 		t.Fatal("expected a stream-backed session from the extension")

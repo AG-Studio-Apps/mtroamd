@@ -503,6 +503,75 @@ func TestDaemonReattachLooksUpExistingSession(t *testing.T) {
 	}
 }
 
+// TestDaemonAllocateReportsReused locks in the Reused bit across all
+// allocate outcomes: fresh spawns say false, any landing on an
+// already-running session says true. iOS keys its live secret-env
+// injection on this (a reused shell predates --env-file), so a wrong
+// or missing value here silently breaks that delivery decision.
+func TestDaemonAllocateReportsReused(t *testing.T) {
+	t.Parallel()
+	_, c, cleanup := startDaemon(t)
+	defer cleanup()
+
+	wantReused := func(t *testing.T, resp ipc.AllocateResponse, want bool, label string) {
+		t.Helper()
+		if resp.Reused == nil {
+			t.Fatalf("%s: Reused is nil, want %v (core PTY allocates always report the bit)", label, want)
+		}
+		if *resp.Reused != want {
+			t.Errorf("%s: Reused = %v, want %v", label, *resp.Reused, want)
+		}
+	}
+
+	// Fresh anonymous spawn → false.
+	first, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: "new",
+		Rows:      24, Cols: 80,
+		Shell: "/bin/sh",
+		Exec:  []string{"-c", "while true; do sleep 1; done"},
+	})
+	if err != nil || !first.Ok {
+		t.Fatalf("fresh allocate: %v %s %s", err, first.Err, first.Msg)
+	}
+	wantReused(t, first, false, "fresh spawn")
+
+	// Reattach by id → true.
+	byID, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: first.SessionID,
+	})
+	if err != nil || !byID.Ok {
+		t.Fatalf("by-id reattach: %v %s %s", err, byID.Err, byID.Msg)
+	}
+	wantReused(t, byID, true, "by-id reattach")
+
+	// Create-by-name with no existing session → fresh spawn → false.
+	named, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: "new",
+		Name:      "reused-bit",
+		Rows:      24, Cols: 80,
+		Shell:     "/bin/sh",
+		Exec:      []string{"-c", "while true; do sleep 1; done"},
+	})
+	if err != nil || !named.Ok {
+		t.Fatalf("named create: %v %s %s", err, named.Err, named.Msg)
+	}
+	wantReused(t, named, false, "create-by-name fresh")
+
+	// Same name again → lands on the live session → true.
+	renamed, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: "new",
+		Name:      "reused-bit",
+		Rows:      24, Cols: 80,
+	})
+	if err != nil || !renamed.Ok {
+		t.Fatalf("named reattach: %v %s %s", err, renamed.Err, renamed.Msg)
+	}
+	if renamed.SessionID != named.SessionID {
+		t.Fatalf("named reattach hit a different session")
+	}
+	wantReused(t, renamed, true, "create-by-name reattach")
+}
+
 // TestDaemonReattachUpdatesIdleTimeout reproduces the 2026-05-12
 // bug report: a user edited the iOS Keep-alive picker from 1h to
 // 30d, but the daemon's existing session kept its original 1h

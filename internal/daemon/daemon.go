@@ -699,12 +699,17 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	if msg := validateAllocateBounds(req); msg != "" {
 		return ipc.AllocateResponse{Ok: false, Err: ipc.ErrBadRequest, Msg: msg}
 	}
-	sess, err := d.lookupOrCreateSession(req)
+	sess, reused, err := d.lookupOrCreateSession(req)
 	if err != nil {
 		// lookupOrCreateSession returns the response-shaped error
 		// already; surface it.
 		return errResponse(err)
 	}
+	// reused is already a *bool: non-nil for the core PTY paths, nil for
+	// allocate paths that can't assert freshness (an AllocateExtension owns
+	// its own spawn/reattach decision). A nil Reused omits the
+	// MTRM_SESSION_REUSED line so clients fall back to their conservative
+	// behavior.
 
 	tok, err := d.registry.IssueAttachToken(sess.ID())
 	if err != nil {
@@ -736,6 +741,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		LoopbackTCPPort: loopbackPort,
 		CertFP:          d.certFP.String(),
 		Name:            sess.Name(),
+		Reused:          reused,
 	}
 }
 
@@ -969,7 +975,18 @@ func (d *Daemon) resolveSessionBySelector(sel string) (*session.Session, error) 
 //
 // Errors are wrapped in allocateErr so the caller can map them to
 // AllocateResponse fields.
-func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Session, error) {
+// lookupOrCreateSession resolves an allocate to a session. `reused`
+// reports which way it went: non-nil true when the request landed on an
+// already-running session (by-id lookup, or create-by-name that found
+// one), non-nil false for a fresh core PTY spawn. It is NIL (unknown)
+// for an extension allocate: an AllocateExtension owns its own
+// spawn-vs-reattach decision, which the core cannot observe, so it must
+// not assert freshness on the extension's behalf (a downstream agent
+// fork that resumes a running session would otherwise be mis-reported
+// as fresh). The value feeds AllocateResponse.Reused; nil omits the
+// MTRM_SESSION_REUSED line and clients fall back conservatively.
+func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (sess *session.Session, reused *bool, err error) {
+	reusedTrue, reusedFalse := true, false
 	if req.SessionID == "" || req.SessionID == "new" {
 		// Extension-handled allocate: a non-empty Kind routes to a
 		// registered AllocateExtension (downstream embedder). The core
@@ -977,9 +994,10 @@ func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Sessio
 		if req.Kind != "" {
 			ext, ok := d.allocateExts[req.Kind]
 			if !ok {
-				return nil, &allocateErr{Code: ipc.ErrBadRequest, Msg: "unknown allocate kind: " + req.Kind}
+				return nil, nil, &allocateErr{Code: ipc.ErrBadRequest, Msg: "unknown allocate kind: " + req.Kind}
 			}
-			return ext.Spawn(context.Background(), d.spawnEnv(), req)
+			sess, err = ext.Spawn(context.Background(), d.spawnEnv(), req)
+			return sess, nil, err
 		}
 		// Name-driven path: prefer reattach to an existing session
 		// with this name, fall back to spawn. Empty Name → plain
@@ -987,7 +1005,7 @@ func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Sessio
 		if req.Name != "" {
 			if sess, err := d.registry.LookupByName(req.Name); err == nil {
 				d.applyIdleTimeoutOnReattach(sess, req)
-				return sess, nil
+				return sess, &reusedTrue, nil
 			}
 			// Not found — fall through to spawn (which will use
 			// req.Name and may collide if the name was added
@@ -995,16 +1013,17 @@ func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Sessio
 			// race the spawn returns ErrNameInUse, which is
 			// surfaced verbatim).
 		}
-		return d.spawnSession(req)
+		sess, err = d.spawnSession(req)
+		return sess, &reusedFalse, err
 	}
 
 	sid, err := session.ParseSessionID(req.SessionID)
 	if err != nil {
-		return nil, &allocateErr{Code: ipc.ErrBadRequest, Msg: err.Error()}
+		return nil, nil, &allocateErr{Code: ipc.ErrBadRequest, Msg: err.Error()}
 	}
-	sess, err := d.registry.Lookup(sid)
+	sess, err = d.registry.Lookup(sid)
 	if err != nil {
-		return nil, &allocateErr{Code: ipc.ErrUnknownSession, Msg: err.Error()}
+		return nil, nil, &allocateErr{Code: ipc.ErrUnknownSession, Msg: err.Error()}
 	}
 	// Do NOT resize the PTY on reattach. iOS sends a Resize control
 	// frame after Attach with the actual terminal size; if we also
@@ -1018,7 +1037,7 @@ func (d *Daemon) lookupOrCreateSession(req ipc.AllocateRequest) (*session.Sessio
 	// (initial PTY size for new sessions). For reattach, the QUIC
 	// control-frame path is the single source of truth.
 	d.applyIdleTimeoutOnReattach(sess, req)
-	return sess, nil
+	return sess, &reusedTrue, nil
 }
 
 // applyIdleTimeoutOnReattach updates an existing session's idle

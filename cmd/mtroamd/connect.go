@@ -231,7 +231,29 @@ func runConnect(args []string) int {
 	// client strips any suffix before semver comparison).
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
+	printSessionReused(&resp)
+
 	return connectExitOK
+}
+
+// printSessionReused emits the optional MTRM_SESSION_REUSED bootstrap
+// line: 1 when the allocate landed on an already-running session, 0 for
+// a fresh spawn. Only printed when the daemon reported the bit (v1.7.6+;
+// an older daemon process behind a newer binary leaves it nil), so
+// clients can treat absence as "unknown" and fall back conservatively.
+// iOS uses this to decide whether a live env-injection pass is needed
+// (reused shell predates --env-file) or redundant (fresh spawn got it).
+// Both bootstrap modes emit it BEFORE their handshake line's wire
+// switch-over; line-scanning clients ignore unknown prefixes.
+func printSessionReused(resp *ipc.AllocateResponse) {
+	if resp.Reused == nil {
+		return
+	}
+	v := 0
+	if *resp.Reused {
+		v = 1
+	}
+	fmt.Printf("MTRM_SESSION_REUSED %d\n", v)
 }
 
 // readAndDeleteEnvFile reads KEY=VAL lines (one per line; blank lines and
@@ -344,6 +366,9 @@ func runStdioMode(resp *ipc.AllocateResponse) int {
 	}
 
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
+	// Must precede MTRM_STDIO: everything after that line is raw mtRoam
+	// wire bytes, so an appended line would corrupt the stream.
+	printSessionReused(resp)
 	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
 	os.Stdout.Sync()
 
