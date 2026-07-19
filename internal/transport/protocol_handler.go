@@ -220,18 +220,36 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// attaches.
 	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
 
-	// Footer re-emit: the status footer + the prompt's border block are
-	// event-driven (drawn once, not on every output frame like the spinner /
-	// conversation), so they age out of the recency-based replay window and a
-	// reattaching client rebuilds the screen WITHOUT them. Reconstruct the
-	// bottom rows from the ring and INJECT them into the output ring as real
-	// bytes BEFORE computing the window — so they're the newest content and ride
-	// the NORMAL replay (real seqs, no client/protocol change). Gated on the
-	// model staying FAITHFUL: vim/htop (scroll region / IL / DL) get nothing —
-	// they have no such footer and the model can't model their ops. The redraw
-	// is cursor-neutral (ESC7/ESC8), so other attached clients see only an
-	// idempotent in-place refresh of the bottom rows.
+	// Full-frame redraw (preferred): when a full-screen TUI is running and
+	// the live screen-model is faithful, inject the WHOLE synthesized clean
+	// frame and pin the replay window to start right before it (below), so
+	// the client replays ONLY the redraw — not the truncated raw byte tail
+	// it cannot reassemble into a 2-D screen. This is the fix for cold-start
+	// alt-screen spill: the daemon hands the client a complete screen, the
+	// way tmux/mosh do. fullRedrawStart marks the pre-inject head; the
+	// override after computeReplayWindow clamps `start` to it.
+	fullRedraw := false
+	var fullRedrawStart uint64
 	if altActive {
+		if start, ok := sess.InjectAltScreenRepaint(); ok {
+			fullRedraw = true
+			fullRedrawStart = start
+		}
+	}
+
+	// Footer re-emit (fallback): only when the full-model redraw didn't
+	// fire (model unfaithful / stale / not on the alt buffer). The status
+	// footer + the prompt's border block are event-driven (drawn once, not
+	// on every output frame like the spinner / conversation), so they age
+	// out of the recency-based replay window and a reattaching client
+	// rebuilds the screen WITHOUT them. Reconstruct the bottom rows from the
+	// ring and INJECT them as real bytes BEFORE computing the window — so
+	// they're the newest content and ride the NORMAL replay (real seqs, no
+	// client/protocol change). Gated on the reconstruct staying FAITHFUL:
+	// vim/htop (scroll region / IL / DL) get nothing — they have no such
+	// footer. The redraw is cursor-neutral (ESC7/ESC8), so other attached
+	// clients see only an idempotent in-place refresh of the bottom rows.
+	if altActive && !fullRedraw {
 		tail := buf.TailSeq()
 		if ring, _, _ := buf.ReadSince(tail, int(buf.HeadSeq()-tail)); len(ring) > 0 {
 			rows, cols := sess.WindowSize()
@@ -265,6 +283,23 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 
 	start, head, trunc := computeReplayWindow(
 		buf, att.AckSeq, att.ReplayBudget, altActive)
+
+	// When we injected a full-model redraw, replay ONLY it (plus any live
+	// PTY bytes that landed after): the synthesized frame IS the complete
+	// screen, so everything before it is redundant and the raw tail is
+	// unreassemblable. A frame is ATOMIC — a small ReplayBudget must never
+	// slice `start` into the middle of it (computeReplayWindow would pin
+	// start = head - capBytes, landing inside the frame and replaying a
+	// half-frame: garbage, worse than the bug we're fixing). So pin `start`
+	// to the pre-inject head whenever we injected, even when that EXTENDS
+	// the window past the budget cap: one frame is bounded (< a worst-case
+	// styled screen ≪ AltScreenReplayCap) and coherent. trunc stays true
+	// (pre-redraw output was intentionally skipped) — matching the existing
+	// alt-screen contract the client already handles (no scrollback to lose).
+	if fullRedraw && fullRedrawStart <= head {
+		start = fullRedrawStart
+		trunc = true
+	}
 
 	// Sync writes on the single stream — outputPump and the read
 	// pump's control responses (Pong, AttachAck etc.) both call
