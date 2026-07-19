@@ -1091,6 +1091,18 @@ func (s *Session) Resize(rows, cols uint16) error {
 // the model is unfaithful (unemulated op, or a sidecar gap marked it stale),
 // or the session is closed; the caller then falls back to today's footer +
 // raw replay, never worse than before.
+// ScreenState reports the live screen-model's diagnostic state: whether a
+// model exists, is on the alt buffer, and is faithful. For attach-path
+// logging only; racy by nature (Pump may feed between calls).
+func (s *Session) ScreenState() (has, alt, faithful bool) {
+	if s.screen == nil {
+		return false, false, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return true, s.screen.AltActive(), s.screen.Faithful()
+}
+
 func (s *Session) InjectAltScreenRepaint() (start uint64, ok bool) {
 	if s.screen == nil {
 		return 0, false

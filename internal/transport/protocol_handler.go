@@ -228,13 +228,28 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// alt-screen spill: the daemon hands the client a complete screen, the
 	// way tmux/mosh do. fullRedrawStart marks the pre-inject head; the
 	// override after computeReplayWindow clamps `start` to it.
+	// Gate the redraw on the client having a replay budget (budget-less CLI
+	// attaches keep full raw replay) and on the live screen-model's OWN
+	// authoritative alt+faithful check inside InjectAltScreenRepaint — NOT on
+	// the wedge heuristic (altActive), so a wedge miss can't suppress a redraw
+	// the model can serve.
 	fullRedraw := false
 	var fullRedrawStart uint64
-	if altActive {
+	if att.ReplayBudget > 0 {
+		hasScr, altScr, faithScr := sess.ScreenState()
 		if start, ok := sess.InjectAltScreenRepaint(); ok {
 			fullRedraw = true
 			fullRedrawStart = start
 		}
+		slog.Info("attach.altredraw",
+			"sid", sess.ID().String(),
+			"budget", att.ReplayBudget,
+			"wedgeAlt", altActive,
+			"modelHas", hasScr,
+			"modelAlt", altScr,
+			"modelFaithful", faithScr,
+			"injected", fullRedraw,
+			"start", fullRedrawStart)
 	}
 
 	// Footer re-emit (fallback): only when the full-model redraw didn't
