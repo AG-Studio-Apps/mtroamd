@@ -388,6 +388,27 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 	// stay silenced until the next user-driven alt-screen toggle.
 	// Bug A in the v1.1.2 release notes.
 	s.wedge.SetAltScreenActive(meta.AltScreenActive)
+	// Seed the live screen-model from the restored ring so a session that
+	// survives a daemon restart (upgrade / reboot) serves a CLEAN redraw on
+	// the first reattach instead of spilling until the app happens to repaint.
+	// The original ?1049h alt-enter is long evicted from the resumed live
+	// stream, so synthesize it from the persisted alt-screen flag, then replay
+	// the ring content (logical order via ReadSince, NOT the unordered raw
+	// scrollBytes) to rebuild the grid — a full-screen app repaints the whole
+	// screen continuously, so the recent ring covers it. We do NOT mark it
+	// stale: this is the same ring-reconstruction the footer path already
+	// trusts, and if it can't reach a faithful alt state the attach just falls
+	// back to raw replay, never worse. No double-feed with Pump: the sidecar
+	// resumes from the committed seq (past the ring head), so live bytes land
+	// after this seed.
+	if hs, ts := buf.HeadSeq(), buf.TailSeq(); hs > ts {
+		if ring, _, _ := buf.ReadSince(ts, int(hs-ts)); len(ring) > 0 {
+			if meta.AltScreenActive {
+				s.screen.Feed([]byte("\x1b[?1049h"))
+			}
+			s.screen.Feed(ring)
+		}
+	}
 	// Same rationale for the OSC title tracker — the title-setting
 	// OSC may have been evicted from the ring before this load. Seed
 	// from the persisted snapshot so AttachAck.LastTitle returns the
