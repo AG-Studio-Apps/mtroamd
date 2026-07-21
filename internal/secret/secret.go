@@ -13,6 +13,7 @@
 package secret
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -53,7 +54,7 @@ type Payload struct {
 // rather than silently dropping, so the client learns its bug.
 func ParsePayload(data []byte) (Payload, error) {
 	var p Payload
-	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&p); err != nil {
 		return Payload{}, fmt.Errorf("secret: decode payload: %w", err)
@@ -222,12 +223,26 @@ func (s *Store) Commands(sid string) []string {
 // is a rare explicit operator action, and a shell fallback to cover it
 // reintroduced the far-worse double-execution above.
 //
-// `daemonBinary`, `shimDir` and `command` are our own controlled values
-// (absolute path / ValidCommand basename), single-quoted defensively.
-func ShimScript(daemonBinary, shimDir, command string) string {
+// `daemonBinary`, `shimDir`, `socketPath` and `command` are our own
+// controlled values (absolute paths / ValidCommand basename),
+// single-quoted defensively.
+//
+// `--socket` pins the DAEMON'S OWN socket path into the shim: secret-exec
+// runs inside the session's curated env (pty.BuildEnv allowlist), which
+// strips XDG_RUNTIME_DIR - so path DISCOVERY there would miss a daemon
+// bound to $XDG_RUNTIME_DIR/mtroamd.sock and silently fail open on every
+// command (tool runs token-less with no error; review finding). The
+// daemon knows exactly where it is listening; the shim should never have
+// to guess. Empty socketPath (tests / non-daemon callers) omits the flag
+// and secret-exec falls back to discovery.
+func ShimScript(daemonBinary, shimDir, socketPath, command string) string {
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	sock := ""
+	if socketPath != "" {
+		sock = " --socket " + q(socketPath)
+	}
 	return "#!/bin/sh\nexec " + q(daemonBinary) + " secret-exec --shim-dir " +
-		q(shimDir) + " " + q(command) + ` -- "$@"` + "\n"
+		q(shimDir) + sock + " " + q(command) + ` -- "$@"` + "\n"
 }
 
 // SyncShims makes `dir` contain EXACTLY one 0755 shim per command in
@@ -236,7 +251,7 @@ func ShimScript(daemonBinary, shimDir, command string) string {
 // a mid-session command-list change adds/removes shims live — PATH
 // already includes dir (set at spawn), so a newly-written shim is found
 // on the next lookup with no restart.
-func SyncShims(dir, daemonBinary string, commands []string) error {
+func SyncShims(dir, daemonBinary, socketPath string, commands []string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("secret: mkdir shim dir: %w", err)
 	}
@@ -247,7 +262,7 @@ func SyncShims(dir, daemonBinary string, commands []string) error {
 		}
 		want[c] = struct{}{}
 		path := filepath.Join(dir, c)
-		if err := os.WriteFile(path, []byte(ShimScript(daemonBinary, dir, c)), 0o755); err != nil {
+		if err := os.WriteFile(path, []byte(ShimScript(daemonBinary, dir, socketPath, c)), 0o755); err != nil {
 			return fmt.Errorf("secret: write shim %s: %w", c, err)
 		}
 	}

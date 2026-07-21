@@ -208,25 +208,50 @@ func sessionExtraEnv(sess *session.Session) []string {
 	return sessionExtraEnvForID(sess.ID())
 }
 
+// sessionShimDir is the ONE place the per-session PATH-shadow shim
+// directory layout is defined; shimSpawnEnv (spawn-time PATH) and
+// Daemon.shimDirFor (SyncShims target) both derive from it so the two
+// can never drift apart (a drift = spawn PATH pointing at a dir SyncShims
+// never populates, secrets silently undelivered).
+func sessionShimDir(stateDir, sid string) string {
+	return filepath.Join(stateDir, "sessions", sid, "shims")
+}
+
+// defaultSpawnPATH seeds the child's PATH only when the daemon itself has
+// an empty/unset PATH (a bare process launched from a stripped env).
+// Without it the emitted PATH would collapse to "<shimdir>:" — shim dir
+// plus an empty (=cwd) element — and every command in every session
+// would stop resolving (review finding). Mirrors the conventional
+// login(1)/systemd default.
+const defaultSpawnPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 // shimSpawnEnv returns the ExtraEnv additions that put a session's
-// PATH-shadow shim dir FIRST on PATH and export MESHTERM_SHIM_DIR, and
-// ensures the dir exists (empty until the first SetSessionSecrets writes
-// shims). Prepending to os.Getenv("PATH") matches pty.BuildEnv's
-// baseline (PATH is allowlisted) plus the shim dir, so it never gives a
-// worse PATH than the child would otherwise get. Added on EVERY spawn so
-// a later SetSessionSecrets takes effect with no respawn (PATH already
-// includes the dir). Caveat: a login shell that rebuilds PATH from
-// profile drops the prepend — adoption then needs one fresh
-// window/reconnect (the accepted mtRoam limitation).
+// PATH-shadow shim dir FIRST on PATH and export MESHTERM_SHIM_DIR. The
+// dir itself is created lazily by SyncShims on the first SetSessionSecrets
+// (a missing PATH entry is harmless — shells skip it — so the spawn hot
+// path takes no mkdir syscall). Prepending to os.Getenv("PATH") matches
+// pty.BuildEnv's baseline (PATH is allowlisted) plus the shim dir, so it
+// never gives a worse PATH than the child would otherwise get. Added on
+// EVERY spawn so a later SetSessionSecrets takes effect with no respawn
+// (PATH already includes the dir). Caveats: a login shell that rebuilds
+// PATH from profile drops the prepend — adoption then needs one fresh
+// window/reconnect (the accepted mtRoam limitation). And a daemon-restart
+// RESPAWN passes basePATH="" (the original --env-file env, PATH included,
+// was consumed at spawn and is not persisted), so a custom toolchain PATH
+// from the env-file is absent until the client reconnects and re-stages —
+// the same accepted daemon-restart trade as the RAM secret store.
 func shimSpawnEnv(stateDir, sid, basePATH string) []string {
-	dir := filepath.Join(stateDir, "sessions", sid, "shims")
-	_ = os.MkdirAll(dir, 0o700)
+	dir := sessionShimDir(stateDir, sid)
 	// Prepend to the EFFECTIVE PATH: a user-supplied PATH (from
-	// --env-file) if present, else the daemon's. Prepending (not
-	// replacing) means a client that set PATH=$HOME/toolchain/bin:... in
-	// its env-file keeps those entries - the shim dir just goes first.
+	// --env-file) if present, else the daemon's, else a sane default.
+	// Prepending (not replacing) means a client that set
+	// PATH=$HOME/toolchain/bin:... in its env-file keeps those entries -
+	// the shim dir just goes first.
 	if basePATH == "" {
 		basePATH = os.Getenv("PATH")
+	}
+	if basePATH == "" {
+		basePATH = defaultSpawnPATH
 	}
 	return []string{
 		"MESHTERM_SHIM_DIR=" + dir,
@@ -817,7 +842,7 @@ func (d *Daemon) HandlePing(ctx context.Context, req ipc.PingRequest) ipc.PingRe
 // session's own state dir so it's cleaned up with the session and stays
 // 0700/uid-private.
 func (d *Daemon) shimDirFor(sid string) string {
-	return filepath.Join(d.stateDir, "sessions", sid, "shims")
+	return sessionShimDir(d.stateDir, sid)
 }
 
 // HandleSetSessionSecrets stores a session's full secret set in memory
@@ -850,12 +875,13 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 	}
 	sidStr := sid.String()
 	d.secrets.SetSession(sidStr, payload)
-	if err := secret.SyncShims(d.shimDirFor(sidStr), d.daemonBinary, d.secrets.Commands(sidStr)); err != nil {
+	cmds := d.secrets.Commands(sidStr)
+	if err := secret.SyncShims(d.shimDirFor(sidStr), d.daemonBinary, d.IPCSocketPath(), cmds); err != nil {
 		d.logger.Warn("secret.shims.sync_failed", "session", sidStr, "err", err.Error())
 		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
 	}
 	d.logger.Info("secret.set", "session", sidStr,
-		"keys", len(payload.Secrets), "commands", len(d.secrets.Commands(sidStr)))
+		"keys", len(payload.Secrets), "commands", len(cmds))
 	return ipc.SetSessionSecretsResponse{Ok: true}
 }
 

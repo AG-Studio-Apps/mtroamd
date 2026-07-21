@@ -84,12 +84,14 @@ func TestStoreSetReplacesAndEmptyClears(t *testing.T) {
 func TestSyncShimsWritesAndPrunes(t *testing.T) {
 	dir := t.TempDir()
 	shimDir := filepath.Join(dir, "shims")
-	if err := SyncShims(shimDir, "/opt/mtroamd", []string{"gh", "git"}); err != nil {
+	if err := SyncShims(shimDir, "/opt/mtroamd", "/run/user/1000/mtroamd.sock", []string{"gh", "git"}); err != nil {
 		t.Fatal(err)
 	}
 	// Both shims exist, executable, and route through secret-exec with an
 	// EXPLICIT --shim-dir (so the shim dir is known even if the env is
-	// cleared) plus a fallback branch for a downgraded daemon.
+	// cleared) and the daemon's pinned --socket (session env has no
+	// XDG_RUNTIME_DIR for discovery). NO fallback branch: the earlier
+	// downgrade-fallback form double-executed the command.
 	for _, c := range []string{"gh", "git"} {
 		b, err := os.ReadFile(filepath.Join(shimDir, c))
 		if err != nil {
@@ -97,8 +99,8 @@ func TestSyncShimsWritesAndPrunes(t *testing.T) {
 		}
 		body := string(b)
 		// Pure `exec` (runs the command exactly once) with an explicit
-		// --shim-dir (closes the self-exec loop).
-		if want := "exec '/opt/mtroamd' secret-exec --shim-dir '" + shimDir + "' '" + c + "' -- \"$@\""; !strings.Contains(body, want) {
+		// --shim-dir (closes the self-exec loop) and pinned --socket.
+		if want := "exec '/opt/mtroamd' secret-exec --shim-dir '" + shimDir + "' --socket '/run/user/1000/mtroamd.sock' '" + c + "' -- \"$@\""; !strings.Contains(body, want) {
 			t.Errorf("shim %s body = %q, missing %q", c, body, want)
 		}
 		if strings.Contains(body, "for p in") || strings.Contains(body, "$PATH") {
@@ -110,7 +112,7 @@ func TestSyncShimsWritesAndPrunes(t *testing.T) {
 		}
 	}
 	// A narrowed set prunes the dropped shim (git removed).
-	if err := SyncShims(shimDir, "/opt/mtroamd", []string{"gh"}); err != nil {
+	if err := SyncShims(shimDir, "/opt/mtroamd", "/run/user/1000/mtroamd.sock", []string{"gh"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(shimDir, "git")); !os.IsNotExist(err) {

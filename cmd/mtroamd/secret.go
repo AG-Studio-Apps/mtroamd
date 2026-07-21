@@ -26,13 +26,19 @@ func runSetSecrets(args []string) int {
 	timeout := fs.Duration("timeout", 5*time.Second, "max time to wait for the daemon")
 	_ = fs.Parse(args)
 
+	// Delete the staged file BEFORE any validation exit: the always-delete
+	// guarantee must hold even when the client botched --session (review
+	// finding — the early return left the 0600 plaintext on disk forever).
+	var data []byte
+	var readErr error
+	if *file != "" {
+		data, readErr = os.ReadFile(*file)
+		_ = os.Remove(*file) // always delete a staged secret file
+	}
 	if *session == "" || *file == "" {
 		fmt.Fprintln(os.Stderr, "mtroamd set-secrets: --session and --file are required")
 		return connectExitGenericError
 	}
-
-	data, readErr := os.ReadFile(*file)
-	_ = os.Remove(*file) // always delete a staged secret file
 	if readErr != nil {
 		fmt.Fprintln(os.Stderr, "mtroamd set-secrets: read file:", readErr)
 		return connectExitGenericError
@@ -88,12 +94,26 @@ func runSecretExec(args []string) int {
 	// MESHTERM_SHIM_DIR env was cleared (which would otherwise loop). Falls
 	// back to the env for a hand-run invocation.
 	shimDir := os.Getenv("MESHTERM_SHIM_DIR")
-	for len(args) >= 2 && args[0] == "--shim-dir" {
-		shimDir = args[1]
-		args = args[2:]
+	socketPath := ""
+	for len(args) >= 2 {
+		if args[0] == "--shim-dir" {
+			shimDir = args[1]
+			args = args[2:]
+			continue
+		}
+		// --socket: the daemon pins its own socket path into the shim at
+		// SyncShims time. Discovery here would run under the session's
+		// curated env (no XDG_RUNTIME_DIR), missing a daemon bound to
+		// $XDG_RUNTIME_DIR/mtroamd.sock and silently failing open.
+		if args[0] == "--socket" {
+			socketPath = args[1]
+			args = args[2:]
+			continue
+		}
+		break
 	}
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "mtroamd secret-exec: usage: secret-exec [--shim-dir D] <command> [-- args...]")
+		fmt.Fprintln(os.Stderr, "mtroamd secret-exec: usage: secret-exec [--shim-dir D] [--socket S] <command> [-- args...]")
 		return connectExitGenericError
 	}
 	command := args[0]
@@ -104,10 +124,14 @@ func runSecretExec(args []string) int {
 
 	realPath, err := secret.ResolveReal(command, shimDir, os.Getenv("PATH"))
 	if err != nil {
-		// Can't even find the real command - surface it (this is not a
-		// broker failure; the command genuinely isn't on PATH).
-		fmt.Fprintf(os.Stderr, "mtroamd secret-exec: %v\n", err)
-		return connectExitGenericError
+		// The command genuinely isn't installed (a declared "Used by"
+		// command with no real binary still gets a shim, so the shell
+		// found US instead of nothing). Mimic the shell's own report and
+		// exit 127 — a broker-flavored error here reads as a broker bug
+		// when the actual situation is plain "not installed" (review
+		// finding).
+		fmt.Fprintf(os.Stderr, "%s: command not found\n", command)
+		return 127
 	}
 
 	// Best-effort secret fetch. Every failure path here FALLS OPEN to a
@@ -118,8 +142,11 @@ func runSecretExec(args []string) int {
 		// falsely timed out and silently fell open → tool ran token-less);
 		// 3s made every shimmed command stall that long against a WEDGED
 		// daemon. 2s splits it - tolerates a GC hiccup, bounds a hang.
+		if socketPath == "" {
+			socketPath = discoverClientSocketPath()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		resp, gerr := ipc.NewClient(discoverClientSocketPath(), 2*time.Second).
+		resp, gerr := ipc.NewClient(socketPath, 2*time.Second).
 			GetSecrets(ctx, ipc.GetSecretsRequest{SessionID: sid, Command: command})
 		cancel()
 		if gerr == nil && resp.Ok {
