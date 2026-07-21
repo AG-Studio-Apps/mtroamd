@@ -76,10 +76,16 @@ type seedResult struct {
 	env           []string
 	hookInstalled bool
 	// shimReady is whether the broker shim dir is guaranteed on the
-	// shell's LIVE PATH: true when we seeded a rcfile that re-asserts it
-	// (bash/zsh) OR the shell is non-login (spawn-env PATH survives, no
-	// rebuild); false for a login shell we couldn't re-assert into
-	// (dash/sh/unknown), where a profile rebuild could drop it.
+	// shell's LIVE PATH. Deliberately CONSERVATIVE - a false "ready"
+	// would suppress the iOS regenerate warning, the worse error - so
+	// true ONLY when guaranteed: seedBash (its --rcfile sources profile
+	// THEN re-asserts, covering login+non-login) always true; every
+	// other shell is true only when NON-login (the spawn-env PATH
+	// survives with no profile rebuild). A LOGIN dash/sh/zsh/unknown we
+	// can't fully re-assert into reports false, so a login shell whose
+	// profile does NOT actually touch PATH warns spuriously - accepted
+	// as the safe direction. The primary target (a PRE-broker session)
+	// reports nil via an absent status file / meta, independent of this.
 	shimReady bool
 }
 
@@ -217,7 +223,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 // Both login and non-login work: ZDOTDIR redirects every startup-file
 // lookup, so we don't touch the shell's args (login stays login).
 func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
-	benign, _ := classifyShellArgs(args)
+	benign, login := classifyShellArgs(args)
 	if !benign {
 		return orig
 	}
@@ -276,7 +282,12 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
-		shimReady:     true,
+		// Only a NON-login zsh is guaranteed: our .zshrc re-asserts the
+		// shim, but a login zsh reads ~/.zlogin AFTER .zshrc (and after we
+		// restored ZDOTDIR, so it's the user's, un-re-asserted), which can
+		// rebuild PATH and drop the shim (review finding). Bias uncertain
+		// toward "warn" - a false "ready" would SUPPRESS a needed warning.
+		shimReady: !login,
 	}
 }
 
