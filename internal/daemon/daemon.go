@@ -464,6 +464,11 @@ func New(cfg Config) (*Daemon, error) {
 			// the new sidecar reported. A later allocate then reports the
 			// current truth rather than the pre-restart snapshot.
 			sess.SetHookInstalled(conn.HookInstalled())
+			// This respawn ran shimSpawnEnv, so the new shell has the
+			// broker shim dir on PATH: a pre-broker session that respawns
+			// here becomes broker-ready.
+			shimReady := true
+			sess.SetShimReady(&shimReady)
 			return conn, nil
 		},
 	}
@@ -814,8 +819,10 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	// a hook state). reused != nil exactly distinguishes the core paths
 	// from the extension path here.
 	var hookInstalled *bool
+	var shimReady *bool
 	if reused != nil {
 		hookInstalled = sess.HookInstalled()
+		shimReady = sess.ShimReady()
 	}
 
 	tok, err := d.registry.IssueAttachToken(sess.ID())
@@ -850,6 +857,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		Name:            sess.Name(),
 		Reused:          reused,
 		HookInstalled:   hookInstalled,
+		ShimReady:       shimReady,
 		BootID:          d.bootID,
 	}
 }
@@ -1360,6 +1368,10 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// via AllocateResponse.HookInstalled. ptyHandle is the *ptyclient.Conn
 	// that carries the value the detached sidecar reported.
 	sess.SetHookInstalled(ptyHandle.HookInstalled())
+	// This fresh spawn ran shimSpawnEnv (extraEnv above), so the shell
+	// has the broker shim dir on PATH - mark it ready + persist.
+	shimReady := true
+	sess.SetShimReady(&shimReady)
 
 	if err := d.registry.Add(sess); err != nil {
 		_ = sess.Close()

@@ -242,6 +242,15 @@ type AllocateResponse struct {
 	// set). Additive/omitempty: old peers drop the unknown key.
 	BootID string `cbor:"boot_id,omitempty"`
 
+	// ShimReady reports whether the session's shell has the secret-broker
+	// PATH-shadow shim dir on PATH (spawned by a v1.7.8-rc1+ daemon), so a
+	// brokered `set-secrets` would actually reach its tools. Pointer:
+	// nil = unknown (pre-broker spawn) → the client warns the user to
+	// regenerate the session before a hidden secret can take effect;
+	// *true = ready. `mtroamd connect` emits it as MTRM_SHIM_READY.
+	// Additive/omitempty like Reused: old peers drop the unknown key.
+	ShimReady *bool `cbor:"shim_ready,omitempty"`
+
 	// On failure:
 	Err string `cbor:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty"`

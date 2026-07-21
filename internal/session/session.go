@@ -280,6 +280,19 @@ type Session struct {
 	// bootstrap line. Guarded by s.mu.
 	hookInstalled *bool
 
+	// shimReady records whether this session's shell was spawned with
+	// the secret-broker PATH-shadow shim dir on its PATH (shimSpawnEnv,
+	// present since v1.7.8-rc1). Tri-state via pointer: nil = unknown
+	// (spawned by a pre-broker daemon, or never reported) → a brokered
+	// secret would NOT reach this shell's tools until it is regenerated;
+	// *true = the shim dir is on PATH so `set-secrets` reaches the tools.
+	// Set true at spawn + lazy respawn (both call shimSpawnEnv); persisted
+	// in meta.cbor so a reattach after a daemon restart reports the stored
+	// value. HandleAllocate surfaces it as AllocateResponse.ShimReady →
+	// the MTRM_SHIM_READY bootstrap line, so iOS can warn "regenerate this
+	// session for hidden secrets to take effect". Guarded by s.mu.
+	shimReady *bool
+
 	// restoredFromDisk is true when this Session was hydrated from
 	// on-disk state at daemon startup (LoadPersisted), rather than
 	// freshly spawned. Cleared the first time a client successfully
@@ -504,6 +517,25 @@ func (s *Session) HookInstalled() *bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.hookInstalled
+}
+
+// SetShimReady records whether this session's shell was spawned with the
+// secret-broker shim dir on PATH. The daemon calls it true at spawn and
+// on each lazy respawn (both run shimSpawnEnv). nil marks it unknown.
+func (s *Session) SetShimReady(v *bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.shimReady = v
+}
+
+// ShimReady reports whether a brokered secret would reach this shell's
+// tools (shim dir on PATH). nil = unknown (pre-broker spawn; regenerate
+// the session); *true = ready. Read by HandleAllocate on spawn + reattach
+// to fill AllocateResponse.ShimReady.
+func (s *Session) ShimReady() *bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shimReady
 }
 
 // RestoredFromDisk reports whether this session was reconstructed

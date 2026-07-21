@@ -27,6 +27,12 @@ func allocSession(t *testing.T, c *ipc.Client) string {
 	if len(resp.BootID) != 16 {
 		t.Errorf("allocate BootID = %q, want 16 hex chars", resp.BootID)
 	}
+	// A freshly-spawned session ran shimSpawnEnv, so it is shim-ready:
+	// iOS relies on this to NOT warn "regenerate the session" for a
+	// session that can actually receive a brokered secret.
+	if resp.ShimReady == nil || !*resp.ShimReady {
+		t.Errorf("fresh allocate ShimReady = %v, want *true", resp.ShimReady)
+	}
 	return resp.SessionID
 }
 
