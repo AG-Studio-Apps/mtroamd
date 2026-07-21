@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -248,6 +249,29 @@ func BuildEnv(extra []string) []string {
 		env = append(env, "LANG=C.UTF-8")
 	}
 	env = append(env, extra...)
+	// Dedupe by key, LAST occurrence wins. execve(2) happily passes
+	// duplicate keys through, and a shell child resolves them last-wins -
+	// but glibc getenv() is FIRST-match, so a direct non-shell child
+	// (agent tool, runtime) would read the first PATH= (allowlist or a
+	// client req.Env PATH) and never see the shim-dir PATH appended
+	// later, silently bypassing the secret broker (review finding).
+	// Last-wins matches what shells already did, so nothing else changes.
+	lastIdx := make(map[string]int, len(env))
+	for i, e := range env {
+		if eq := strings.IndexByte(e, '='); eq > 0 {
+			lastIdx[e[:eq]] = i
+		}
+	}
+	if len(lastIdx) < len(env) {
+		deduped := env[:0]
+		for i, e := range env {
+			if eq := strings.IndexByte(e, '='); eq > 0 && lastIdx[e[:eq]] != i {
+				continue
+			}
+			deduped = append(deduped, e)
+		}
+		env = deduped
+	}
 	return env
 }
 

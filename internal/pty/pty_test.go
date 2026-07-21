@@ -66,6 +66,27 @@ func TestBuildEnvSetsDefaultsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestBuildEnvDedupesLastWins(t *testing.T) {
+	// Duplicate keys collapse to the LAST occurrence: a shim-dir PATH
+	// appended after a client req.Env PATH must be the ONE the child
+	// sees - glibc getenv() is first-match, so leaving both would let a
+	// direct non-shell child bypass the shim dir (review finding).
+	t.Setenv("PATH", "/daemon/bin")
+	env := BuildEnv([]string{"PATH=/user/bin", "FOO=1", "PATH=/shims:/user/bin"})
+	var paths []string
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			paths = append(paths, e)
+		}
+	}
+	if len(paths) != 1 || paths[0] != "PATH=/shims:/user/bin" {
+		t.Errorf("PATH entries = %v, want exactly [PATH=/shims:/user/bin]", paths)
+	}
+	if !envContains(env, "FOO") {
+		t.Error("non-duplicate extra dropped by the dedupe")
+	}
+}
+
 func TestBuildEnvAppendsExtraEnv(t *testing.T) {
 	t.Setenv("HOME", "/tmp/h")
 	env := BuildEnv([]string{"MESHTERM_SESSION_ID=abc123"})

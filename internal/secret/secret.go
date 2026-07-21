@@ -103,6 +103,14 @@ func ValidCommand(c string) bool {
 	if c == "" || len(c) > 64 || c == "." || c == ".." {
 		return false
 	}
+	// A leading '-' is rejected outright: such a "command" would collide
+	// with secret-exec's own --shim-dir/--socket flag parsing (the shim
+	// passes the command positionally, and a name like "--socket" would
+	// be re-consumed as a flag, losing the real command - review
+	// finding), and no legitimate tool is named this way.
+	if c[0] == '-' {
+		return false
+	}
 	for _, r := range c {
 		switch {
 		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
@@ -323,5 +331,5 @@ func isExecutable(path string) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
-	return info.Mode()&0o111 != 0
+	return accessExecutable(path, info)
 }

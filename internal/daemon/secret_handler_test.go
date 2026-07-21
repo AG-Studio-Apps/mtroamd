@@ -117,4 +117,20 @@ func TestSecretSetRejectsUnknownSessionAndBadInput(t *testing.T) {
 	if r2.Ok {
 		t.Error("expected rejection of an invalid command basename")
 	}
+
+	// Duplicate keys are rejected at THIS trust boundary too, not only in
+	// ParsePayload - a direct IPC caller must not get silent last-wins.
+	r3, err := c.SetSessionSecrets(ctx, ipc.SetSessionSecretsRequest{
+		SessionID: sid,
+		Secrets: []ipc.SecretEntry{
+			{Key: "A", Value: "1", Cmds: []string{"gh"}},
+			{Key: "A", Value: "2", Cmds: []string{"git"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r3.Ok || r3.Err != ipc.ErrBadRequest {
+		t.Errorf("dup key: Ok=%v Err=%q, want bad_request", r3.Ok, r3.Err)
+	}
 }

@@ -10,10 +10,10 @@
 package daemon
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -139,15 +139,23 @@ type Config struct {
 
 // Daemon owns the lifetime of the long-running server pieces.
 type Daemon struct {
-	cfg      Config
-	logger   *slog.Logger
-	cert     tls.Certificate
-	certFP   cert.Fingerprint
+	cfg    Config
+	logger *slog.Logger
+	cert   tls.Certificate
+	certFP cert.Fingerprint
 	// bootID identifies this daemon process instance (random hex per
 	// start). Reported on every Allocate so clients can detect a daemon
 	// restart (= RAM secret store wiped) vs a plain reconnect.
 	bootID string
-	registry *session.Registry
+	// shimSyncMu serializes the store-update + on-disk shim sync pair in
+	// HandleSetSessionSecrets: each is individually safe, but two
+	// overlapping pushes for the same session could interleave so the
+	// LOSING push's SyncShims runs last and the disk shims no longer
+	// match the store (a declared command with no shim = silently
+	// token-less; review finding). One daemon-wide mutex - pushes are
+	// rare and SyncShims is a handful of tiny file writes.
+	shimSyncMu sync.Mutex
+	registry   *session.Registry
 	// allocateExts maps AllocateRequest.Kind → the embedder extension that
 	// handles it. Nil/empty for a stock terminal daemon (no agent/MCP code in
 	// core). Populated in New() from Config.AllocateExtensions.
@@ -175,7 +183,7 @@ type Daemon struct {
 	// mtroamHandler is cached from New() so the poller can create a
 	// TCPServer with the same handler after startup.
 	mtroamHandler *transport.ProtocolHandler
-	ipc         *ipc.Server
+	ipc           *ipc.Server
 	// stateDir is the persistence root resolved at New(). Reused by
 	// spawnSession when starting the per-session flusher.
 	stateDir string
@@ -341,7 +349,7 @@ func New(cfg Config) (*Daemon, error) {
 		logger:    logger,
 		cert:      tlsCert,
 		certFP:    fp,
-		bootID:       hex.EncodeToString(bootIDBytes),
+		bootID:    hex.EncodeToString(bootIDBytes),
 		registry:  reg,
 		stateDir:  stateDir,
 		startedAt: time.Now(),
@@ -771,10 +779,10 @@ func (d *Daemon) tailnetTCPPoller(ctx context.Context, wg *sync.WaitGroup, errCh
 // compromised local helper that could otherwise feed unbounded
 // strings into our registry maps + log lines.
 const (
-	maxNameLen      = 256        // Session.Name; echoed in every list response + every log line.
-	maxShellLen     = 4 * 1024   // Path to a shell binary; longer than this is pathological.
-	maxExecJoinLen  = 16 * 1024  // Total bytes across all Exec[] joined by spaces.
-	maxExecArgCount = 128        // Cap individual element count too — argv length is finite in practice.
+	maxNameLen      = 256       // Session.Name; echoed in every list response + every log line.
+	maxShellLen     = 4 * 1024  // Path to a shell binary; longer than this is pathological.
+	maxExecJoinLen  = 16 * 1024 // Total bytes across all Exec[] joined by spaces.
+	maxExecArgCount = 128       // Cap individual element count too — argv length is finite in practice.
 
 	// maxSearchPatternLen caps the regex source length on SessionSearchRequest.
 	// Go RE2 compile time is bounded but not free; a 1 KiB ceiling is well
@@ -873,11 +881,21 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrUnknownSession, Msg: err.Error()}
 	}
 	payload := secret.Payload{Secrets: make([]secret.Entry, 0, len(req.Secrets))}
+	seen := make(map[string]struct{}, len(req.Secrets))
 	for _, e := range req.Secrets {
 		if !secret.ValidKey(e.Key) {
 			return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
 				Msg: "invalid key " + e.Key}
 		}
+		// Reject duplicates like ParsePayload does - this handler is the
+		// trust boundary for DIRECT IPC callers too, and a silently
+		// last-wins duplicate would deliver an unpredictable value
+		// (review finding).
+		if _, dup := seen[e.Key]; dup {
+			return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
+				Msg: "duplicate key " + e.Key}
+		}
+		seen[e.Key] = struct{}{}
 		for _, c := range e.Cmds {
 			if !secret.ValidCommand(c) {
 				return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
@@ -887,6 +905,8 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 		payload.Secrets = append(payload.Secrets, secret.Entry{Key: e.Key, Value: e.Value, Cmds: e.Cmds})
 	}
 	sidStr := sid.String()
+	d.shimSyncMu.Lock()
+	defer d.shimSyncMu.Unlock()
 	d.secrets.SetSession(sidStr, payload)
 	cmds := d.secrets.Commands(sidStr)
 	if err := secret.SyncShims(d.shimDirFor(sidStr), d.daemonBinary, d.IPCSocketPath(), cmds); err != nil {
@@ -903,6 +923,16 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 // command; the caller then execs the real binary unchanged. Does not
 // require the session to be live: a same-uid `secret-exec` querying a
 // just-reaped session simply gets an empty result and fails open.
+//
+// The session id is CALLER-SUPPLIED (secret-exec reads it from the
+// session env) and deliberately NOT bound to the requesting connection:
+// the IPC socket is uid-private, and a same-uid process can already
+// read any sibling session's /proc environ, state dir, or dial this
+// socket directly - so per-session isolation against a same-uid caller
+// is not enforceable at this layer, only at the OS-sandbox layer. The
+// broker's promise (per the locked design) is keeping values out of
+// the provider-bound agent CONTEXT and ambient env, not containing an
+// adversarial same-uid process.
 func (d *Daemon) HandleGetSecrets(_ context.Context, req ipc.GetSecretsRequest) ipc.GetSecretsResponse {
 	return ipc.GetSecretsResponse{Ok: true, Env: d.secrets.EnvForCommand(req.SessionID, req.Command)}
 }
@@ -957,7 +987,7 @@ func (d *Daemon) HandleStatus(ctx context.Context, _ ipc.StatusRequest) ipc.Stat
 		StartedAtNs:      d.startedAt.UnixNano(),
 		UptimeNs:         now.Sub(d.startedAt).Nanoseconds(),
 		QUICAddr:         d.quic.Addr().String(),
-		MTRoamTCPAddr:      d.TCPAddr(),
+		MTRoamTCPAddr:    d.TCPAddr(),
 		CertFingerprint:  d.certFP.String(),
 		SessionCount:     d.registry.Len(),
 		MaxSessions:      d.registry.Capacity(),

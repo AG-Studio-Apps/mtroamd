@@ -26,6 +26,8 @@ func TestParsePayloadValidatesKeysAndCommands(t *testing.T) {
 		`{"secrets":[{"key":"OK","value":"x","cmds":["gh;rm"]}]}`,    // shell metachar
 		`{"secrets":[{"key":"A","value":"1","cmds":[]},{"key":"A","value":"2","cmds":[]}]}`, // dup key
 		`{"secrets":[{"key":"A","value":"1","cmds":[],"nope":true}]}`, // unknown field
+		`{"secrets":[{"key":"OK","value":"x","cmds":["--socket"]}]}`,  // flag-literal command
+		`{"secrets":[{"key":"OK","value":"x","cmds":["-rf"]}]}`,       // leading dash
 	} {
 		if _, err := ParsePayload([]byte(bad)); err == nil {
 			t.Errorf("expected rejection for %s", bad)
