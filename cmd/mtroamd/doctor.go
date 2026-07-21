@@ -16,6 +16,7 @@ import (
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/release"
 	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
 
@@ -39,7 +40,22 @@ type DoctorReport struct {
 	Supervisor SupervisorInfo `json:"supervisor"`
 	UnitFile   *UnitFileInfo  `json:"unit_file,omitempty"`
 	Linger     *LingerInfo    `json:"linger,omitempty"`
-	Warnings   []string       `json:"warnings,omitempty"`
+	// Processes is the host-wide `mtroamd serve` census (Linux /proc;
+	// empty elsewhere). More than one, or one running a deleted binary,
+	// is the stale-daemon signature from the 2026-07-21 install
+	// incident: an old process kept serving while the new binary sat
+	// idle and every connect failed with nothing naming the cause.
+	Processes []serveProcess `json:"serve_processes,omitempty"`
+	Warnings  []string       `json:"warnings,omitempty"`
+}
+
+// serveProcess is one running `mtroamd serve` process (see
+// findServeProcesses). Deleted = the process's exe was replaced or
+// removed on disk after it started - it is serving OLD code.
+type serveProcess struct {
+	PID     int    `json:"pid"`
+	Exe     string `json:"exe,omitempty"`
+	Deleted bool   `json:"deleted,omitempty"`
 }
 
 // DaemonHealth carries the live operational snapshot from the local
@@ -180,6 +196,40 @@ func buildDoctorReport(socketPath string, timeout time.Duration) DoctorReport {
 		r.Daemon.IdleNs = status.IdleTimeoutNs
 	}
 
+	// 1b. Serve-process census + running-vs-binary version skew. The
+	// stale-daemon failure mode reports "installed OK" everywhere except
+	// here: the binary on disk is new, but the process serving the
+	// socket/listeners predates it.
+	r.Processes = findServeProcesses()
+	if n := len(r.Processes); n > 1 {
+		pids := make([]string, 0, n)
+		for _, p := range r.Processes {
+			pids = append(pids, fmt.Sprintf("%d", p.PID))
+		}
+		r.Warnings = append(r.Warnings, fmt.Sprintf(
+			"%d `mtroamd serve` processes running (pids %s) — a stale daemon "+
+				"can hold the listeners while the real one owns the socket; "+
+				"kill the strays and restart", n, strings.Join(pids, ", ")))
+	}
+	for _, p := range r.Processes {
+		if p.Deleted {
+			r.Warnings = append(r.Warnings, fmt.Sprintf(
+				"serve pid %d is running a DELETED binary (replaced on disk "+
+					"after it started) — it serves OLD code until restarted", p.PID))
+		}
+	}
+	// Skew check: the RUNNING daemon vs THIS binary. Status carries the
+	// display string, so compare bare tags (versionToken). Skipped for
+	// an un-ldflagged dev build of the doctor ("v0.0.0-dev") — that
+	// comparison is meaningless and would cry wolf on every dev run.
+	if r.Daemon.Running && r.Daemon.Version != "" && build.Version != "v0.0.0-dev" &&
+		!release.VersionsMatch(versionToken(r.Daemon.Version), build.Version) {
+		r.Warnings = append(r.Warnings, fmt.Sprintf(
+			"running daemon reports %s but this binary is %s — the process "+
+				"predates the installed binary; restart the daemon",
+			r.Daemon.Version, build.Version))
+	}
+
 	// 2. Supervisor introspection. Detect always returns a Manager
 	//    (nohup fallback); Available tells us if its tooling is
 	//    reachable on this host.
@@ -300,6 +350,19 @@ func printDoctorReport(out *os.File, r DoctorReport) {
 		fmt.Fprintf(out, "  Socket:          %s\n", r.Daemon.Socket)
 		if r.Daemon.ContactError != "" {
 			fmt.Fprintf(out, "  Error:           %s\n", r.Daemon.ContactError)
+		}
+	}
+	if len(r.Processes) > 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Serve processes:")
+		for _, p := range r.Processes {
+			mark := "✓"
+			note := ""
+			if p.Deleted {
+				mark = "✘"
+				note = "  (DELETED binary — restart to pick up the installed one)"
+			}
+			fmt.Fprintf(out, "  %s pid %-8d %s%s\n", mark, p.PID, p.Exe, note)
 		}
 	}
 	fmt.Fprintln(out)

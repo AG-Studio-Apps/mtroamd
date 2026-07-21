@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
 	"github.com/AG-Studio-Apps/mtroamd/internal/release"
 	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
@@ -237,8 +238,95 @@ func performUpdate(ctx context.Context, fetcher *release.Fetcher, tag string) in
 		return 5
 	}
 
-	fmt.Printf("\n✓ Updated to %s via %s\n", tag, mgr.Name())
+	// "Installed" must mean "SERVING": a botched earlier install left a
+	// stale daemon holding the listeners while the fresh binary sat idle
+	// - this command printed success, every client connect failed, and
+	// nothing named the cause (2026-07-21 incident). So ask the LIVE
+	// daemon what version it runs and refuse to report success until it
+	// matches the tag we just installed.
+	fmt.Println("▸ verifying the running daemon")
+	if code := verifyRunningDaemon(ctx, tag, binPath); code != 0 {
+		return code
+	}
+
+	fmt.Printf("\n✓ Updated to %s via %s (running daemon verified)\n", tag, mgr.Name())
 	return 0
+}
+
+// versionToken reduces a daemon-reported version to its comparable
+// tag: Status carries build.String() — "v1.7.8-rc2 (sha, built …)" —
+// and release.VersionsMatch on the FULL string never matches a bare
+// tag (caught in pre-release testing: every update would have failed
+// its own verification). First whitespace-separated field only.
+func versionToken(s string) string {
+	if f := strings.Fields(s); len(f) > 0 {
+		return f[0]
+	}
+	return s
+}
+
+// verifyRunningDaemon polls the daemon's Status IPC until it reports
+// the freshly-installed tag (the supervisor restart is asynchronous;
+// systemd needs a moment to bring the new process up), then checks the
+// serve-process census for stragglers. Returns 0 on verified success,
+// 5 (the "restart failed" class) otherwise - the binary IS updated,
+// but the host is not actually serving it.
+func verifyRunningDaemon(ctx context.Context, tag, binPath string) int {
+	socketPath := discoverClientSocketPath()
+	deadline := time.Now().Add(15 * time.Second)
+	var lastErr error
+	var lastVersion string
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		status, err := ipc.NewClient(socketPath, 2*time.Second).Status(probeCtx)
+		cancel()
+		switch {
+		case err != nil:
+			lastErr = err
+		case !status.Ok:
+			lastErr = fmt.Errorf("daemon not ok: %s", status.Msg)
+		case release.VersionsMatch(versionToken(status.Version), tag):
+			fmt.Printf("  running daemon reports %s\n", status.Version)
+			// The live daemon is the new one; now make sure no STALE
+			// serve process lingers alongside it (it could still hold
+			// the QUIC/TCP listener ports the clients dial).
+			var stale []string
+			for _, p := range findServeProcesses() {
+				if p.Deleted || (p.Exe != "" && p.Exe != binPath) {
+					stale = append(stale, fmt.Sprintf("pid %d (%s)", p.PID, p.Exe))
+				}
+			}
+			if len(stale) > 0 {
+				fmt.Fprintf(os.Stderr,
+					"update: STALE serve process(es) still running: %s\n"+
+						"  they may hold the client-facing listeners - kill them "+
+						"and re-run `mtroamd doctor`\n",
+					strings.Join(stale, ", "))
+				return 5
+			}
+			return 0
+		default:
+			// A daemon answered but with the WRONG version - either the
+			// old process is still draining its restart, or a stale one
+			// owns the socket. Keep polling until the deadline decides.
+			lastVersion = status.Version
+			lastErr = nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if lastVersion != "" {
+		fmt.Fprintf(os.Stderr,
+			"update: binary is %s but the RUNNING daemon still reports %s - "+
+				"a stale process is serving; run `mtroamd doctor` to see the "+
+				"serve-process census, kill the stray, and restart\n",
+			tag, lastVersion)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"update: binary updated but no daemon answered at %s within 15s "+
+				"(last error: %v) - start it manually and run `mtroamd doctor`\n",
+			socketPath, lastErr)
+	}
+	return 5
 }
 
 // Version comparison helpers moved to internal/release/version.go so
