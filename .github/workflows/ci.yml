@@ -43,7 +43,30 @@ jobs:
           cache: true
 
       - name: Minisign parser fuzz (30s)
-        run: go test -run='^$' -fuzz=FuzzParseMinisig -fuzztime=30s ./internal/release
+        # A real finding writes the failing input under
+        # internal/release/testdata/fuzz/ (Go does this for panics AND
+        # assertion failures), so that dir is the authoritative crash
+        # signal. The fuzz engine can SEPARATELY exit non-zero with a bare
+        # "context deadline exceeded" when -fuzztime elapses mid-work on a
+        # slow/loaded runner — a timing artifact, not a finding (the same
+        # corpus passes locally at 6M+ execs). Fail on any crasher or other
+        # error; tolerate ONLY the deadline race.
+        run: |
+          set +e
+          out="$(go test -run='^$' -fuzz=FuzzParseMinisig -fuzztime=30s ./internal/release 2>&1)"
+          rc=$?
+          echo "$out"
+          crashers="internal/release/testdata/fuzz/FuzzParseMinisig"
+          if [ -d "$crashers" ] && [ -n "$(ls -A "$crashers" 2>/dev/null)" ]; then
+            echo "::error::minisign fuzz found a crasher (input under $crashers)"; exit 1
+          fi
+          if [ "$rc" -eq 0 ]; then
+            echo "minisign fuzz clean"; exit 0
+          fi
+          if echo "$out" | grep -q "context deadline exceeded"; then
+            echo "::notice::minisign fuzz hit the -fuzztime deadline race with no crasher — tolerated"; exit 0
+          fi
+          echo "::error::minisign fuzz failed with a non-deadline error"; exit 1
 
   vuln:
     name: govulncheck

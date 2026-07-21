@@ -1,0 +1,242 @@
+package ptysidecar
+
+import (
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestClassifyShell(t *testing.T) {
+	cases := []struct {
+		path string
+		want shellKind
+	}{
+		{"/bin/bash", shellBash},
+		{"/usr/local/bin/bash", shellBash},
+		{"/usr/bin/zsh", shellZsh},
+		{"/bin/sh", shellPosix},
+		{"/usr/bin/dash", shellPosix},
+		{"/usr/bin/fish", shellUnknown},
+		{"/bin/cat", shellUnknown},
+		{"", shellUnknown},
+	}
+	for _, tc := range cases {
+		if got := classifyShell(tc.path); got != tc.want {
+			t.Errorf("classifyShell(%q) = %d, want %d", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestClassifyShellArgs(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantBenign bool
+		wantLogin  bool
+	}{
+		{"empty", nil, true, false},
+		{"login_long", []string{"--login"}, true, true},
+		{"login_short", []string{"-l"}, true, true},
+		{"interactive", []string{"-i"}, true, false},
+		{"cluster_il", []string{"-il"}, true, true},
+		{"cluster_li", []string{"-li"}, true, true},
+		{"dash_c_command", []string{"-c", "echo hi"}, false, false},
+		{"script_path", []string{"/tmp/run.sh"}, false, false},
+		{"unknown_long", []string{"--noprofile"}, false, false},
+		{"unknown_short", []string{"-x"}, false, false},
+		{"bare_dash", []string{"-"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			benign, login := classifyShellArgs(tc.args)
+			if benign != tc.wantBenign || login != tc.wantLogin {
+				t.Errorf("classifyShellArgs(%v) = (benign=%v, login=%v), want (benign=%v, login=%v)",
+					tc.args, benign, login, tc.wantBenign, tc.wantLogin)
+			}
+		})
+	}
+}
+
+// TestSeedPromptHook covers the per-shell seeding decisions: which
+// invocation is produced, whether a working hook is reported, and that
+// the generated rc chains the user's real files + the byte-exact hook
+// body after them.
+func TestSeedPromptHook(t *testing.T) {
+	const sess = "MESHTERM_SESSION_ID=deadbeef"
+	const home = "HOME=/home/tester"
+
+	t.Run("bash_non_login", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/bin/bash", nil, []string{home, sess}, discardLogger())
+		if !got.hookInstalled {
+			t.Fatalf("hookInstalled = false, want true")
+		}
+		if got.shell != "/bin/bash" {
+			t.Errorf("shell = %q, want /bin/bash", got.shell)
+		}
+		if len(got.args) != 2 || got.args[0] != "--rcfile" {
+			t.Fatalf("args = %v, want [--rcfile <path>]", got.args)
+		}
+		body := readFile(t, got.args[1])
+		mustContain(t, body, `. "$HOME/.bashrc"`)
+		mustContain(t, body, promptHookBody)
+		// hook must come AFTER the user's rc.
+		if strings.Index(body, ".bashrc") > strings.Index(body, promptHookBody) {
+			t.Errorf("hook installed before the user's .bashrc")
+		}
+	})
+
+	t.Run("bash_login", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/bin/bash", []string{"-l"}, []string{home, sess}, discardLogger())
+		if !got.hookInstalled {
+			t.Fatalf("hookInstalled = false, want true")
+		}
+		if len(got.args) != 2 || got.args[0] != "--rcfile" {
+			t.Fatalf("args = %v, want [--rcfile <path>] (login converted to non-login+profile)", got.args)
+		}
+		body := readFile(t, got.args[1])
+		mustContain(t, body, "/etc/profile")
+		mustContain(t, body, `"$HOME/.bash_profile"`)
+		mustContain(t, body, promptHookBody)
+	})
+
+	t.Run("bash_custom_command_skips", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/bin/bash", []string{"-c", "tmux new"}, []string{home, sess}, discardLogger())
+		if got.hookInstalled {
+			t.Errorf("hookInstalled = true, want false for a -c command")
+		}
+		if len(got.args) != 2 || got.args[0] != "-c" {
+			t.Errorf("args = %v, want the untouched original", got.args)
+		}
+	})
+
+	t.Run("zsh_sets_zdotdir", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/usr/bin/zsh", nil, []string{home, sess}, discardLogger())
+		if !got.hookInstalled {
+			t.Fatalf("hookInstalled = false, want true")
+		}
+		zdot, ok := envLookup(got.env, "ZDOTDIR")
+		if !ok {
+			t.Fatalf("ZDOTDIR not set in env")
+		}
+		// The three startup files must exist and chain the real ones.
+		for _, f := range []string{".zshenv", ".zprofile", ".zshrc"} {
+			body := readFile(t, filepath.Join(zdot, f))
+			if !strings.Contains(body, "$HOME") {
+				t.Errorf("%s does not reference the real $HOME zdotdir: %q", f, body)
+			}
+		}
+		zshrc := readFile(t, filepath.Join(zdot, ".zshrc"))
+		mustContain(t, zshrc, `. "$HOME"/.zshrc`)
+		mustContain(t, zshrc, promptHookBody)
+		mustContain(t, zshrc, "unset ZDOTDIR")
+		if strings.Index(zshrc, ".zshrc") > strings.Index(zshrc, promptHookBody) {
+			t.Errorf("hook installed before the user's .zshrc")
+		}
+	})
+
+	t.Run("zsh_preserves_existing_zdotdir", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/usr/bin/zsh", nil,
+			[]string{home, sess, "ZDOTDIR=/custom/zdot"}, discardLogger())
+		zdot, _ := envLookup(got.env, "ZDOTDIR")
+		zshrc := readFile(t, filepath.Join(zdot, ".zshrc"))
+		mustContain(t, zshrc, "'/custom/zdot'/.zshrc")
+		// Restores to the original, not unset.
+		mustContain(t, zshrc, "ZDOTDIR='/custom/zdot'")
+	})
+
+	t.Run("dash_skipped_untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/bin/dash", nil, []string{home, sess}, discardLogger())
+		if got.hookInstalled {
+			t.Errorf("hookInstalled = true, want false (dash has no prompt hook)")
+		}
+		// The shared hook body uses zsh array syntax that dash can't
+		// parse, so we must NOT seed a $ENV file — the invocation and
+		// env are left untouched.
+		if _, ok := envLookup(got.env, "ENV"); ok {
+			t.Errorf("ENV was set for dash; want untouched (would spam a parse error)")
+		}
+		if got.shell != "/bin/dash" || len(got.args) != 0 {
+			t.Errorf("invocation mutated: shell=%q args=%v", got.shell, got.args)
+		}
+	})
+
+	t.Run("unknown_shell_untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		got := seedPromptHook(dir, "/bin/cat", []string{"-A"}, []string{home, sess}, discardLogger())
+		if got.hookInstalled {
+			t.Errorf("hookInstalled = true, want false for an unknown shell")
+		}
+		if got.shell != "/bin/cat" || len(got.args) != 1 || got.args[0] != "-A" {
+			t.Errorf("invocation mutated: shell=%q args=%v", got.shell, got.args)
+		}
+	})
+}
+
+func TestWriteHookStatus(t *testing.T) {
+	cases := []struct {
+		installed bool
+		want      string
+	}{
+		{true, "1"},
+		{false, "0"},
+	}
+	for _, tc := range cases {
+		dir := t.TempDir()
+		writeHookStatus(dir, tc.installed, discardLogger())
+		got := readFile(t, filepath.Join(dir, HookStatusFilename))
+		if got != tc.want {
+			t.Errorf("writeHookStatus(%v) wrote %q, want %q", tc.installed, got, tc.want)
+		}
+	}
+}
+
+func TestEnvReplaceAndLookup(t *testing.T) {
+	env := []string{"A=1", "ZDOTDIR=/old", "B=2"}
+	out := envReplace(env, "ZDOTDIR", "/new")
+	if v, ok := envLookup(out, "ZDOTDIR"); !ok || v != "/new" {
+		t.Errorf("ZDOTDIR = %q (ok=%v), want /new", v, ok)
+	}
+	// Exactly one ZDOTDIR entry survives.
+	n := 0
+	for _, kv := range out {
+		if strings.HasPrefix(kv, "ZDOTDIR=") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("ZDOTDIR appears %d times, want 1", n)
+	}
+	// Unrelated keys are preserved.
+	if v, ok := envLookup(out, "A"); !ok || v != "1" {
+		t.Errorf("A = %q (ok=%v), want 1", v, ok)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func mustContain(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if !strings.Contains(haystack, needle) {
+		t.Errorf("expected to find %q in:\n%s", needle, haystack)
+	}
+}

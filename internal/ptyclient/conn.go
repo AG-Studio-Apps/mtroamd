@@ -121,6 +121,22 @@ type Conn struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	// hookInstalled is the live-inject prompt-hook state the sidecar
+	// reported via its hook-status file, read once by SpawnNew after a
+	// successful dial. nil = unknown (a fresh-adopt via Discover, or a
+	// sidecar too old to report); *true/*false = seeded or not. Read
+	// once, never mutated after construction, so no lock is needed.
+	hookInstalled *bool
+}
+
+// HookInstalled reports whether the sidecar seeded a working live-inject
+// prompt hook into this session's shell (nil = unknown). SpawnNew sets
+// it from the sidecar's hook-status file; the Discover (reconnect) path
+// leaves it nil, since a re-adopted sidecar's state lives in the
+// session's persisted metadata rather than being re-reported.
+func (c *Conn) HookInstalled() *bool {
+	return c.hookInstalled
 }
 
 // ChildExit packages the FrameChildExit body for callers that need

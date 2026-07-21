@@ -137,6 +137,22 @@ MTRM_SESSION_REUSED <0|1>\n
 
 Purpose: `--env-file` env only applies on a real spawn, so `1` tells the client the shell predates any env it staged (a live injection pass is needed for delivery), while `0` means the fresh shell already inherited it. Same tolerance rules as `MTRM_DAEMON_VERSION`: absence (older daemon, or an older daemon process behind a newer binary) means "unknown" and clients MUST fall back conservatively; clients MUST NOT depend on this line for connect-success.
 
+#### Live-inject hook (optional, additive)
+
+`mtroamd connect` emits another optional line alongside `MTRM_SESSION_REUSED` (same placement: after `MTRM_DAEMON_VERSION` and, in `--stdio` mode, BEFORE the `MTRM_STDIO` handshake line):
+
+```
+MTRM_LIVE_INJECT <0|1>\n
+```
+
+| Field | Format | Meaning |
+|---|---|---|
+| `MTRM_LIVE_INJECT` | literal | sentinel string |
+| `<0\|1>` | `1` | the session's shell has a working live-inject prompt hook (bash/zsh), seeded by the sidecar AFTER the user's rc so a user `PROMPT_COMMAND`/`precmd` can't clobber it |
+| | `0` | no working hook (dash/sh, an unknown shell, or a seeding failure) |
+
+Purpose: the hook is a shim that, on each prompt, sources and removes `~/.mt-inject-$MESHTERM_SESSION_ID` (a 0600 file the client SFTPs in). `1` tells the client that dropping such a file will be picked up on the shell's next prompt (invisible live injection into a running shell); `0` means the client must fall back to another delivery path. Absence of the line (older daemon, or an old daemon process behind a newer binary) means "unknown" - clients MUST fall back conservatively and MUST NOT depend on this line for connect-success. On a reattach the daemon reports the session's stored hook state (persisted across daemon restarts); a fresh spawn reports what the sidecar just seeded; extension allocates omit the line.
+
 ### 4.3 Stderr
 
 `mtroamd connect` may emit human-readable diagnostics on stderr. Stderr is for humans; the client SHOULD treat any stderr output as informational unless exit code is non-zero.

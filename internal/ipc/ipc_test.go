@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -168,6 +169,62 @@ func TestPingRoundTrip(t *testing.T) {
 	}
 	if resp.Nonce != 0xdeadbeef {
 		t.Errorf("Nonce = %x, want deadbeef", resp.Nonce)
+	}
+}
+
+// TestAllocateResponsePointerBitsRoundTrip locks in that the additive
+// tri-state pointer fields (Reused, HookInstalled) survive a full CBOR
+// encode/decode: nil stays nil (the omitempty key is dropped so an old
+// peer sees "unknown"), and *true/*false round-trip to the same value.
+func TestAllocateResponsePointerBitsRoundTrip(t *testing.T) {
+	t.Parallel()
+	tr := true
+	fa := false
+	cases := []struct {
+		name string
+		hook *bool
+	}{
+		{"nil_unknown", nil},
+		{"installed_true", &tr},
+		{"not_installed_false", &fa},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := AllocateResponse{
+				T:             TypeAllocate,
+				Ok:            true,
+				SessionID:     "sid",
+				HookInstalled: tc.hook,
+				Reused:        tc.hook, // exercise the sibling field the same way
+			}
+			var buf bytes.Buffer
+			if err := EncodeResponse(&buf, in); err != nil {
+				t.Fatalf("EncodeResponse: %v", err)
+			}
+			body, err := ReadFrame(&buf)
+			if err != nil {
+				t.Fatalf("ReadFrame: %v", err)
+			}
+			out, err := DecodeAllocateResponse(body)
+			if err != nil {
+				t.Fatalf("DecodeAllocateResponse: %v", err)
+			}
+			assertBoolPtr(t, "HookInstalled", out.HookInstalled, tc.hook)
+			assertBoolPtr(t, "Reused", out.Reused, tc.hook)
+		})
+	}
+}
+
+func assertBoolPtr(t *testing.T, field string, got, want *bool) {
+	t.Helper()
+	switch {
+	case want == nil && got != nil:
+		t.Errorf("%s = %v, want nil", field, *got)
+	case want != nil && got == nil:
+		t.Errorf("%s = nil, want %v", field, *want)
+	case want != nil && got != nil && *got != *want:
+		t.Errorf("%s = %v, want %v", field, *got, *want)
 	}
 }
 

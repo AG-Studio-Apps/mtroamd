@@ -232,6 +232,7 @@ func runConnect(args []string) int {
 	fmt.Printf("MTRM_DAEMON_VERSION %s\n", build.Version)
 
 	printSessionReused(&resp)
+	printSessionHookInstalled(&resp)
 
 	return connectExitOK
 }
@@ -254,6 +255,27 @@ func printSessionReused(resp *ipc.AllocateResponse) {
 		v = 1
 	}
 	fmt.Printf("MTRM_SESSION_REUSED %d\n", v)
+}
+
+// printSessionHookInstalled emits the optional MTRM_LIVE_INJECT
+// bootstrap line: 1 when the session's shell has a working live-inject
+// prompt hook (bash/zsh, seeded after the user's rc), 0 when it doesn't
+// (dash/sh, an unknown shell, or a seeding failure). Only printed when
+// the daemon reported the bit (a hook-aware daemon; an older one leaves
+// it nil), so clients treat absence as "unknown" and fall back. iOS
+// uses it to decide whether SFTPing ~/.mt-inject-<sessionID> will be
+// sourced on the next prompt. Like printSessionReused, both bootstrap
+// modes emit it BEFORE the MTRM_STDIO wire switch-over; line-scanning
+// clients ignore unknown prefixes.
+func printSessionHookInstalled(resp *ipc.AllocateResponse) {
+	if resp.HookInstalled == nil {
+		return
+	}
+	v := 0
+	if *resp.HookInstalled {
+		v = 1
+	}
+	fmt.Printf("MTRM_LIVE_INJECT %d\n", v)
 }
 
 // readAndDeleteEnvFile reads KEY=VAL lines (one per line; blank lines and
@@ -369,6 +391,7 @@ func runStdioMode(resp *ipc.AllocateResponse) int {
 	// Must precede MTRM_STDIO: everything after that line is raw mtRoam
 	// wire bytes, so an appended line would corrupt the stream.
 	printSessionReused(resp)
+	printSessionHookInstalled(resp)
 	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
 	os.Stdout.Sync()
 

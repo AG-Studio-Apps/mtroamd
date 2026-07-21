@@ -267,6 +267,19 @@ type Session struct {
 	// s.mu.
 	lastSidecarSeq uint64
 
+	// hookInstalled records whether the sidecar seeded a working
+	// prompt hook (the live-inject shim) into this session's shell at
+	// spawn. Tri-state via pointer: nil = unknown (never spawned by a
+	// hook-aware sidecar, or an old sidecar that didn't report), *true
+	// = a bash/zsh prompt hook is installed and will fire, *false = no
+	// working hook (dash/sh, an unknown shell, or a seeding failure).
+	// Set by the daemon from the ptyclient spawn result at spawn and
+	// on lazy respawn; persisted in meta.cbor so a reattach after a
+	// daemon restart reports the stored value. HandleAllocate surfaces
+	// it as AllocateResponse.HookInstalled → the MTRM_LIVE_INJECT
+	// bootstrap line. Guarded by s.mu.
+	hookInstalled *bool
+
 	// restoredFromDisk is true when this Session was hydrated from
 	// on-disk state at daemon startup (LoadPersisted), rather than
 	// freshly spawned. Cleared the first time a client successfully
@@ -471,6 +484,26 @@ func (s *Session) Persist() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.persist
+}
+
+// SetHookInstalled records whether the sidecar seeded a working
+// prompt hook into this session's shell. The daemon calls it from the
+// ptyclient spawn result at spawn time and on each lazy respawn.
+// Passing nil marks the state unknown (no hook-aware spawn observed).
+func (s *Session) SetHookInstalled(v *bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.hookInstalled = v
+}
+
+// HookInstalled reports whether a working live-inject prompt hook is
+// installed in this session's shell. nil = unknown; *true = installed
+// (bash/zsh); *false = no working hook. HandleAllocate reads this on
+// both spawn and reattach to fill AllocateResponse.HookInstalled.
+func (s *Session) HookInstalled() *bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hookInstalled
 }
 
 // RestoredFromDisk reports whether this session was reconstructed

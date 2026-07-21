@@ -572,6 +572,49 @@ func TestDaemonAllocateReportsReused(t *testing.T) {
 	wantReused(t, renamed, true, "create-by-name reattach")
 }
 
+// TestDaemonAllocateReportsHookInstalled locks in the threading of the
+// sidecar's live-inject hook state through the session and back onto
+// AllocateResponse.HookInstalled: a fresh core PTY spawn reports a
+// non-nil value, and a reattach reports the same STORED value. The test
+// shell (/bin/sh -c ...) runs a custom command so seeding is skipped and
+// the reported bit is false; the point is that the bit is present and
+// stable across the spawn→reattach boundary, which is what iOS keys its
+// drop-file delivery on.
+func TestDaemonAllocateReportsHookInstalled(t *testing.T) {
+	t.Parallel()
+	_, c, cleanup := startDaemon(t)
+	defer cleanup()
+
+	first, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: "new",
+		Rows:      24, Cols: 80,
+		Shell: "/bin/sh",
+		Exec:  []string{"-c", "while true; do sleep 1; done"},
+	})
+	if err != nil || !first.Ok {
+		t.Fatalf("fresh allocate: %v %s %s", err, first.Err, first.Msg)
+	}
+	if first.HookInstalled == nil {
+		t.Fatalf("fresh spawn: HookInstalled is nil, want a reported bit")
+	}
+	if *first.HookInstalled {
+		t.Errorf("fresh spawn: HookInstalled = true, want false (custom -c command is not seeded)")
+	}
+
+	byID, err := c.Allocate(context.Background(), ipc.AllocateRequest{
+		SessionID: first.SessionID,
+	})
+	if err != nil || !byID.Ok {
+		t.Fatalf("by-id reattach: %v %s %s", err, byID.Err, byID.Msg)
+	}
+	if byID.HookInstalled == nil {
+		t.Fatalf("reattach: HookInstalled is nil, want the stored bit")
+	}
+	if *byID.HookInstalled != *first.HookInstalled {
+		t.Errorf("reattach: HookInstalled = %v, want stored %v", *byID.HookInstalled, *first.HookInstalled)
+	}
+}
+
 // TestDaemonReattachUpdatesIdleTimeout reproduces the 2026-05-12
 // bug report: a user edited the iOS Keep-alive picker from 1h to
 // 30d, but the daemon's existing session kept its original 1h

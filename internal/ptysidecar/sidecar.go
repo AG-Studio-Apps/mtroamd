@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -94,7 +95,21 @@ func Run(ctx context.Context, cfg Config) error {
 	if cols == 0 {
 		cols = 80
 	}
-	cmd := exec.Command(shell, cfg.ShellArgs...)
+
+	// Seed the live-inject prompt hook into the shell AFTER the user's
+	// rc (so a user PROMPT_COMMAND/precmd can't clobber it). Fail-safe:
+	// on any trouble seedPromptHook returns the untouched invocation
+	// with hookInstalled=false, so the shell is never broken by the
+	// seeding. The session dir is the socket's parent. Record the
+	// outcome for the spawning ptyclient to read after it dials.
+	sessionDir := filepath.Dir(cfg.SocketPath)
+	seed := seedPromptHook(sessionDir, shell, cfg.ShellArgs, env, log)
+	shell = seed.shell
+	shellArgs := seed.args
+	env = seed.env
+	writeHookStatus(sessionDir, seed.hookInstalled, log)
+
+	cmd := exec.Command(shell, shellArgs...)
 	cmd.Env = env
 	master, err := cpty.StartWithSize(cmd, &cpty.Winsize{Rows: rows, Cols: cols})
 	if err != nil {

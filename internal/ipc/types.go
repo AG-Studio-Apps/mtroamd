@@ -156,6 +156,21 @@ type AllocateResponse struct {
 	// Additive/omitempty like Env: old peers drop the unknown key.
 	Reused *bool `cbor:"reused,omitempty"`
 
+	// HookInstalled reports whether the session's shell has a working
+	// live-inject prompt hook seeded by the sidecar at spawn (the shim
+	// that auto-sources ~/.mt-inject-<sessionID> on each prompt). Like
+	// Reused, it's a pointer so absence is distinguishable from false:
+	// an older daemon never sets it (nil = unknown), *true = a bash/zsh
+	// hook is installed and will fire, *false = no working hook
+	// (dash/sh, an unknown shell, or a seeding failure). `mtroamd
+	// connect` emits the MTRM_LIVE_INJECT bootstrap line only when it's
+	// present. iOS uses it to decide whether SFTPing a per-session drop
+	// file will actually be sourced (hook present) or whether it must
+	// fall back to another injection path. nil for extension allocates
+	// (the extension owns its own spawn). Additive/omitempty like
+	// Reused: old peers drop the unknown key.
+	HookInstalled *bool `cbor:"hook,omitempty"`
+
 	// On failure:
 	Err string `cbor:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty"`
