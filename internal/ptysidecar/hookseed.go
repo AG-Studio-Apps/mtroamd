@@ -15,6 +15,20 @@ import (
 // its listener, so a successful dial implies the file is present.
 const HookStatusFilename = "hook-installed"
 
+// ShimStatusFilename is the per-session file the sidecar writes with the
+// secret-broker shim-readiness bit ("1"/"0"), read by ptyclient.SpawnNew
+// and surfaced as MTRM_SHIM_READY. Mirrors HookStatusFilename.
+const ShimStatusFilename = "shim-ready"
+
+// shimReassertLine re-prepends the per-session broker shim dir to PATH
+// AFTER the user's rc has run, so a login shell that rebuilds PATH from
+// profile can't drop it (the login-rebuild caveat). Idempotent: only
+// prepends when the dir is set and not already present. Sourced from the
+// seeded bash/zsh rcfile, which is exactly why shimReady is reported true
+// for those shells - the sidecar GUARANTEES the shim is on the live PATH,
+// not merely spawned with it.
+const shimReassertLine = `[ -n "$MESHTERM_SHIM_DIR" ] && case ":$PATH:" in *":$MESHTERM_SHIM_DIR:"*) ;; *) PATH="$MESHTERM_SHIM_DIR:$PATH"; export PATH;; esac`
+
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
 // real rc + the live-inject hook. Kept for the session's lifetime: a
@@ -61,6 +75,12 @@ type seedResult struct {
 	args          []string
 	env           []string
 	hookInstalled bool
+	// shimReady is whether the broker shim dir is guaranteed on the
+	// shell's LIVE PATH: true when we seeded a rcfile that re-asserts it
+	// (bash/zsh) OR the shell is non-login (spawn-env PATH survives, no
+	// rebuild); false for a login shell we couldn't re-assert into
+	// (dash/sh/unknown), where a profile rebuild could drop it.
+	shimReady bool
 }
 
 // seedPromptHook installs the live-inject prompt hook for a session's
@@ -68,7 +88,12 @@ type seedResult struct {
 // clobber it. It returns the invocation the sidecar should exec. It is
 // fail-safe: every error path returns the untouched original.
 func seedPromptHook(sessionDir, shell string, args, env []string, log *slog.Logger) seedResult {
-	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false}
+	_, login := classifyShellArgs(args)
+	// Without a seeded rcfile to re-assert it, only a NON-login shell is
+	// guaranteed to keep the spawn-env shim dir on PATH (a login shell
+	// may rebuild PATH from profile and drop it). seedBash/seedZsh
+	// override this to true because their rcfile re-asserts it.
+	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false, shimReady: !login}
 	switch classifyShell(shell) {
 	case shellBash:
 		return seedBash(sessionDir, shell, args, env, log, orig)
@@ -170,6 +195,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		b.WriteString(`[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"` + "\n")
 	}
 	b.WriteString(promptHookBody + "\n")
+	b.WriteString(shimReassertLine + "\n")
 
 	if err := os.WriteFile(rcPath, []byte(b.String()), 0o600); err != nil {
 		log.Warn("sidecar.hookseed.write_failed", "shell", "bash", "err", err.Error())
@@ -180,6 +206,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		args:          []string{"--rcfile", rcPath},
 		env:           env,
 		hookInstalled: true,
+		shimReady:     true,
 	}
 }
 
@@ -230,6 +257,7 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 	// AFTER it, then restore ZDOTDIR.
 	zshrc := "[ -r " + realExpr + "/.zshrc ] && . " + realExpr + "/.zshrc\n" +
 		promptHookBody + "\n" +
+		shimReassertLine + "\n" +
 		restore
 
 	for name, body := range map[string]string{
@@ -248,6 +276,7 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
+		shimReady:     true,
 	}
 }
 
@@ -263,6 +292,19 @@ func writeHookStatus(sessionDir string, installed bool, log *slog.Logger) {
 	path := filepath.Join(sessionDir, HookStatusFilename)
 	if err := os.WriteFile(path, val, 0o600); err != nil {
 		log.Warn("sidecar.hookseed.status_write_failed", "err", err.Error())
+	}
+}
+
+// writeShimStatus records broker shim-readiness to the session dir so the
+// spawning ptyclient can read it after dial. Mirrors writeHookStatus.
+func writeShimStatus(sessionDir string, ready bool, log *slog.Logger) {
+	val := []byte("0")
+	if ready {
+		val = []byte("1")
+	}
+	path := filepath.Join(sessionDir, ShimStatusFilename)
+	if err := os.WriteFile(path, val, 0o600); err != nil {
+		log.Warn("sidecar.hookseed.shim_status_write_failed", "err", err.Error())
 	}
 }
 

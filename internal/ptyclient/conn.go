@@ -128,6 +128,10 @@ type Conn struct {
 	// sidecar too old to report); *true/*false = seeded or not. Read
 	// once, never mutated after construction, so no lock is needed.
 	hookInstalled *bool
+
+	// shimReady is the broker shim-readiness the sidecar reported via its
+	// shim-status file (nil = unknown). Same lifecycle as hookInstalled.
+	shimReady *bool
 }
 
 // HookInstalled reports whether the sidecar seeded a working live-inject
@@ -137,6 +141,14 @@ type Conn struct {
 // session's persisted metadata rather than being re-reported.
 func (c *Conn) HookInstalled() *bool {
 	return c.hookInstalled
+}
+
+// ShimReady reports whether the broker shim dir is guaranteed on this
+// session's shell PATH (nil = unknown). SpawnNew sets it from the
+// sidecar's shim-status file; Discover leaves it nil (persisted meta
+// carries it instead). Surfaced as AllocateResponse.ShimReady.
+func (c *Conn) ShimReady() *bool {
+	return c.shimReady
 }
 
 // ChildExit packages the FrameChildExit body for callers that need

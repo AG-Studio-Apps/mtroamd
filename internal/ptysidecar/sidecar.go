@@ -108,6 +108,7 @@ func Run(ctx context.Context, cfg Config) error {
 	shellArgs := seed.args
 	env = seed.env
 	writeHookStatus(sessionDir, seed.hookInstalled, log)
+	writeShimStatus(sessionDir, seed.shimReady, log)
 
 	cmd := exec.Command(shell, shellArgs...)
 	cmd.Env = env

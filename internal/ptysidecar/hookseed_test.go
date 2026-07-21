@@ -91,6 +91,27 @@ func TestSeedPromptHook(t *testing.T) {
 		if strings.Index(body, ".bashrc") > strings.Index(body, promptHookBody) {
 			t.Errorf("hook installed before the user's .bashrc")
 		}
+		// The seeded rc re-asserts the broker shim dir on PATH (after the
+		// user's rc) so a login rebuild can't drop it, and shimReady is
+		// reported true (sidecar-guaranteed, not merely spawned-with).
+		mustContain(t, body, shimReassertLine)
+		if !got.shimReady {
+			t.Errorf("shimReady = false, want true for a seeded bash")
+		}
+	})
+
+	t.Run("shim_ready_by_login", func(t *testing.T) {
+		dir := t.TempDir()
+		// A non-login POSIX sh keeps the spawn-env shim dir → ready.
+		nonLogin := seedPromptHook(dir, "/bin/sh", []string{"-c", "x"}, []string{home, sess}, discardLogger())
+		if !nonLogin.shimReady {
+			t.Errorf("non-login sh shimReady = false, want true")
+		}
+		// A LOGIN sh we can't re-assert into → not guaranteed.
+		login := seedPromptHook(dir, "/bin/sh", []string{"-l"}, []string{home, sess}, discardLogger())
+		if login.shimReady {
+			t.Errorf("login sh shimReady = true, want false (no re-assert possible)")
+		}
 	})
 
 	t.Run("bash_login", func(t *testing.T) {
