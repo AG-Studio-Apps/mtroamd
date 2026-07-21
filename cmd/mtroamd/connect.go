@@ -233,6 +233,7 @@ func runConnect(args []string) int {
 
 	printSessionReused(&resp)
 	printSessionHookInstalled(&resp)
+	printBootID(&resp)
 
 	return connectExitOK
 }
@@ -255,6 +256,19 @@ func printSessionReused(resp *ipc.AllocateResponse) {
 		v = 1
 	}
 	fmt.Printf("MTRM_SESSION_REUSED %d\n", v)
+}
+
+// printBootID emits the optional MTRM_BOOT_ID bootstrap line: the
+// daemon process instance id (random hex per daemon start, v1.7.8+).
+// Clients key their "broker secrets already delivered" cache on it - a
+// changed id means the RAM secret store was wiped and needs a re-push;
+// an unchanged one lets a reconnect skip the redundant re-delivery.
+// Absent from older daemons; clients treat absence as "always re-push".
+func printBootID(resp *ipc.AllocateResponse) {
+	if resp.BootID == "" {
+		return
+	}
+	fmt.Printf("MTRM_BOOT_ID %s\n", resp.BootID)
 }
 
 // printSessionHookInstalled emits the optional MTRM_LIVE_INJECT
@@ -392,6 +406,7 @@ func runStdioMode(resp *ipc.AllocateResponse) int {
 	// wire bytes, so an appended line would corrupt the stream.
 	printSessionReused(resp)
 	printSessionHookInstalled(resp)
+	printBootID(resp)
 	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
 	os.Stdout.Sync()
 

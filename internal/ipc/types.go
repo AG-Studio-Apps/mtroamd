@@ -230,6 +230,18 @@ type AllocateResponse struct {
 	// Reused: old peers drop the unknown key.
 	HookInstalled *bool `cbor:"hook,omitempty"`
 
+	// BootID identifies THIS DAEMON PROCESS instance (random hex,
+	// regenerated every daemon start; not persisted). `mtroamd connect`
+	// emits it as the MTRM_BOOT_ID bootstrap line. iOS keys its
+	// "already delivered broker secrets" cache on (boot id, content
+	// fingerprint): the secret store is RAM-only, so a changed boot id
+	// means the store was wiped and a re-push is required, while an
+	// unchanged one lets a reconnect skip the redundant SFTP stage +
+	// set-secrets exec entirely (review finding — every .ready re-pushed
+	// over two extra connections even when the daemon already held the
+	// set). Additive/omitempty: old peers drop the unknown key.
+	BootID string `cbor:"boot_id,omitempty"`
+
 	// On failure:
 	Err string `cbor:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty"`

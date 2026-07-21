@@ -10,6 +10,8 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -141,6 +143,10 @@ type Daemon struct {
 	logger   *slog.Logger
 	cert     tls.Certificate
 	certFP   cert.Fingerprint
+	// bootID identifies this daemon process instance (random hex per
+	// start). Reported on every Allocate so clients can detect a daemon
+	// restart (= RAM secret store wiped) vs a plain reconnect.
+	bootID string
 	registry *session.Registry
 	// allocateExts maps AllocateRequest.Kind → the embedder extension that
 	// handles it. Nil/empty for a stock terminal daemon (no agent/MCP code in
@@ -279,6 +285,11 @@ func New(cfg Config) (*Daemon, error) {
 		logger = slog.Default()
 	}
 
+	bootIDBytes := make([]byte, 8)
+	if _, err := rand.Read(bootIDBytes); err != nil {
+		return nil, fmt.Errorf("generate boot id: %w", err)
+	}
+
 	mgr := &cert.Manager{Dir: cfg.CertDir}
 	tlsCert, fp, err := mgr.LoadOrGenerate()
 	if err != nil {
@@ -330,6 +341,7 @@ func New(cfg Config) (*Daemon, error) {
 		logger:    logger,
 		cert:      tlsCert,
 		certFP:    fp,
+		bootID:       hex.EncodeToString(bootIDBytes),
 		registry:  reg,
 		stateDir:  stateDir,
 		startedAt: time.Now(),
@@ -830,6 +842,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		Name:            sess.Name(),
 		Reused:          reused,
 		HookInstalled:   hookInstalled,
+		BootID:          d.bootID,
 	}
 }
 

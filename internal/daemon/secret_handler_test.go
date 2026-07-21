@@ -21,6 +21,12 @@ func allocSession(t *testing.T, c *ipc.Client) string {
 	if err != nil || !resp.Ok {
 		t.Fatalf("allocate: %v %s %s", err, resp.Err, resp.Msg)
 	}
+	// Every allocate reports the daemon-instance boot id (16 hex chars):
+	// iOS keys its broker "already delivered" cache on it, so an absent
+	// or per-allocate-varying id would force (or wrongly skip) re-pushes.
+	if len(resp.BootID) != 16 {
+		t.Errorf("allocate BootID = %q, want 16 hex chars", resp.BootID)
+	}
 	return resp.SessionID
 }
 
