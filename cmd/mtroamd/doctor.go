@@ -200,7 +200,28 @@ func buildDoctorReport(socketPath string, timeout time.Duration) DoctorReport {
 	// stale-daemon failure mode reports "installed OK" everywhere except
 	// here: the binary on disk is new, but the process serving the
 	// socket/listeners predates it.
+	//
+	// Dampened re-sample: during a NORMAL update restart there is a
+	// sub-second window where the old (now deleted-exe) daemon is still
+	// draining next to the new one - a single snapshot taken then would
+	// cry stale right after a clean update (review finding). If the
+	// first sample looks suspicious, wait 2s and trust the second.
 	r.Processes = findServeProcesses()
+	suspicious := func(ps []serveProcess) bool {
+		if len(ps) > 1 {
+			return true
+		}
+		for _, p := range ps {
+			if p.Deleted {
+				return true
+			}
+		}
+		return false
+	}
+	if suspicious(r.Processes) {
+		time.Sleep(2 * time.Second)
+		r.Processes = findServeProcesses()
+	}
 	if n := len(r.Processes); n > 1 {
 		pids := make([]string, 0, n)
 		for _, p := range r.Processes {

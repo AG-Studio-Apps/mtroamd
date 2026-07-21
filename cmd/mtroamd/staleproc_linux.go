@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // findServeProcesses enumerates every `mtroamd serve` process this uid
@@ -22,10 +23,21 @@ func findServeProcesses() []serveProcess {
 	if err != nil {
 		return nil
 	}
+	uid := uint32(os.Getuid())
 	var out []serveProcess
 	for _, ent := range entries {
 		pid, err := strconv.Atoi(ent.Name())
 		if err != nil {
+			continue
+		}
+		// SAME-UID processes only: /proc/<pid>/cmdline is world-readable,
+		// so without this filter a system/root daemon or another user's
+		// daemon lands in the census and doctor tells the operator to
+		// "kill the strays" for a perfectly legitimate neighbor (review
+		// finding). Our stale-daemon problem is strictly per-user.
+		if info, err := os.Stat(filepath.Join("/proc", ent.Name())); err != nil {
+			continue
+		} else if st, ok := info.Sys().(*syscall.Stat_t); !ok || st.Uid != uid {
 			continue
 		}
 		raw, err := os.ReadFile(filepath.Join("/proc", ent.Name(), "cmdline"))
