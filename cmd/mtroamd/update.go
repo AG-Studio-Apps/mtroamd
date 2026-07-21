@@ -289,10 +289,21 @@ func verifyRunningDaemon(ctx context.Context, tag, binPath string) int {
 			fmt.Printf("  running daemon reports %s\n", status.Version)
 			// The live daemon is the new one; now make sure no STALE
 			// serve process lingers alongside it (it could still hold
-			// the QUIC/TCP listener ports the clients dial).
+			// the QUIC/TCP listener ports the clients dial). Compare
+			// against the SYMLINK-RESOLVED install path: /proc/<pid>/exe
+			// is fully resolved, while binPath can contain unresolved
+			// components (e.g. /home → /var/home on ostree distros) -
+			// comparing the raw string would false-fail every update
+			// there. An empty census Exe (unreadable: another uid's
+			// process) is NOT treated as stale - only positive
+			// evidence fails the verification.
+			resolvedBin := binPath
+			if r, err := filepath.EvalSymlinks(binPath); err == nil {
+				resolvedBin = r
+			}
 			var stale []string
 			for _, p := range findServeProcesses() {
-				if p.Deleted || (p.Exe != "" && p.Exe != binPath) {
+				if p.Deleted || (p.Exe != "" && p.Exe != resolvedBin) {
 					stale = append(stale, fmt.Sprintf("pid %d (%s)", p.PID, p.Exe))
 				}
 			}
