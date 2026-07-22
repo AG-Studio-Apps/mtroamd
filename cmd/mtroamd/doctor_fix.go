@@ -164,7 +164,12 @@ func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeou
 			}
 		case fixEnableLinger:
 			fmt.Printf("  • enabling linger (%s)…\n", f.why)
-			if err := enableLinger(ctx); err != nil {
+			switch outcome, uname, err := enableLinger(ctx); outcome {
+			case lingerEnabled:
+				fmt.Println("      ✓ linger enabled")
+			case lingerNeedsSudo:
+				fmt.Printf("      needs privilege - run: sudo loginctl enable-linger %s\n", uname)
+			default:
 				fmt.Printf("      ✘ %v\n", err)
 			}
 		}
@@ -220,18 +225,58 @@ func sweepStaleServe(binPath string) []int {
 	return killed
 }
 
+// lingerOutcome is the result of attempting `loginctl enable-linger`.
+// Unlike the daemon restart / unit refresh (both user-scoped: `systemctl
+// --user`, `~/.config`), enable-linger writes system state
+// (/var/lib/systemd/linger) and normally needs root or a polkit admin
+// prompt - and doctor runs UNPRIVILEGED. So we attempt it (systemd >=248
+// can allow self-linger on an active session) and, on the common
+// permission denial, hand back a sudo advisory instead of a bare error.
+type lingerOutcome int
+
+const (
+	lingerEnabled   lingerOutcome = iota // succeeded (unprivileged self-linger path worked)
+	lingerNeedsSudo                      // denied by polkit/permissions — advise `sudo loginctl enable-linger`
+	lingerFailed                         // some other failure (tooling missing, etc.)
+)
+
 // enableLinger runs `loginctl enable-linger <user>` so a systemd-user
-// daemon survives logout/reboot. Idempotent (enabling twice is fine).
-func enableLinger(ctx context.Context) error {
+// daemon survives logout/reboot. Idempotent. Returns the outcome, the
+// username (for the advisory), and the raw error only for lingerFailed.
+func enableLinger(ctx context.Context) (lingerOutcome, string, error) {
 	u, err := user.Current()
 	if err != nil {
-		return err
+		return lingerFailed, "", err
 	}
-	out, err := exec.CommandContext(ctx, "loginctl", "enable-linger", u.Username).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("loginctl enable-linger %s: %v: %s", u.Username, err, strings.TrimSpace(string(out)))
+	out, runErr := exec.CommandContext(ctx, "loginctl", "enable-linger", u.Username).CombinedOutput()
+	if runErr == nil {
+		return lingerEnabled, u.Username, nil
 	}
-	return nil
+	msg := strings.TrimSpace(string(out))
+	if lingerNeedsPrivilege(msg) {
+		return lingerNeedsSudo, u.Username, nil
+	}
+	return lingerFailed, u.Username, fmt.Errorf("loginctl enable-linger %s: %v: %s", u.Username, runErr, msg)
+}
+
+// lingerNeedsPrivilege reports whether loginctl's failure output is a
+// polkit / permission denial - the case where the fix needs root - as
+// opposed to a genuine tooling failure. Matches the phrasings polkit and
+// systemd emit when there is no way to authenticate (no agent on a
+// headless SSH session).
+func lingerNeedsPrivilege(out string) bool {
+	l := strings.ToLower(out)
+	for _, s := range []string{
+		"interactive authentication required",
+		"access denied",
+		"permission denied",
+		"not authorized",
+	} {
+		if strings.Contains(l, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshUnitFile rewrites the systemd-user unit from the current

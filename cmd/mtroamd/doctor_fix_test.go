@@ -154,6 +154,26 @@ func TestPlanFixes(t *testing.T) {
 	}
 }
 
+func TestLingerNeedsPrivilege(t *testing.T) {
+	cases := []struct {
+		out  string
+		want bool
+	}{
+		{"Failed to enable linger for user u: Interactive authentication required.", true},
+		{"INTERACTIVE AUTHENTICATION REQUIRED", true}, // case-insensitive
+		{"Access denied", true},
+		{"Failed to enable linger: Permission denied", true},
+		{"Not authorized to perform operation.", true},
+		{"", false}, // e.g. loginctl not found — a genuine failure, not a denial
+		{"Failed to enable linger: unexpected response from logind", false},
+	}
+	for _, tc := range cases {
+		if got := lingerNeedsPrivilege(tc.out); got != tc.want {
+			t.Errorf("lingerNeedsPrivilege(%q) = %v, want %v", tc.out, got, tc.want)
+		}
+	}
+}
+
 // A down daemon is the headline failure: it must be the FIRST planned
 // action so verification runs against a daemon we actually started.
 func TestPlanFixesOrdersDaemonFirst(t *testing.T) {
