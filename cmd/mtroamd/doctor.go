@@ -16,7 +16,6 @@ import (
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
-	"github.com/AG-Studio-Apps/mtroamd/internal/release"
 	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
 
@@ -132,6 +131,15 @@ func runDoctor(args []string) int {
 	}
 	_ = fs.Parse(args)
 
+	// --json is a pure read that emits the stable wire shape; --fix mutates
+	// and streams human-readable actions. They can't both hold stdout, so
+	// the combination is rejected rather than silently dropping the JSON a
+	// caller asked for. (Bad-flag class: exit 2, matching flag.ExitOnError.)
+	if *asJSON && *fix {
+		fmt.Fprintln(os.Stderr, "mtroamd doctor: --fix cannot be combined with --json")
+		return 2
+	}
+
 	socketPath := *socket
 	if socketPath == "" {
 		socketPath = discoverClientSocketPath()
@@ -139,10 +147,7 @@ func runDoctor(args []string) int {
 
 	report := buildDoctorReport(socketPath, *timeout)
 
-	// --json is a pure read; --fix mutates and streams human-readable
-	// actions, so the two don't compose - when both are set, --fix wins
-	// and the report prints human-readable above the fix log.
-	if *asJSON && !*fix {
+	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
@@ -220,18 +225,7 @@ func buildDoctorReport(socketPath string, timeout time.Duration) DoctorReport {
 	// cry stale right after a clean update (review finding). If the
 	// first sample looks suspicious, wait 2s and trust the second.
 	r.Processes = findServeProcesses()
-	suspicious := func(ps []serveProcess) bool {
-		if len(ps) > 1 {
-			return true
-		}
-		for _, p := range ps {
-			if p.Deleted {
-				return true
-			}
-		}
-		return false
-	}
-	if suspicious(r.Processes) {
+	if serveCensusSuspicious(r.Processes) {
 		time.Sleep(2 * time.Second)
 		r.Processes = findServeProcesses()
 	}
@@ -256,8 +250,7 @@ func buildDoctorReport(socketPath string, timeout time.Duration) DoctorReport {
 	// display string, so compare bare tags (versionToken). Skipped for
 	// an un-ldflagged dev build of the doctor ("v0.0.0-dev") — that
 	// comparison is meaningless and would cry wolf on every dev run.
-	if r.Daemon.Running && r.Daemon.Version != "" && build.Version != "v0.0.0-dev" &&
-		!release.VersionsMatch(versionToken(r.Daemon.Version), build.Version) {
+	if r.Daemon.Running && runningVersionSkew(r.Daemon.Version, build.Version) {
 		r.Warnings = append(r.Warnings, fmt.Sprintf(
 			"running daemon reports %s but this binary is %s — the process "+
 				"predates the installed binary; restart the daemon",

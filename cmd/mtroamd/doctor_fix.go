@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -14,19 +13,24 @@ import (
 	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
 	"github.com/AG-Studio-Apps/mtroamd/internal/release"
 	"github.com/AG-Studio-Apps/mtroamd/internal/svcmgr"
 )
 
-// doctorFixKind is a remediation `mtroamd doctor --fix` can attempt.
+// doctorFixKind is a step `mtroamd doctor --fix` can take. Some are live
+// remediations; others are advisories for the cases --fix must NOT act on
+// automatically (needs privilege, needs the operator's config, or would
+// cost live sessions).
 type doctorFixKind int
 
 const (
-	fixStartDaemon     doctorFixKind = iota // daemon down; a supervisor can start it
-	fixRestartDaemon                        // stale/skewed serve process; supervisor restart + stray sweep
-	fixRefreshUnit                          // unit file missing or lacks KillMode=process (systemd-user)
-	fixEnableLinger                         // linger disabled (systemd-user, Linux)
-	adviseNoSupervisor                      // daemon down/stale but backend is nohup / unreachable — report only
+	fixStartDaemon         doctorFixKind = iota // daemon down; supervisor start (verify sweeps strays)
+	fixRestartDaemon                            // stale daemon, restart is session-safe (KillMode=process or launchd)
+	fixEnableLinger                             // linger disabled; attempt, then advise sudo on a denial
+	adviseNoSupervisor                          // down/stale but nohup / unreachable — SIGTERM + re-serve manually
+	adviseUnitRefresh                           // unit missing / lacks KillMode=process — `mtroamd unit print`
+	adviseRestartNeedsUnit                      // stale daemon, but a restart would drop sessions (no KillMode) — refresh unit first
 )
 
 type plannedFix struct {
@@ -34,20 +38,50 @@ type plannedFix struct {
 	why  string
 }
 
-// planFixes maps a diagnosed report to the ordered remediations
-// doctor --fix should attempt. It is PURE and table-tested: every host
-// fact is passed in (backend + availability from the detected Manager,
-// selfVersion = the running binary's build.Version, goos for the linger
-// gate). Only a SUPERVISED backend (systemd-user / launchd, reachable)
-// gets a live action for daemon liveness; nohup / unreachable gets an
-// advisory instead of an auto-spawn — mirroring connect's "never
-// nohup-spawn a listener the operator didn't choose" restraint.
+// serveCensusSuspicious is the census-only stale signal: more than one
+// serve process, or one on a deleted binary. Shared by buildDoctorReport's
+// dampened re-sample and by the fix planner so the report and --fix can't
+// drift on what "stale" means.
+func serveCensusSuspicious(ps []serveProcess) bool {
+	if len(ps) > 1 {
+		return true
+	}
+	for _, p := range ps {
+		if p.Deleted {
+			return true
+		}
+	}
+	return false
+}
+
+// runningVersionSkew reports whether a running daemon's reported version
+// predates this binary, gated off an un-ldflagged dev build (that compare
+// is meaningless and would cry wolf on every dev run). Shared by the
+// report warning and the planner.
+func runningVersionSkew(daemonVer, selfVer string) bool {
+	return daemonVer != "" && selfVer != "v0.0.0-dev" &&
+		!release.VersionsMatch(versionToken(daemonVer), selfVer)
+}
+
+// planFixes maps a diagnosed report to the ordered steps doctor --fix
+// should take. PURE and table-tested: every host fact is passed in
+// (backend + availability from the detected Manager, selfVersion = this
+// binary's build.Version, goos for the linger gate).
 //
-// Ordering: daemon liveness first (a down or stale daemon is the
-// headline failure), then unit hygiene, then linger.
+// Guardrails baked into the plan, not just the executor:
+//   - Only a SUPERVISED backend (systemd-user / launchd, reachable) gets a
+//     live start/restart; nohup / unreachable gets an advisory, never an
+//     auto-spawn (connect's "never nohup-spawn an unconsented listener").
+//   - A restart is planned only when it is SESSION-SAFE: if the systemd
+//     unit lacks KillMode=process, restarting wipes the cgroup and drops
+//     every session, so the plan advises refreshing the unit first instead.
+//   - The unit is never auto-rewritten (it can carry custom ExecStart
+//     flags we can't reconstruct) — it is always an advisory.
 func planFixes(r DoctorReport, backend string, available bool, goos, selfVersion string) []plannedFix {
 	var out []plannedFix
 	supervised := available && backend != "nohup"
+	unitBad := backend == "systemd-user" && r.UnitFile != nil && (!r.UnitFile.Present || !r.UnitFile.KillModeProcess)
+	unitCoveredByRestartAdvice := false
 
 	switch {
 	case !r.Daemon.Running:
@@ -58,15 +92,21 @@ func planFixes(r DoctorReport, backend string, available bool, goos, selfVersion
 		}
 	case staleServe(r, selfVersion):
 		reason := staleServeReason(r, selfVersion)
-		if supervised {
-			out = append(out, plannedFix{fixRestartDaemon, reason})
-		} else {
+		switch {
+		case !supervised:
 			out = append(out, plannedFix{adviseNoSupervisor, reason})
+		case unitBad:
+			// A restart here would drop every session (no KillMode=process).
+			// Advise the unit refresh first; the operator re-runs --fix.
+			out = append(out, plannedFix{adviseRestartNeedsUnit, reason})
+			unitCoveredByRestartAdvice = true
+		default:
+			out = append(out, plannedFix{fixRestartDaemon, reason})
 		}
 	}
 
-	if backend == "systemd-user" && r.UnitFile != nil && (!r.UnitFile.Present || !r.UnitFile.KillModeProcess) {
-		out = append(out, plannedFix{fixRefreshUnit, "unit file missing or lacks KillMode=process"})
+	if unitBad && !unitCoveredByRestartAdvice {
+		out = append(out, plannedFix{adviseUnitRefresh, unitRefreshWhy(r)})
 	}
 	if backend == "systemd-user" && goos == "linux" &&
 		r.Linger != nil && !r.Linger.Enabled && r.Linger.Error == "" {
@@ -75,44 +115,37 @@ func planFixes(r DoctorReport, backend string, available bool, goos, selfVersion
 	return out
 }
 
-// staleServe reports the botched-update signature: more than one serve
-// process, one running a DELETED binary, or the running daemon's version
-// predating this binary. Mirrors buildDoctorReport's warning conditions
-// so --fix acts on exactly what the report flags.
+// staleServe is the botched-update signature the report warns on: a
+// suspicious census (multiple / deleted-exe) or a running daemon whose
+// version predates this binary. Built from the shared predicates so it
+// stays in lockstep with buildDoctorReport.
 func staleServe(r DoctorReport, selfVersion string) bool {
-	if len(r.Processes) > 1 {
-		return true
-	}
-	for _, p := range r.Processes {
-		if p.Deleted {
-			return true
-		}
-	}
-	return runningVersionSkew(r, selfVersion)
-}
-
-// runningVersionSkew is the "the serving process predates this binary"
-// check, gated (like the report's) off an un-ldflagged dev build.
-func runningVersionSkew(r DoctorReport, selfVersion string) bool {
-	return r.Daemon.Running && r.Daemon.Version != "" && selfVersion != "v0.0.0-dev" &&
-		!release.VersionsMatch(versionToken(r.Daemon.Version), selfVersion)
+	return serveCensusSuspicious(r.Processes) ||
+		(r.Daemon.Running && runningVersionSkew(r.Daemon.Version, selfVersion))
 }
 
 func staleServeReason(r DoctorReport, selfVersion string) string {
 	switch {
 	case len(r.Processes) > 1:
 		return fmt.Sprintf("%d serve processes running", len(r.Processes))
-	case runningVersionSkew(r, selfVersion):
+	case r.Daemon.Running && runningVersionSkew(r.Daemon.Version, selfVersion):
 		return fmt.Sprintf("running daemon %s predates this binary %s", r.Daemon.Version, selfVersion)
 	default:
 		return "a serve process is running a deleted binary"
 	}
 }
 
-// runDoctorFix applies the planned remediations after the report has
-// already been printed. Returns the process exit code: 0 if the box
-// ends healthy, doctorExitWarnings otherwise. Execution is thin and
-// host-dependent; the decision logic it drives lives in planFixes.
+func unitRefreshWhy(r DoctorReport) string {
+	if r.UnitFile != nil && !r.UnitFile.Present {
+		return "unit file missing"
+	}
+	return "unit lacks KillMode=process (sessions drop on restart)"
+}
+
+// runDoctorFix applies the planned steps after the report has printed.
+// Returns doctor's exit code: 0 if the box ends healthy, doctorExitWarnings
+// otherwise (never a foreign code — the doctor contract is 0/1/2). The
+// decision logic lives in planFixes; this is thin execution.
 func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeout time.Duration) int {
 	mgr := svcmgr.Detect(ctx)
 	plan := planFixes(r, mgr.Name(), mgr.Available(ctx), runtime.GOOS, build.Version)
@@ -125,21 +158,28 @@ func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeou
 		return doctorExitWarnings
 	}
 
-	binPath, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mtroamd doctor --fix: can't resolve own path: %v\n", err)
-		return doctorExitWarnings
-	}
+	// The supervisor launches the daemon from the unit's ExecStart (the
+	// INSTALLED path), NOT from wherever doctor happens to run - so all
+	// stale-vs-fresh reasoning keys on the install path, never os.Executable.
+	binPath := release.JoinBin()
 	tag := versionToken(build.Version)
+	unitPath := mgr.UnitPath()
 
 	fmt.Println("\nApplying fixes:")
 	daemonTouched := false
 	for _, f := range plan {
 		switch f.kind {
 		case adviseNoSupervisor:
-			fmt.Printf("  • %s: backend is %s - no reachable supervisor to restart safely.\n"+
+			fmt.Printf("  • %s: backend is %s - no reachable supervisor to (re)start safely.\n"+
 				"      SIGTERM the stale serve pid(s) shown above and re-run your `mtroamd serve` command.\n",
 				f.why, mgr.Name())
+		case adviseUnitRefresh:
+			fmt.Printf("  • %s - run: mtroamd unit print > %s   (preserving your flags), then systemctl --user daemon-reload\n",
+				f.why, unitPath)
+		case adviseRestartNeedsUnit:
+			fmt.Printf("  • stale daemon (%s), but a restart would drop ALL sessions: the unit lacks KillMode=process.\n"+
+				"      refresh it first: mtroamd unit print > %s  (preserving your flags), systemctl --user daemon-reload,\n"+
+				"      then re-run `mtroamd doctor --fix` to restart safely.\n", f.why, unitPath)
 		case fixStartDaemon:
 			fmt.Printf("  • starting daemon via %s (%s)…\n", mgr.Name(), f.why)
 			if err := mgr.Start(ctx, binPath); err != nil {
@@ -153,14 +193,6 @@ func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeou
 				fmt.Printf("      ✘ restart failed: %v\n", err)
 			} else {
 				daemonTouched = true
-				if killed := sweepStaleServe(binPath); len(killed) > 0 {
-					fmt.Printf("      swept stale serve pid(s): %v\n", killed)
-				}
-			}
-		case fixRefreshUnit:
-			fmt.Printf("  • refreshing unit file (%s)…\n", f.why)
-			if err := refreshUnitFile(ctx, mgr); err != nil {
-				fmt.Printf("      ✘ %v\n", err)
 			}
 		case fixEnableLinger:
 			fmt.Printf("  • enabling linger (%s)…\n", f.why)
@@ -175,13 +207,14 @@ func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeou
 		}
 	}
 
-	// After any daemon liveness action, refuse to claim success until the
-	// LIVE daemon reports the installed tag with no stale straggler - the
-	// same "installed must mean serving" gate `mtroamd update` enforces.
+	// After any liveness action, refuse to claim success until the LIVE
+	// daemon reports the installed tag - the "installed must mean serving"
+	// gate. verifyDaemonServing sweeps strays and polls; a timeout is a
+	// warning (exit 1), never a foreign exit code.
 	if daemonTouched {
 		fmt.Println("\n▸ verifying the running daemon")
-		if code := verifyRunningDaemon(ctx, tag, binPath); code != 0 {
-			return code
+		if !verifyDaemonServing(ctx, tag) {
+			return doctorExitWarnings
 		}
 	}
 
@@ -198,16 +231,47 @@ func runDoctorFix(ctx context.Context, r DoctorReport, socketPath string, timeou
 	return doctorExitWarnings
 }
 
+// verifyDaemonServing sweeps stale strays, then polls the live daemon
+// until it reports `tag` (matching update's post-restart gate) or a 30s
+// deadline passes. Doctor-scoped messaging - update.verifyRunningDaemon
+// prints "update:"-prefixed text telling the user to re-run doctor, wrong
+// here. Sweep FIRST so a stray holding a listener can't block the fresh
+// daemon from binding its ports.
+func verifyDaemonServing(ctx context.Context, tag string) bool {
+	if killed := sweepStaleServe(release.JoinBin()); len(killed) > 0 {
+		fmt.Printf("      swept stale serve pid(s): %v\n", killed)
+	}
+	sockets := []string{discoverClientSocketPath()}
+	if p := persistentSocketPath(); p != sockets[0] {
+		sockets = append(sockets, p)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		for _, sp := range sockets {
+			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			status, err := ipc.NewClient(sp, 2*time.Second).Status(probeCtx)
+			cancel()
+			if err == nil && status.Ok && release.VersionsMatch(versionToken(status.Version), tag) {
+				fmt.Printf("      ✓ running daemon reports %s\n", tag)
+				return true
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	fmt.Printf("      ✘ no daemon reported %s within 30s — run `mtroamd doctor` for detail\n", tag)
+	return false
+}
+
 // sweepStaleServe SIGTERMs same-uid serve processes carrying POSITIVE
 // stale evidence (a deleted exe, or a resolved path other than the
-// installed binary) that survive a restart as untracked orphans. The
-// fresh daemon (exe == the installed binary, not deleted) is never a
-// target, so this can't kill the process we just started - unlike a
-// blanket `pkill -x mtroamd`. Returns the pids signalled. No-op on
-// non-Linux, where findServeProcesses returns nothing.
-func sweepStaleServe(binPath string) []int {
-	resolved := binPath
-	if r, err := filepath.EvalSymlinks(binPath); err == nil {
+// INSTALLED binary) that survive as untracked orphans. servedBin is the
+// install path (release.JoinBin), which is what the supervisor launches -
+// so the fresh daemon (exe == servedBin, not deleted) is never a target,
+// unlike a blanket `pkill -x mtroamd`. Returns the pids signalled. No-op
+// on non-Linux, where findServeProcesses returns nothing.
+func sweepStaleServe(servedBin string) []int {
+	resolved := servedBin
+	if r, err := filepath.EvalSymlinks(servedBin); err == nil {
 		resolved = r
 	}
 	self := os.Getpid()
@@ -226,12 +290,11 @@ func sweepStaleServe(binPath string) []int {
 }
 
 // lingerOutcome is the result of attempting `loginctl enable-linger`.
-// Unlike the daemon restart / unit refresh (both user-scoped: `systemctl
-// --user`, `~/.config`), enable-linger writes system state
-// (/var/lib/systemd/linger) and normally needs root or a polkit admin
-// prompt - and doctor runs UNPRIVILEGED. So we attempt it (systemd >=248
-// can allow self-linger on an active session) and, on the common
-// permission denial, hand back a sudo advisory instead of a bare error.
+// Unlike the daemon restart / unit steps (all user-scoped), enable-linger
+// writes system state (/var/lib/systemd/linger) and normally needs root or
+// a polkit admin prompt - and doctor runs UNPRIVILEGED. So we attempt it
+// (systemd >=248 can allow self-linger on an active session) and, on the
+// common permission denial, hand back a sudo advisory instead of an error.
 type lingerOutcome int
 
 const (
@@ -240,9 +303,9 @@ const (
 	lingerFailed                         // some other failure (tooling missing, etc.)
 )
 
-// enableLinger runs `loginctl enable-linger <user>` so a systemd-user
-// daemon survives logout/reboot. Idempotent. Returns the outcome, the
-// username (for the advisory), and the raw error only for lingerFailed.
+// enableLinger runs `loginctl enable-linger <user>`. Idempotent. Returns
+// the outcome, the username (for the advisory), and the raw error only for
+// lingerFailed.
 func enableLinger(ctx context.Context) (lingerOutcome, string, error) {
 	u, err := user.Current()
 	if err != nil {
@@ -260,10 +323,9 @@ func enableLinger(ctx context.Context) (lingerOutcome, string, error) {
 }
 
 // lingerNeedsPrivilege reports whether loginctl's failure output is a
-// polkit / permission denial - the case where the fix needs root - as
-// opposed to a genuine tooling failure. Matches the phrasings polkit and
-// systemd emit when there is no way to authenticate (no agent on a
-// headless SSH session).
+// polkit / permission denial (the case that needs root) rather than a
+// genuine tooling failure. Matches the phrasings polkit and systemd emit
+// when there is no way to authenticate (no agent on a headless SSH login).
 func lingerNeedsPrivilege(out string) bool {
 	l := strings.ToLower(out)
 	for _, s := range []string{
@@ -277,28 +339,4 @@ func lingerNeedsPrivilege(out string) bool {
 		}
 	}
 	return false
-}
-
-// refreshUnitFile rewrites the systemd-user unit from the current
-// binary's renderer (the same output as `mtroamd unit print`) and
-// reloads the manager, fixing a missing file or a stale one lacking
-// KillMode=process. 0644 matches the render's world-readable-by-design
-// unit (no secrets).
-func refreshUnitFile(ctx context.Context, mgr svcmgr.Manager) error {
-	path := mgr.UnitPath()
-	if path == "" {
-		return fmt.Errorf("no unit path for backend %s", mgr.Name())
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir unit dir: %w", err)
-	}
-	var buf bytes.Buffer
-	if code := runUnitPrint(nil, &buf); code != 0 {
-		return fmt.Errorf("render unit failed (exit %d)", code)
-	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("write unit %s: %w", path, err)
-	}
-	_ = exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload").Run()
-	return nil
 }

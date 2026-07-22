@@ -113,19 +113,48 @@ func TestPlanFixes(t *testing.T) {
 			name:    "unit missing → refresh",
 			report:  rep(true, "v1.7.8", nil, unitMissing, lingerOn),
 			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
-			want: []doctorFixKind{fixRefreshUnit},
+			want: []doctorFixKind{adviseUnitRefresh},
 		},
 		{
 			name:    "unit lacks KillMode=process → refresh",
 			report:  rep(true, "v1.7.8", nil, unitNoKill, lingerOn),
 			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
-			want: []doctorFixKind{fixRefreshUnit},
+			want: []doctorFixKind{adviseUnitRefresh},
 		},
 		{
 			name:    "stale daemon + linger off → restart then linger, in order",
 			report:  rep(true, "v1.7.6", nil, unitOK, lingerOff),
 			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
 			want: []doctorFixKind{fixRestartDaemon, fixEnableLinger},
+		},
+		{
+			// A restart would wipe the cgroup (no KillMode=process) and drop
+			// every session, so --fix must NOT auto-restart — it advises
+			// fixing the unit first and does not also emit a separate refresh.
+			name:    "stale daemon + unit lacks KillMode → advise refresh-first, no restart",
+			report:  rep(true, "v1.7.6", nil, unitNoKill, lingerOn),
+			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
+			want: []doctorFixKind{adviseRestartNeedsUnit},
+		},
+		{
+			name:    "stale (deleted exe) + unit missing → advise refresh-first, no restart",
+			report:  rep(true, "v1.7.8", []serveProcess{{PID: 9, Deleted: true}}, unitMissing, lingerOn),
+			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
+			want: []doctorFixKind{adviseRestartNeedsUnit},
+		},
+		{
+			name:    "stale + no-KillMode + linger off → advise restart-needs-unit then linger",
+			report:  rep(true, "v1.7.6", nil, unitNoKill, lingerOff),
+			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
+			want: []doctorFixKind{adviseRestartNeedsUnit, fixEnableLinger},
+		},
+		{
+			// A DOWN daemon has no sessions to lose, so start it AND advise
+			// the unit fix for the next restart.
+			name:    "daemon down + unit missing → start then advise unit",
+			report:  rep(false, "", nil, unitMissing, lingerOn),
+			backend: "systemd-user", available: true, goos: "linux", selfVer: self,
+			want: []doctorFixKind{fixStartDaemon, adviseUnitRefresh},
 		},
 		{
 			name:    "launchd daemon down → start (no linger/unit on macOS)",
@@ -179,7 +208,7 @@ func TestLingerNeedsPrivilege(t *testing.T) {
 func TestPlanFixesOrdersDaemonFirst(t *testing.T) {
 	r := rep(false, "", nil, unitMissing, lingerOff)
 	got := kindsOf(planFixes(r, "systemd-user", true, "linux", "v1.7.8"))
-	want := []doctorFixKind{fixStartDaemon, fixRefreshUnit, fixEnableLinger}
+	want := []doctorFixKind{fixStartDaemon, adviseUnitRefresh, fixEnableLinger}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("order = %v, want %v", got, want)
 	}
