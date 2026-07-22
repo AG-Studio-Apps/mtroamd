@@ -123,6 +123,9 @@ func runDoctor(args []string) int {
 	socket := fs.String("socket", "", "unix socket path (default: $XDG_RUNTIME_DIR/mtroamd.sock)")
 	timeout := fs.Duration("timeout", 3*time.Second, "max time to wait for daemon IPC")
 	asJSON := fs.Bool("json", false, "emit the diagnostic report as JSON on stdout (stable wire shape)")
+	fix := fs.Bool("fix", false, "attempt to remediate fixable warnings: restart a stale/down daemon "+
+		"via its supervisor (+ sweep stale strays), enable linger, refresh the unit file. "+
+		"systemd-user / launchd only - never nohup-spawns a listener")
 	fs.Usage = func() {
 		fmt.Fprintf(fs.Output(), "Usage: mtroamd doctor [flags]\n\n")
 		fs.PrintDefaults()
@@ -136,7 +139,10 @@ func runDoctor(args []string) int {
 
 	report := buildDoctorReport(socketPath, *timeout)
 
-	if *asJSON {
+	// --json is a pure read; --fix mutates and streams human-readable
+	// actions, so the two don't compose - when both are set, --fix wins
+	// and the report prints human-readable above the fix log.
+	if *asJSON && !*fix {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(report); err != nil {
@@ -150,6 +156,13 @@ func runDoctor(args []string) int {
 	}
 
 	printDoctorReport(os.Stdout, report)
+	if *fix {
+		// Restart + verify can outlast the diagnostic timeout (cold QUIC/
+		// Tailscale bring-up); give the remediation its own budget.
+		fixCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		return runDoctorFix(fixCtx, report, socketPath, *timeout)
+	}
 	if len(report.Warnings) > 0 {
 		return doctorExitWarnings
 	}

@@ -96,7 +96,7 @@ Subcommands:
   rename             change a session's user-visible name (PTY + buffer unaffected)
   status             print the daemon's operational snapshot (--json for tooling)
   session-search     regex-grep a session's scrollback ring (--json for tooling)
-  doctor             diagnose daemon / supervisor / unit-file / linger health (--json for tooling)
+  doctor             diagnose daemon / supervisor / unit-file / linger health (--json for tooling, --fix to remediate)
   update             check for / apply a signed self-update from GitHub Releases
   restart            cycle the daemon via the detected supervisor (sessions survive)
   uninstall          remove the daemon, supervisor unit, and (optionally) state
