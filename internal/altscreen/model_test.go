@@ -117,6 +117,52 @@ func TestRepaintRestoresAltActive(t *testing.T) {
 	}
 }
 
+// TestRepaintPlusBackfillMatchesLive is the grid-persistence restore contract:
+// a persisted Repaint (the model state at the save HeadSeq) plus the resume
+// backfill (the bytes AFTER that HeadSeq) must reproduce the live model exactly.
+// This is what proves the seq watermarks are consistent — if lastSidecarSeq
+// lagged the Repaint, the resume would replay bytes already in the Repaint
+// (double-feed), and the relative sequences (CUP/linefeeds/footer) would land on
+// the wrong rows. The negative half feeds the backfill twice to show that a
+// double-feed genuinely diverges (so the positive case is not vacuous).
+func TestRepaintPlusBackfillMatchesLive(t *testing.T) {
+	rows, cols := 8, 30
+	head := "\x1b[?1049h\x1b[H\x1b[2J\x1b[1;1Hline one\x1b[2;1Hline two\x1b[3;1Hline three"
+	// Arrives AFTER the save point. Starts with an absolute CUP (cursor-independent,
+	// so the positive case doesn't depend on where Repaint leaves the cursor) but
+	// ENDS with a linefeed at the bottom row — a RELATIVE scroll, so applying it
+	// twice scrolls twice and the double-feed diverges (that's the real corruption
+	// mode: relative sequences replayed on top of a Repaint that already has them).
+	backfill := "\x1b[8;1Hbottom row\n"
+
+	live := feed(rows, cols, head+backfill)                        // saw everything
+	saved := feed(rows, cols, head)                                // state at the save HeadSeq
+	restored := feed(rows, cols, string(saved.Repaint()), backfill) // Repaint + resume backfill (fed once)
+
+	for r := 0; r < rows; r++ {
+		if live.rowText(r) != restored.rowText(r) {
+			t.Fatalf("row %d: live %q vs restored+backfill %q", r, live.rowText(r), restored.rowText(r))
+		}
+	}
+	if !restored.AltActive() || !restored.Faithful() {
+		t.Fatalf("restored not faithful alt (alt=%v faithful=%v)", restored.AltActive(), restored.Faithful())
+	}
+
+	// A double-feed (backfill applied twice) must NOT match live — proves the
+	// test would catch the seq-skew regression it exists to guard.
+	doubled := feed(rows, cols, string(saved.Repaint()), backfill, backfill)
+	same := true
+	for r := 0; r < rows; r++ {
+		if live.rowText(r) != doubled.rowText(r) {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("double-fed backfill matched live — the test cannot distinguish a double-feed")
+	}
+}
+
 // TestStableFooterSurvivesPartialRedraws is the regression for the bug:
 // a footer drawn ONCE must survive reconstruction even when only the top
 // of the screen is repainted afterward (Claude's spinner). The daemon's
