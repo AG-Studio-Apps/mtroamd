@@ -9,12 +9,7 @@ import (
 func (s *Screen) rowText(r int) string {
 	var b strings.Builder
 	for c := 0; c < s.cols; c++ {
-		g := s.grid[r][c]
-		if g.width == 0 {
-			continue // wide-glyph spacer — content is in the lead cell
-		}
-		b.WriteRune(g.r)
-		b.WriteString(g.comb)
+		b.WriteRune(s.grid[r][c].r)
 	}
 	return strings.TrimRight(b.String(), " ")
 }
@@ -92,77 +87,6 @@ func TestReconstructRoundTrips(t *testing.T) {
 	}
 }
 
-// TestRepaintRestoresAltActive is the invariant grid-persistence relies on:
-// a Repaint of an ALT-active screen, fed into a fresh screen, restores
-// AltActive()+Faithful() (via the emitted ?1049h + ED2) AND the grid — so a
-// persisted Repaint reconstructs a faithful alt model across a daemon restart,
-// which is what InjectAltScreenRepaint gates on.
-func TestRepaintRestoresAltActive(t *testing.T) {
-	rows, cols := 6, 20
-	a := feed(rows, cols, "\x1b[?1049h\x1b[H\x1b[2J\x1b[2;3H\x1b[38;5;42mhello\x1b[39m\x1b[6;1Hfooter row")
-	if !a.AltActive() || !a.Faithful() {
-		t.Fatalf("setup: source not faithful alt (alt=%v faithful=%v)", a.AltActive(), a.Faithful())
-	}
-	b := feed(rows, cols, string(a.Repaint()))
-	if !b.AltActive() {
-		t.Fatal("restored screen lost alt-active — Repaint must emit ?1049h")
-	}
-	if !b.Faithful() {
-		t.Fatal("restored screen not faithful after feeding a Repaint")
-	}
-	for r := 0; r < rows; r++ {
-		if a.rowText(r) != b.rowText(r) {
-			t.Fatalf("row %d differs: %q vs %q", r, a.rowText(r), b.rowText(r))
-		}
-	}
-}
-
-// TestRepaintPlusBackfillMatchesLive is the grid-persistence restore contract:
-// a persisted Repaint (the model state at the save HeadSeq) plus the resume
-// backfill (the bytes AFTER that HeadSeq) must reproduce the live model exactly.
-// This is what proves the seq watermarks are consistent — if lastSidecarSeq
-// lagged the Repaint, the resume would replay bytes already in the Repaint
-// (double-feed), and the relative sequences (CUP/linefeeds/footer) would land on
-// the wrong rows. The negative half feeds the backfill twice to show that a
-// double-feed genuinely diverges (so the positive case is not vacuous).
-func TestRepaintPlusBackfillMatchesLive(t *testing.T) {
-	rows, cols := 8, 30
-	head := "\x1b[?1049h\x1b[H\x1b[2J\x1b[1;1Hline one\x1b[2;1Hline two\x1b[3;1Hline three"
-	// Arrives AFTER the save point. Starts with an absolute CUP (cursor-independent,
-	// so the positive case doesn't depend on where Repaint leaves the cursor) but
-	// ENDS with a linefeed at the bottom row — a RELATIVE scroll, so applying it
-	// twice scrolls twice and the double-feed diverges (that's the real corruption
-	// mode: relative sequences replayed on top of a Repaint that already has them).
-	backfill := "\x1b[8;1Hbottom row\n"
-
-	live := feed(rows, cols, head+backfill)                        // saw everything
-	saved := feed(rows, cols, head)                                // state at the save HeadSeq
-	restored := feed(rows, cols, string(saved.Repaint()), backfill) // Repaint + resume backfill (fed once)
-
-	for r := 0; r < rows; r++ {
-		if live.rowText(r) != restored.rowText(r) {
-			t.Fatalf("row %d: live %q vs restored+backfill %q", r, live.rowText(r), restored.rowText(r))
-		}
-	}
-	if !restored.AltActive() || !restored.Faithful() {
-		t.Fatalf("restored not faithful alt (alt=%v faithful=%v)", restored.AltActive(), restored.Faithful())
-	}
-
-	// A double-feed (backfill applied twice) must NOT match live — proves the
-	// test would catch the seq-skew regression it exists to guard.
-	doubled := feed(rows, cols, string(saved.Repaint()), backfill, backfill)
-	same := true
-	for r := 0; r < rows; r++ {
-		if live.rowText(r) != doubled.rowText(r) {
-			same = false
-			break
-		}
-	}
-	if same {
-		t.Fatal("double-fed backfill matched live — the test cannot distinguish a double-feed")
-	}
-}
-
 // TestStableFooterSurvivesPartialRedraws is the regression for the bug:
 // a footer drawn ONCE must survive reconstruction even when only the top
 // of the screen is repainted afterward (Claude's spinner). The daemon's
@@ -189,11 +113,10 @@ func TestStableFooterSurvivesPartialRedraws(t *testing.T) {
 	}
 }
 
-// TestRestructuringOpsStayFaithful: the content-restructuring ops real TUIs
-// (vim/htop/less/fzf) emit constantly — scroll region, insert/delete line,
-// insert/delete char, scroll up/down, erase char, reverse index — are now
-// EMULATED, so the reconstruction stays faithful (no fallback to raw replay).
-func TestRestructuringOpsStayFaithful(t *testing.T) {
+// TestUnfaithfulOnRestructuringOps: content-restructuring ops the model
+// doesn't emulate (scroll region, insert/delete line, reverse index) must
+// flag the reconstruction unfaithful so the caller keeps the raw replay.
+func TestUnfaithfulOnRestructuringOps(t *testing.T) {
 	for _, seq := range []string{
 		"\x1b[2;5r", // DECSTBM scroll region
 		"\x1b[3L",   // insert line
@@ -201,76 +124,16 @@ func TestRestructuringOpsStayFaithful(t *testing.T) {
 		"\x1b[1@",   // insert char
 		"\x1b[1P",   // delete char
 		"\x1b[2S",   // scroll up
-		"\x1b[2T",   // scroll down
-		"\x1b[3X",   // erase char
 		"\x1bM",     // RI reverse index
 	} {
 		_, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi"+seq), 6, 12)
-		if !faithful {
-			t.Errorf("seq %q should now be emulated (faithful)", seq)
+		if faithful {
+			t.Errorf("seq %q should be unfaithful", seq)
 		}
 	}
-	// Genuinely unserializable line attributes (double-height/width) still bail.
-	if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi\x1b#3"), 6, 12); faithful {
-		t.Error("double-height line (ESC#3) should be unfaithful")
-	}
-}
-
-// TestInsertDeleteLine checks IL/DL move whole lines within the scroll region.
-func TestInsertDeleteLine(t *testing.T) {
-	s := feed(5, 6, "\x1b[H\x1b[2J",
-		"\x1b[1;1HAAA", "\x1b[2;1HBBB", "\x1b[3;1HCCC", "\x1b[4;1HDDD",
-		"\x1b[2;1H\x1b[1L") // insert 1 blank line at row 2
-	if s.rowText(0) != "AAA" || s.rowText(1) != "" || s.rowText(2) != "BBB" || s.rowText(3) != "CCC" {
-		t.Fatalf("IL: %q %q %q %q", s.rowText(0), s.rowText(1), s.rowText(2), s.rowText(3))
-	}
-	s2 := feed(5, 6, "\x1b[H\x1b[2J",
-		"\x1b[1;1HAAA", "\x1b[2;1HBBB", "\x1b[3;1HCCC",
-		"\x1b[2;1H\x1b[1M") // delete row 2
-	if s2.rowText(0) != "AAA" || s2.rowText(1) != "CCC" || s2.rowText(2) != "" {
-		t.Fatalf("DL: %q %q %q", s2.rowText(0), s2.rowText(1), s2.rowText(2))
-	}
-}
-
-// TestInsertDeleteEraseChar checks ICH/DCH/ECH within a line.
-func TestInsertDeleteEraseChar(t *testing.T) {
-	s := feed(2, 10, "\x1b[1;1Habcdef", "\x1b[1;2H\x1b[2@") // insert 2 blanks at col 2
-	if s.rowText(0) != "a  bcdef" {
-		t.Fatalf("ICH: %q", s.rowText(0))
-	}
-	s2 := feed(2, 10, "\x1b[1;1Habcdef", "\x1b[1;2H\x1b[2P") // delete 2 at col 2
-	if s2.rowText(0) != "adef" {
-		t.Fatalf("DCH: %q", s2.rowText(0))
-	}
-	s3 := feed(2, 10, "\x1b[1;1Habcdef", "\x1b[1;2H\x1b[3X") // erase 3 at col 2 (no shift)
-	if s3.rowText(0) != "a   ef" {
-		t.Fatalf("ECH: %q", s3.rowText(0))
-	}
-}
-
-// TestScrollRegion checks DECSTBM confines line-feed scrolling to the region.
-func TestScrollRegion(t *testing.T) {
-	// region rows 2..4 (1-based). Fill them, then LF at the bottom margin scrolls
-	// only within the region; rows 1 and 5 are untouched.
-	s := feed(5, 6, "\x1b[H\x1b[2J",
-		"\x1b[1;1HTOP", "\x1b[5;1HBOT",
-		"\x1b[2;4r",                     // scroll region rows 2..4
-		"\x1b[2;1HL1\r\nL2\r\nL3\r\nL4") // L1,L2,L3 then LF scrolls region, L4 into row4
-	if s.rowText(0) != "TOP" || s.rowText(4) != "BOT" {
-		t.Fatalf("region leaked: top=%q bot=%q", s.rowText(0), s.rowText(4))
-	}
-	// After the scroll, region holds L2,L3,L4 (L1 scrolled out).
-	if s.rowText(1) != "L2" || s.rowText(2) != "L3" || s.rowText(3) != "L4" {
-		t.Fatalf("region content: %q %q %q", s.rowText(1), s.rowText(2), s.rowText(3))
-	}
-}
-
-// TestReverseIndexScrollsAtTop: RI at the top margin scrolls the region down.
-func TestReverseIndexScrollsAtTop(t *testing.T) {
-	s := feed(4, 6, "\x1b[H\x1b[2J", "\x1b[1;1HR1", "\x1b[2;1HR2",
-		"\x1b[1;1H\x1bM") // cursor at top, RI → scroll down, blank row appears at top
-	if s.rowText(0) != "" || s.rowText(1) != "R1" || s.rowText(2) != "R2" {
-		t.Fatalf("RI: %q %q %q", s.rowText(0), s.rowText(1), s.rowText(2))
+	// Pure Claude repertoire stays faithful.
+	if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2J\x1b[3;1H\x1b[38;5;9mx\x1b[39m\x1b[6;1Hfoot"), 6, 12); !faithful {
+		t.Error("Claude-style ops should be faithful")
 	}
 }
 
@@ -278,18 +141,33 @@ func TestReverseIndexScrollsAtTop(t *testing.T) {
 // blank until rotation" bug. A reconstruction window can still hold pre-Claude
 // SHELL output (a session whose 4 MiB ring hasn't evicted its head), and that
 // shell emits a harmless full-screen scroll-region reset (ESC[r) at startup.
-// Both bare and explicit scroll regions are now emulated, so they stay
-// faithful and the footer re-emit keeps working.
+// Treating that benign DECSTBM as a restructuring op tripped the sticky
+// unfaithful flag, so the footer re-emit was skipped for the session's life and
+// a reattach where the footer had aged out showed blank bottom rows until a
+// rotation. A full-screen region restructures nothing, so it must stay faithful.
 func TestFullScreenScrollRegionStaysFaithful(t *testing.T) {
+	// A BARE reset (no explicit bottom row) restores the full screen and stays
+	// faithful, a shell/prompt routinely emits one and it must not disable the
+	// footer re-emit.
 	for _, seq := range []string{
-		"\x1b[r",    // bare reset to full screen
-		"\x1b[;r",   // explicit empty params
-		"\x1b[1r",   // top only, no bottom
-		"\x1b[2;5r", // partial region — now emulated
-		"\x1b[1;6r", // explicit bottom
+		"\x1b[r",  // bare reset to full screen
+		"\x1b[;r", // explicit empty params
+		"\x1b[1r", // top only, no bottom
 	} {
 		if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi"+seq), 6, 12); !faithful {
-			t.Errorf("scroll region %q must stay faithful", seq)
+			t.Errorf("bare full-screen scroll region %q must stay faithful", seq)
+		}
+	}
+	// A region with an EXPLICIT bottom we can't emulate (and can't trust as
+	// "full" because the ring survives resizes), so it bails, even top=1;bottom.
+	// (TestUnfaithfulOnRestructuringOps also covers the partial \x1b[2;5r.)
+	for _, seq := range []string{
+		"\x1b[2;5r",  // partial region
+		"\x1b[1;6r",  // explicit bottom (== current rows here, but ambiguous across resizes)
+		"\x1b[1;99r", // explicit bottom past the screen
+	} {
+		if _, faithful := Reconstruct([]byte("\x1b[H\x1b[2Jhi"+seq), 6, 12); faithful {
+			t.Errorf("scroll region with explicit bottom %q must be unfaithful", seq)
 		}
 	}
 	// End to end: pre-Claude shell prompt + bare ESC[r, then Claude paints its
