@@ -11,6 +11,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	"github.com/AG-Studio-Apps/mtroamd/internal/altscreen"
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
@@ -372,6 +373,19 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		// session is rehydrated, not retroactively.
 		wedge:            newWedgeWatcher(),
 		titleTracker:     &oscTitleTracker{},
+		// Without this the live screen-model is nil on restored sessions
+		// (daemon restart / lazy-spawn), so InjectAltScreenRepaint returns
+		// false and every reattach to such a session gets the truncated raw
+		// tail — i.e. the cold-start alt-screen spill this whole feature
+		// fixes, for the rest of the session's life. Same class of bug as
+		// the wedge-nil-on-restore above. A fresh screen is correct: the
+		// reconnected sidecar's live stream repopulates it via Pump (a
+		// full-screen app started after restore emits ?1049h and paints from
+		// scratch), and until then the attach falls back to raw replay,
+		// never worse. Sized to the persisted geometry; Resize keeps it in
+		// step. (We deliberately do NOT seed it from the restored ring here:
+		// the reattached sidecar resumes mid-stream and would double-feed.)
+		screen:           altscreen.New(int(meta.Rows), int(meta.Cols)),
 	}
 	// Seed the alt-screen tracker from the persisted snapshot. Without
 	// this, a session that was on Claude /tui (or any DECSET 1049h
@@ -382,6 +396,19 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 	// stay silenced until the next user-driven alt-screen toggle.
 	// Bug A in the v1.1.2 release notes.
 	s.wedge.SetAltScreenActive(meta.AltScreenActive)
+	// NOTE: we deliberately do NOT reconstruct the screen-model from the
+	// restored ring here. A full-frame redraw demands a COMPLETE grid, but an
+	// incremental TUI (Claude, vim) emits cursor-addressed deltas that assume
+	// screen state from before the ring window, so a mid-ring reconstruction is
+	// sparse/incomplete — injecting it as authoritative clears the rest of the
+	// screen and is WORSE than the raw-tail fallback (verified on-device: only
+	// a few lines painted, the rest blank). So a session that was ALREADY in a
+	// full-screen app when the daemon restarted (upgrade / reboot) keeps the
+	// model on the main buffer → InjectAltScreenRepaint returns false → raw
+	// replay, same as before this feature. The model is still constructed fresh
+	// (see the struct literal) so an app STARTED after the restart is fed live
+	// and gets a correct redraw. Clean restart-survival needs the actual grid
+	// persisted to disk — a separate, larger change.
 	// Same rationale for the OSC title tracker — the title-setting
 	// OSC may have been evicted from the ring before this load. Seed
 	// from the persisted snapshot so AttachAck.LastTitle returns the
