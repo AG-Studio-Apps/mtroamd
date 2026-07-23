@@ -92,6 +92,31 @@ func TestReconstructRoundTrips(t *testing.T) {
 	}
 }
 
+// TestRepaintRestoresAltActive is the invariant grid-persistence relies on:
+// a Repaint of an ALT-active screen, fed into a fresh screen, restores
+// AltActive()+Faithful() (via the emitted ?1049h + ED2) AND the grid — so a
+// persisted Repaint reconstructs a faithful alt model across a daemon restart,
+// which is what InjectAltScreenRepaint gates on.
+func TestRepaintRestoresAltActive(t *testing.T) {
+	rows, cols := 6, 20
+	a := feed(rows, cols, "\x1b[?1049h\x1b[H\x1b[2J\x1b[2;3H\x1b[38;5;42mhello\x1b[39m\x1b[6;1Hfooter row")
+	if !a.AltActive() || !a.Faithful() {
+		t.Fatalf("setup: source not faithful alt (alt=%v faithful=%v)", a.AltActive(), a.Faithful())
+	}
+	b := feed(rows, cols, string(a.Repaint()))
+	if !b.AltActive() {
+		t.Fatal("restored screen lost alt-active — Repaint must emit ?1049h")
+	}
+	if !b.Faithful() {
+		t.Fatal("restored screen not faithful after feeding a Repaint")
+	}
+	for r := 0; r < rows; r++ {
+		if a.rowText(r) != b.rowText(r) {
+			t.Fatalf("row %d differs: %q vs %q", r, a.rowText(r), b.rowText(r))
+		}
+	}
+}
+
 // TestStableFooterSurvivesPartialRedraws is the regression for the bug:
 // a footer drawn ONCE must survive reconstruction even when only the top
 // of the screen is repainted afterward (Claude's spinner). The daemon's
