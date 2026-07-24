@@ -54,3 +54,45 @@ func TestResizeStrandsFooterUntilRepaint(t *testing.T) {
 		t.Fatalf("after repaint: footer at %d, want 40 (bottom of 42)", footerRow(s))
 	}
 }
+
+// TestResizeDirtyGatesInject asserts the invariant the attach-path fix relies
+// on. A geometry-changing Resize marks the model resize-dirty, so
+// InjectAltScreenRepaint refuses and the footer re-emit skips — no top-anchored
+// frame ships (the rc6 regression). The next Feed (the app's SIGWINCH repaint)
+// clears it, so a later SAME-geometry reattach injects a correct frame (the
+// prime's value case). A same-geometry resize must NOT dirty the model, else
+// every cold-start same-geom reattach falls back to raw replay and the prime
+// never fires.
+func TestResizeDirtyGatesInject(t *testing.T) {
+	s := New(22, 45)
+	s.Feed([]byte(claudeFrame(22)))
+	if s.ResizeDirty() {
+		t.Fatal("fresh steady-state model must not be resize-dirty")
+	}
+
+	// A same-geometry resize is a no-op — must not mark the model dirty.
+	s.Resize(22, 45)
+	if s.ResizeDirty() {
+		t.Fatal("same-geometry resize must not mark the model dirty (kills the prime's value case)")
+	}
+
+	// A real geometry change (cold-start grow) top-anchors the grid and MUST
+	// mark it dirty — the attach path refuses to inject until the app repaints.
+	s.Resize(42, 45)
+	if !s.ResizeDirty() {
+		t.Fatal("geometry-changing resize must mark the model dirty")
+	}
+	if footerRow(s) == 40 {
+		t.Fatal("precondition: grow should have stranded the footer, not placed it at the bottom")
+	}
+
+	// The app's SIGWINCH repaint arrives; the next Feed clears dirty and the
+	// footer lands at the real bottom → injectable again.
+	s.Feed([]byte(claudeFrame(42)))
+	if s.ResizeDirty() {
+		t.Fatal("post-resize Feed (the app repaint) must clear the dirty flag")
+	}
+	if footerRow(s) != 40 {
+		t.Fatalf("after repaint: footer at %d, want 40", footerRow(s))
+	}
+}

@@ -110,6 +110,18 @@ type Screen struct {
 	// erase char — is emulated, so faithful stays true for vim/htop/less/fzf.
 	// The caller uses it to fall back to the raw byte-window replay.
 	faithful bool
+
+	// resizedDirty is set when Resize() changes the geometry and cleared on the
+	// next Feed. While set, the grid is top-anchored to the NEW size but the app
+	// has NOT yet redrawn to it — a grow strands bottom-anchored content
+	// (Claude's prompt) mid-screen; a shrink drops it — so the model must NOT be
+	// injected as an authoritative frame (it would ship the misplaced grid: the
+	// cold-start-grow regression that parked the prime). The heal is any output
+	// after the resize: SIGWINCH makes Ink/Claude/vim/htop re-render, so the
+	// first post-resize Feed restores the grid to where the app actually draws
+	// (see TestResizeStrandsFooterUntilRepaint). Distinct from `faithful`, which
+	// tracks un-emulatable ops and recovers only on a full clear.
+	resizedDirty bool
 }
 
 // New returns a cleared rows×cols screen (main buffer active).
@@ -149,6 +161,11 @@ func newGrid(rows, cols int) [][]cell {
 
 // Faithful reports whether the model has stayed faithful (see the field doc).
 func (s *Screen) Faithful() bool { return s.faithful }
+
+// ResizeDirty reports whether the grid was geometry-changed but the app has not
+// yet repainted to the new size (see the field doc). The attach path must not
+// inject the model as an authoritative frame while this is true.
+func (s *Screen) ResizeDirty() bool { return s.resizedDirty }
 
 // MarkStale marks the grid as no longer trustworthy: the caller (the live
 // session model) invokes this when the PTY byte stream had a GAP (the sidecar
@@ -213,6 +230,10 @@ func (s *Screen) Resize(rows, cols int) {
 	s.x = clamp(s.x, 0, cols-1)
 	s.y = clamp(s.y, 0, rows-1)
 	s.wrapNext = false
+	// The grid is now top-anchored to the new geometry but the app hasn't
+	// repainted to it yet — mark dirty so the attach path won't inject the
+	// misplaced grid until the app's SIGWINCH repaint feeds us (see the field).
+	s.resizedDirty = true
 }
 
 func resizeGrid(old [][]cell, rows, cols int) [][]cell {
@@ -249,6 +270,12 @@ func isBlank(g cell) bool {
 
 // Feed replays a chunk of raw pty bytes into the grid.
 func (s *Screen) Feed(p []byte) {
+	if len(p) > 0 {
+		// Output after a resize is the app responding to SIGWINCH (Ink/Claude
+		// re-render the full frame; vim/htop repaint). The grid now tracks the
+		// app's real post-resize screen again, so it's injectable once more.
+		s.resizedDirty = false
+	}
 	// Reassemble a multi-byte rune split across the previous chunk boundary.
 	// QueryFilter already carries partial CSI/OSC across chunks, so the only
 	// partial tail the model sees is a ground-state UTF-8 rune. Copy so we

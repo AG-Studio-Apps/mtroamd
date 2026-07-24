@@ -108,3 +108,45 @@ func TestDifferentialAgainstTmux(t *testing.T) {
 		t.Logf("model matches tmux on all %d rows", rows)
 	}
 }
+
+// TestDifferentialResizeMarksDirty is the production-ring guard for the rc6
+// regression. It feeds a REAL captured session ring (a Claude/Ink session, the
+// untested class that broke) into the model, then resizes to a different
+// geometry — exactly what an attach from a differently-sized client does — and
+// asserts the model flags itself resize-dirty. rc6 shipped a top-anchored,
+// misplaced frame here because nothing marked the post-resize grid
+// untrustworthy; the attach path now refuses to inject a dirty model. Env-gated
+// (needs a live mtroamd session dir) like the tmux diff above.
+//
+//	REPRO_SESSION_DIR=~/.local/share/mtroamd/sessions/<sid> go test \
+//	  ./internal/altscreen/ -run TestDifferentialResizeMarksDirty -v
+func TestDifferentialResizeMarksDirty(t *testing.T) {
+	dir := os.Getenv("REPRO_SESSION_DIR")
+	if dir == "" {
+		t.Skip("set REPRO_SESSION_DIR to an mtroamd session dir")
+	}
+	lin, rows, cols, err := linearizeRing(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(rows, cols)
+	s.Feed(lin)
+	// Feeding a ring never resizes (SIGWINCH is out-of-band), so a steady-state
+	// model must be clean — the prime's value case.
+	if s.ResizeDirty() {
+		t.Fatal("steady-state model after feeding the ring must not be resize-dirty")
+	}
+
+	// Cold-start reattach at a taller client: the grow that broke Claude on rc6.
+	s.Resize(rows+6, cols)
+	if !s.ResizeDirty() {
+		t.Fatal("post-resize model must be resize-dirty so the attach path refuses to inject the top-anchored grid")
+	}
+	t.Logf("ring %dx%d grown to %dx%d → resize-dirty, inject correctly refused", cols, rows, cols, rows+6)
+
+	// The app's SIGWINCH repaint (any output) heals it → injectable again.
+	s.Feed([]byte("\x1b[1;1H"))
+	if s.ResizeDirty() {
+		t.Fatal("output after the resize (the app repaint) must clear the dirty flag")
+	}
+}

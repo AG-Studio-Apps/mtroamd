@@ -1121,8 +1121,9 @@ func (s *Session) Resize(rows, cols uint16) error {
 // ring prefix [.., start). Returns (0, false) when there is no model, the
 // app is on the main buffer (a normal shell — raw replay is correct there),
 // the model is unfaithful (unemulated op, or a sidecar gap marked it stale),
-// or the session is closed; the caller then falls back to today's footer +
-// raw replay, never worse than before.
+// the model is resize-dirty (geometry changed, app hasn't repainted yet — the
+// grid is top-anchored/misplaced), or the session is closed; the caller then
+// falls back to today's footer + raw replay, never worse than before.
 // ScreenState reports the live screen-model's diagnostic state: whether a
 // model exists, is on the alt buffer, and is faithful. For attach-path
 // logging only; racy by nature (Pump may feed between calls).
@@ -1135,13 +1136,28 @@ func (s *Session) ScreenState() (has, alt, faithful bool) {
 	return true, s.screen.AltActive(), s.screen.Faithful()
 }
 
+// ScreenResizeDirty reports whether the live screen-model was geometry-changed
+// but the app has not yet repainted to the new size (see altscreen.ResizeDirty).
+// The attach path gates both the full-frame redraw and the footer re-emit on
+// this: a dirty model is top-anchored to the new geometry and would ship a
+// misplaced frame. Returns false when there is no model. Racy for logging;
+// InjectAltScreenRepaint re-checks it authoritatively under the same lock.
+func (s *Session) ScreenResizeDirty() bool {
+	if s.screen == nil {
+		return false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return s.screen.ResizeDirty()
+}
+
 func (s *Session) InjectAltScreenRepaint() (start uint64, ok bool) {
 	if s.screen == nil {
 		return 0, false
 	}
 	s.screenMu.Lock()
 	defer s.screenMu.Unlock()
-	if !s.screen.AltActive() || !s.screen.Faithful() {
+	if !s.screen.AltActive() || !s.screen.Faithful() || s.screen.ResizeDirty() {
 		return 0, false
 	}
 	buf := s.Buffer()

@@ -201,22 +201,27 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// clamp; out-of-range dims are now silently ignored (the prior
 	// >0 gate kept zero-dim Attaches from resizing, but accepted
 	// everything above zero).
-	// Capture the pre-resize geometry so we can tell whether THIS attach changed
-	// the grid size. If it did, the live screen-model was just top-anchored to the
-	// new geometry and does NOT yet reflect where the app will redraw (a grow
-	// strands a bottom-anchored prompt mid-screen; a shrink drops it). The resize
-	// SIGWINCHes the app, whose fresh repaint rides the raw replay — so on a
-	// resized attach we SKIP the injected redraw and let raw replay carry the
-	// correct screen (rc5 behaviour, known-good for cold-start). A same-geometry
-	// attach keeps the steady-state grid — byte-faithful vs a real VT — so the
-	// prime still fires for its value case (footer aged out of the raw window,
-	// no fresh repaint).
+	// Resize the PTY + live screen-model to the exclusive client's geometry, and
+	// latch whether THIS attach changed the grid size. `attachResizedGrid` is an
+	// ATOMIC local decision (pre-resize geometry vs the attach dims) — unlike the
+	// model's resize-dirty flag it CANNOT be raced by the Pump goroutine clearing
+	// dirty between the resize and the inject below (the Pump feeds the model
+	// under screenMu in a separate acquisition). A geometry change top-anchors
+	// the model (it can't know where the app will redraw — a grow strands a
+	// bottom-anchored prompt mid-screen, a shrink drops it) and SIGWINCHes the
+	// app, so we skip BOTH the injected redraw and the footer re-emit and let raw
+	// replay carry the app's fresh repaint (rc5 behaviour, known-good for
+	// cold-start). A same-geometry attach is a no-op resize; the model's own
+	// resize-dirty flag (checked in InjectAltScreenRepaint + the footer gate)
+	// then catches a still-un-repainted MID-SESSION resize, and otherwise the
+	// prime fires for its value case (footer aged out, no fresh repaint coming).
 	prevRows, prevCols := sess.WindowSize()
+	attachResizedGrid := attachMode == session.AttachExclusive &&
+		dimsInBounds(att.Rows, att.Cols) &&
+		(prevRows != att.Rows || prevCols != att.Cols)
 	if attachMode == session.AttachExclusive && dimsInBounds(att.Rows, att.Cols) {
 		_ = sess.Resize(att.Rows, att.Cols)
 	}
-	attachResizedGrid := (prevRows != att.Rows || prevCols != att.Cols) &&
-		attachMode == session.AttachExclusive && dimsInBounds(att.Rows, att.Cols)
 
 	buf := sess.Buffer()
 	if buf == nil {
@@ -248,11 +253,25 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// the model can serve.
 	fullRedraw := false
 	var fullRedrawStart uint64
-	if att.ReplayBudget > 0 && !attachResizedGrid {
+	// Read once and reuse for the footer-re-emit gate below (single lock hop; no
+	// TOCTOU between two separate reads). dirty can only go true→false during an
+	// attach (Pump feeding the app's repaint; no concurrent Resize mid-handshake),
+	// so a captured value is never falsely stale in the unsafe direction.
+	var modelResizeDirty bool
+	if att.ReplayBudget > 0 {
 		hasScr, altScr, faithScr := sess.ScreenState()
-		if start, ok := sess.InjectAltScreenRepaint(); ok {
-			fullRedraw = true
-			fullRedrawStart = start
+		modelResizeDirty = sess.ScreenResizeDirty()
+		// Skip the inject when THIS attach resized (the atomic latch above): the
+		// model is top-anchored and the app will SIGWINCH-repaint, so raw replay
+		// carries it. On a same-geometry attach, InjectAltScreenRepaint is
+		// authoritative — it still refuses (ok=false) on a main-buffer, unfaithful,
+		// or resize-dirty model (the last catches a MID-SESSION resize whose
+		// repaint hasn't landed), so a stale/top-anchored grid is never shipped.
+		if !attachResizedGrid {
+			if start, ok := sess.InjectAltScreenRepaint(); ok {
+				fullRedraw = true
+				fullRedrawStart = start
+			}
 		}
 		slog.Info("attach.altredraw",
 			"sid", sess.ID().String(),
@@ -261,20 +280,10 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 			"modelHas", hasScr,
 			"modelAlt", altScr,
 			"modelFaithful", faithScr,
+			"attachResized", attachResizedGrid,
+			"modelResizeDirty", modelResizeDirty,
 			"injected", fullRedraw,
 			"start", fullRedrawStart)
-	} else if att.ReplayBudget > 0 && attachResizedGrid {
-		// Diagnostic: the inject was skipped because THIS attach resized the grid,
-		// so the model can't be trusted for a full-frame redraw yet — raw replay
-		// (with the app's SIGWINCH repaint) carries the screen instead.
-		slog.Info("attach.altredraw",
-			"sid", sess.ID().String(),
-			"budget", att.ReplayBudget,
-			"wedgeAlt", altActive,
-			"injected", false,
-			"skip", "attach_resized",
-			"from", fmt.Sprintf("%dx%d", prevCols, prevRows),
-			"to", fmt.Sprintf("%dx%d", att.Cols, att.Rows))
 	}
 
 	// Footer re-emit (fallback): only when the full-model redraw didn't
@@ -289,7 +298,13 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// vim/htop (scroll region / IL / DL) get nothing — they have no such
 	// footer. The redraw is cursor-neutral (ESC7/ESC8), so other attached
 	// clients see only an idempotent in-place refresh of the bottom rows.
-	if altActive && !fullRedraw {
+	//
+	// Also skip on a resized attach (the atomic latch OR a still-dirty model):
+	// like the full redraw, ReconstructBottomRows would place the bottom rows at
+	// the NEW geometry from OLD-geometry ring bytes (a grow misplaces them — the
+	// same regression the full-redraw gate guards). The app's SIGWINCH repaint
+	// carries the footer on a resized attach instead.
+	if altActive && !fullRedraw && !attachResizedGrid && !modelResizeDirty {
 		tail := buf.TailSeq()
 		if ring, _, _ := buf.ReadSince(tail, int(buf.HeadSeq()-tail)); len(ring) > 0 {
 			rows, cols := sess.WindowSize()
