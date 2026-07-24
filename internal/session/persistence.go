@@ -11,6 +11,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 
+	"github.com/AG-Studio-Apps/mtroamd/internal/altscreen"
 	"github.com/AG-Studio-Apps/mtroamd/internal/protocol"
 )
 
@@ -22,6 +23,14 @@ import (
 // that legitimate large-buffer deployments stay below it; the floor
 // (BufCapacity > 0) is already enforced.
 const maxPersistedBufCapacity = 100 * DefaultBufferCapacity
+
+// maxPersistedScreenRepaint caps the ScreenRepaint blob accepted from a
+// meta.cbor on restore. A real Repaint frame is a compact pen-tracked redraw
+// (~5–15 KiB); 1 MiB is a generous ceiling that a legitimate large-grid
+// snapshot stays well below, while bounding what a hostile state-dir writer
+// can hand to Screen.Feed on startup. Over-cap → the blob is ignored and the
+// session restores to a fresh model (raw-replay fallback), never a crash.
+const maxPersistedScreenRepaint = 1 << 20
 
 // persistenceFormatVersion identifies the on-disk schema. Bumped
 // whenever the meta.cbor / scrollback.bin layout changes in a way
@@ -106,6 +115,18 @@ type persistedSessionMeta struct {
 	// without a respawn. Pointer + omitempty so pre-broker snapshots
 	// round-trip as nil (unknown → iOS warns to regenerate).
 	ShimReady *bool `cbor:"shim_ready,omitempty"`
+
+	// ScreenRepaint is the alt-screen model's self-contained redraw frame
+	// (Screen.Repaint), captured in lockstep with the ring snapshot so it
+	// corresponds to the SAME HeadSeq. On restore it is fed into the fresh
+	// Screen (grid-persistence) so a full-screen app that was ALREADY running
+	// when the daemon restarted comes back with a faithful alt-active model —
+	// InjectAltScreenRepaint then fires on the first reattach instead of
+	// falling back to the truncated raw tail. Empty when the model wasn't a
+	// faithful alt screen at save time (main buffer / unfaithful) → raw-replay
+	// fallback, unchanged. Optional/omitempty so pre-grid snapshots round-trip
+	// as nil (empty → today's behaviour). No format-version bump needed.
+	ScreenRepaint []byte `cbor:"screen_repaint,omitempty"`
 }
 
 // SaveTo writes the session's metadata + ring-buffer bytes to a
@@ -125,15 +146,47 @@ func (s *Session) SaveTo(parentDir string) error {
 		return nil
 	}
 
-	// Capture buffer + metadata under their respective locks. We
-	// don't hold both at once — buf has its own mu, session has s.mu.
+	// Capture the ring snapshot AND the alt-screen model's redraw frame together
+	// under screenMu, so the persisted grid corresponds to the SAME HeadSeq as the
+	// ring (Pump writes ring+Feed in lockstep under screenMu; holding it here makes
+	// this snapshot mutually exclusive with a concurrent Pump write). Lock order
+	// screenMu → buf.mu matches Pump's, so it stays deadlock-free. Only a faithful
+	// alt screen is persisted — a main-buffer / unfaithful model persists nothing
+	// and restores to raw replay, never a confidently-wrong grid.
+	s.screenMu.Lock()
 	bufBytes, writePos, headSeq, full := s.buf.Snapshot()
+	var screenRepaint []byte
+	if s.screen != nil && s.screen.AltActive() && s.screen.Faithful() {
+		// Cap at save too (restore enforces the same ceiling): a Repaint that
+		// can't be round-tripped is persisted as nothing so we fall back to raw
+		// replay, rather than writing a frame every flush that restore will drop.
+		if rp := s.screen.Repaint(); len(rp) <= maxPersistedScreenRepaint {
+			screenRepaint = rp
+		}
+	}
+	// Capture lastSidecarSeq UNDER screenMu, atomically with headSeq + the
+	// Repaint, so the persisted (Repaint, HeadSeq, LastConsumedSidecarSeq) triple
+	// is a single consistent snapshot. Pump advances all three under screenMu, so
+	// the restore resume (FrameResume(lcs+1)) is guaranteed strictly newer than
+	// the persisted frame — no double-feed, no skip. screenMu → s.mu matches the
+	// established order.
+	s.mu.Lock()
+	lastSidecarSeq := s.lastSidecarSeq
+	s.mu.Unlock()
+	s.screenMu.Unlock()
 
 	// Read alt-screen flag outside s.mu — it has its own lock on the
 	// watcher and the watcher never reaches into the session, so the
 	// order is safe in both directions. Captured before the meta init
 	// to keep s.mu's critical section pure-session.
 	altActive := s.wedge.AltScreenActive()
+	// A persisted Repaint means the model was a faithful ALT screen, so keep the
+	// wedge tracker in agreement on restore — otherwise the model can come back
+	// alt-active while the wedge (read at a different instant) says main-buffer,
+	// a disagreement that drives resize/footer/vertical-walk detection wrong.
+	if screenRepaint != nil {
+		altActive = true
+	}
 	// Same idea for the OSC title tracker.
 	lastTitle := ""
 	if s.titleTracker != nil {
@@ -155,11 +208,12 @@ func (s *Session) SaveTo(parentDir string) error {
 		HeadSeq:                headSeq,
 		WritePos:               writePos,
 		Full:                   full,
-		LastConsumedSidecarSeq: s.lastSidecarSeq,
+		LastConsumedSidecarSeq: lastSidecarSeq,
 		AltScreenActive:        altActive,
 		LastTitle:              lastTitle,
 		HookInstalled:          s.hookInstalled,
 		ShimReady:              s.shimReady,
+		ScreenRepaint:          screenRepaint,
 	}
 	s.mu.Unlock()
 
@@ -372,6 +426,20 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		// session is rehydrated, not retroactively.
 		wedge:            newWedgeWatcher(),
 		titleTracker:     &oscTitleTracker{},
+		// Without this the live screen-model is nil on restored sessions
+		// (daemon restart / lazy-spawn), so InjectAltScreenRepaint returns
+		// false and every reattach to such a session gets the truncated raw
+		// tail — i.e. the cold-start alt-screen spill this whole feature
+		// fixes, for the rest of the session's life. Same class of bug as
+		// the wedge-nil-on-restore above. A fresh screen is correct: the
+		// reconnected sidecar's live stream repopulates it via Pump (a
+		// full-screen app started after restore emits ?1049h and paints from
+		// scratch), and until then the attach falls back to raw replay,
+		// never worse. Sized to the persisted geometry; Resize keeps it in
+		// step. Seeded from the persisted Repaint frame below (grid-persistence)
+		// when one is present — NOT from the restored ring (a mid-stream ring
+		// reconstruction is sparse and was reverted as confidently-wrong).
+		screen:           altscreen.New(int(meta.Rows), int(meta.Cols)),
 	}
 	// Seed the alt-screen tracker from the persisted snapshot. Without
 	// this, a session that was on Claude /tui (or any DECSET 1049h
@@ -382,6 +450,25 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 	// stay silenced until the next user-driven alt-screen toggle.
 	// Bug A in the v1.1.2 release notes.
 	s.wedge.SetAltScreenActive(meta.AltScreenActive)
+	// Grid-persistence: restore the alt-screen model from the persisted Repaint
+	// frame. This is NOT the reverted ring reconstruction — a mid-ring rebuild is
+	// sparse because an incremental TUI's cursor-addressed deltas assume state from
+	// before the ring window. The Repaint is a COMPLETE, self-contained redraw
+	// captured in lockstep with the ring at HeadSeq, so Feeding it reproduces a
+	// faithful alt-active grid at that exact point. A session that was ALREADY in a
+	// full-screen app when the daemon restarted (upgrade / reboot) therefore comes
+	// back with modelAlt=true → InjectAltScreenRepaint fires on the first reattach,
+	// instead of the raw-tail spill. The reattached sidecar's resume backfill
+	// (LastConsumedSidecarSeq+1 = bytes AFTER HeadSeq) then feeds the model forward
+	// in lockstep via Pump, catching it up to live — no double-feed, since the
+	// Repaint is the state AT HeadSeq and the backfill is strictly newer.
+	// Gated on the frame being present + within the size cap (defence against a
+	// hostile meta.cbor); otherwise the model stays fresh/main-buffer and falls
+	// back to raw replay, exactly as before. Feed is a tolerant VT parser, so a
+	// truncated/garbled blob degrades to a partial grid, never a crash.
+	if n := len(meta.ScreenRepaint); n > 0 && n <= maxPersistedScreenRepaint {
+		s.screen.Feed(meta.ScreenRepaint)
+	}
 	// Same rationale for the OSC title tracker — the title-setting
 	// OSC may have been evicted from the ring before this load. Seed
 	// from the persisted snapshot so AttachAck.LastTitle returns the

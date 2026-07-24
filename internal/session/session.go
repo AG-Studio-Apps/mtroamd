@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/AG-Studio-Apps/mtroamd/internal/altscreen"
 )
 
 // SessionIDLen is the byte length of a session identifier.
@@ -333,6 +335,19 @@ type Session struct {
 	// alt-screen pattern from v1.1.2/v1.1.3.
 	titleTracker *oscTitleTracker
 
+	// screen is a live VT screen-model of the terminal, fed the same
+	// post-QueryFilter byte stream as the ring in Pump. It lets an
+	// alt-screen (full-screen TUI) attach replay a synthesized CLEAN
+	// full-frame redraw (AltScreenRepaint) instead of a mid-stream
+	// truncated byte tail the client can't reassemble into a 2-D screen
+	// — the root cause of cold-start alt-screen spill. Guarded by
+	// screenMu (Pump is the writer; the attach path reads via Repaint).
+	// When the model is unsure (unfaithful ops, or a sidecar gap marked
+	// it stale) the attach path falls back to raw replay, never worse
+	// than before. Non-nil after NewSession.
+	screen   *altscreen.Screen
+	screenMu sync.Mutex
+
 	// ptyByteObserver, if set, receives every chunk Pump reads from
 	// the PTY (post-QueryFilter, same bytes the client renders).
 	// Installed by the recovery sequencer to detect bookend markers
@@ -585,6 +600,7 @@ func NewSession(id SessionID, name string, pty PTY, rows, cols uint16, bufCapaci
 		firstAttachPending: true,
 		wedge:              newWedgeWatcher(),
 		titleTracker:       &oscTitleTracker{},
+		screen:             altscreen.New(int(rows), int(cols)),
 	}, nil
 }
 
@@ -1076,7 +1092,71 @@ func (s *Session) Resize(rows, cols uint16) error {
 			s.wedge.ArmResize(oldRows, rows, cols, s.created)
 		}
 	}
+	// Keep the live screen-model geometry in lockstep with the PTY, but
+	// only when the geometry actually changed (matching the SIGWINCH the
+	// app acts on). We resize regardless of the SetSize error: the model
+	// tracks the client's requested geometry, and the app will redraw to
+	// it once SIGWINCH lands.
+	if oldRows != rows || oldCols != cols {
+		if s.screen != nil {
+			s.screenMu.Lock()
+			s.screen.Resize(int(rows), int(cols))
+			s.screenMu.Unlock()
+		}
+	}
 	return err
+}
+
+// InjectAltScreenRepaint atomically snapshots the live screen-model and,
+// when a full-screen TUI is running (alt buffer) AND the model is still
+// faithful, injects a synthesized clean full-frame redraw into the output
+// ring — returning the PRE-inject head seq (start) and true. The caller
+// pins the replay window to `start` so the client replays ONLY the redraw
+// (+ any live tail after it), instead of the truncated raw byte tail it
+// cannot reassemble into a 2-D screen (the cold-start alt-screen spill).
+//
+// Snapshot, head capture, and injection all run under screenMu, which the
+// Pump loop also holds around its ring-write+Feed, so no PTY chunk can land
+// between the snapshot and the injection: the redraw exactly matches the
+// ring prefix [.., start). Returns (0, false) when there is no model, the
+// app is on the main buffer (a normal shell — raw replay is correct there),
+// the model is unfaithful (unemulated op, or a sidecar gap marked it stale),
+// or the session is closed; the caller then falls back to today's footer +
+// raw replay, never worse than before.
+// ScreenState reports the live screen-model's diagnostic state: whether a
+// model exists, is on the alt buffer, and is faithful. For attach-path
+// logging only; racy by nature (Pump may feed between calls).
+func (s *Session) ScreenState() (has, alt, faithful bool) {
+	if s.screen == nil {
+		return false, false, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return true, s.screen.AltActive(), s.screen.Faithful()
+}
+
+func (s *Session) InjectAltScreenRepaint() (start uint64, ok bool) {
+	if s.screen == nil {
+		return 0, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	if !s.screen.AltActive() || !s.screen.Faithful() {
+		return 0, false
+	}
+	buf := s.Buffer()
+	if buf == nil {
+		return 0, false
+	}
+	redraw := s.screen.Repaint()
+	if len(redraw) == 0 {
+		return 0, false
+	}
+	start = buf.HeadSeq()
+	if _, err := buf.Write(redraw); err != nil {
+		return 0, false
+	}
+	return start, true
 }
 
 // WindowSize returns the latest known window size.
@@ -1711,14 +1791,50 @@ func (s *Session) Pump() {
 		if seqAware != nil {
 			if gap := seqAware.ConsumeTrunc(); gap > 0 {
 				s.buf.AdvanceWithGap(gap)
+				// The sidecar dropped bytes under backpressure, so the
+				// live screen-model missed updates and can no longer be
+				// trusted for a redraw. Mark it stale (it recovers on the
+				// next full clear / alt-enter); the attach path falls back
+				// to raw replay until then.
+				if s.screen != nil {
+					s.screenMu.Lock()
+					s.screen.MarkStale()
+					s.screenMu.Unlock()
+				}
 			}
 		}
 		n, err := s.pty.Read(chunk)
 		if n > 0 {
 			data := chunk[:n]
 			filtered := filter.Process(data)
+			// Read this chunk's sidecar watermark up front so it advances in
+			// lockstep with the ring + screen below. LastConsumedSeq is stable
+			// after the Read — nothing below consumes more sidecar bytes.
+			var seq uint64
+			if seqAware != nil {
+				seq = seqAware.LastConsumedSeq()
+			}
 			if len(filtered) > 0 {
+				// Write to the ring, feed the live screen-model, AND advance the
+				// sidecar watermark under screenMu TOGETHER, so the model's grid,
+				// the ring head, and lastSidecarSeq stay in lockstep. The attach /
+				// snapshot paths capture all three under the same lock
+				// (InjectAltScreenRepaint / SaveTo), so no PTY chunk can land
+				// between them — the redraw exactly matches the ring prefix AND the
+				// sidecar watermark it pins the resume window to (a skew here would
+				// make the restore resume double-feed a chunk already in the
+				// persisted Repaint). Cheap: a ~rows×cols cell walk per chunk.
+				// screenMu → s.mu (inside AdvanceSidecarSeq) matches the established
+				// order (InjectAltScreenRepaint); no path takes s.mu → screenMu.
+				s.screenMu.Lock()
 				_, _ = s.buf.Write(filtered)
+				if s.screen != nil {
+					s.screen.Feed(filtered)
+				}
+				if seqAware != nil {
+					s.AdvanceSidecarSeq(seq)
+				}
+				s.screenMu.Unlock()
 				// Feed the wedge watcher with the post-filter byte
 				// stream — the same bytes the client renders, so a
 				// CUP row that violates the geometry will be visible
@@ -1747,16 +1863,17 @@ func (s *Session) Pump() {
 				}
 			}
 			if seqAware != nil {
-				// Watermark the highest sidecar seq we've durably
-				// committed. Best-effort Ack — a network error here
-				// just means the sidecar will get our up-to-date lcs
-				// on the next attach via FrameResume.
-				seq := seqAware.LastConsumedSeq()
-				s.AdvanceSidecarSeq(seq)
+				// lastSidecarSeq was advanced in lockstep with the ring+screen
+				// above when filtered was non-empty; when everything was filtered
+				// out (a pure query chunk — no ring/screen change) advance it here,
+				// where there is nothing it can skew. Then Ack (best-effort — a
+				// network error just means the sidecar re-sends our lcs on the next
+				// FrameResume) and stamp the fg anchors now that buf.HeadSeq
+				// reflects this chunk (client-visible post-filter seq space).
+				if len(filtered) == 0 {
+					s.AdvanceSidecarSeq(seq)
+				}
 				_ = seqAware.Ack(seq)
-				// Stamp the fg transition anchors now that buf.HeadSeq
-				// reflects this chunk — so the size anchor lands in the
-				// client-visible post-filter seq space.
 				s.observeForegroundAnchor()
 			}
 			s.Touch()
