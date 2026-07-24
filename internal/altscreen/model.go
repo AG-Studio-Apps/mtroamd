@@ -192,18 +192,15 @@ func (s *Screen) Resize(rows, cols int) {
 	if rows == s.rows && cols == s.cols {
 		return
 	}
-	// Guard: ANY geometry change invalidates the model's ability to serve a
-	// faithful full-frame redraw until the app repaints at the new size. The
-	// resize below is a top-left-anchored copy, so a SHRINK drops the bottom rows
-	// and a GROW strands bottom-anchored content (Claude's prompt/footer) in the
-	// middle with blank rows below — neither matches where the app will actually
-	// redraw on its SIGWINCH. Mark the model unfaithful so InjectAltScreenRepaint
-	// bails and the attach path falls back to raw replay (which carries the app's
-	// post-resize repaint) instead of injecting a stale/misplaced frame. Recovers
-	// to faithful on the next full clear / alt-enter (Claude re-clears regularly),
-	// so the prime re-arms on its own. We only reach here when the geometry
-	// actually changed (the no-op case returned above), so this is unconditional.
-	s.faithful = false
+	// NOTE: this is a top-left-anchored copy, so shrinking drops the bottom rows
+	// and growing strands bottom-anchored content (Claude's prompt) mid-screen —
+	// neither matches where the app will redraw on the resulting SIGWINCH. The
+	// model does NOT try to correct that here (it can't know the app's intent);
+	// instead the ATTACH path skips the injected redraw whenever the attach
+	// resized the grid and lets raw replay carry the app's post-resize repaint
+	// (see protocol_handler). So no faithful mutation on resize — that was too
+	// coarse (an incremental post-resize repaint left the model stuck unfaithful,
+	// re-exposing the very footer loss the prime fixes).
 	s.main = resizeGrid(s.main, rows, cols)
 	s.alt = resizeGrid(s.alt, rows, cols)
 	if s.altActive {

@@ -201,9 +201,22 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// clamp; out-of-range dims are now silently ignored (the prior
 	// >0 gate kept zero-dim Attaches from resizing, but accepted
 	// everything above zero).
+	// Capture the pre-resize geometry so we can tell whether THIS attach changed
+	// the grid size. If it did, the live screen-model was just top-anchored to the
+	// new geometry and does NOT yet reflect where the app will redraw (a grow
+	// strands a bottom-anchored prompt mid-screen; a shrink drops it). The resize
+	// SIGWINCHes the app, whose fresh repaint rides the raw replay — so on a
+	// resized attach we SKIP the injected redraw and let raw replay carry the
+	// correct screen (rc5 behaviour, known-good for cold-start). A same-geometry
+	// attach keeps the steady-state grid — byte-faithful vs a real VT — so the
+	// prime still fires for its value case (footer aged out of the raw window,
+	// no fresh repaint).
+	prevRows, prevCols := sess.WindowSize()
 	if attachMode == session.AttachExclusive && dimsInBounds(att.Rows, att.Cols) {
 		_ = sess.Resize(att.Rows, att.Cols)
 	}
+	attachResizedGrid := (prevRows != att.Rows || prevCols != att.Cols) &&
+		attachMode == session.AttachExclusive && dimsInBounds(att.Rows, att.Cols)
 
 	buf := sess.Buffer()
 	if buf == nil {
@@ -235,7 +248,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// the model can serve.
 	fullRedraw := false
 	var fullRedrawStart uint64
-	if att.ReplayBudget > 0 {
+	if att.ReplayBudget > 0 && !attachResizedGrid {
 		hasScr, altScr, faithScr := sess.ScreenState()
 		if start, ok := sess.InjectAltScreenRepaint(); ok {
 			fullRedraw = true
@@ -250,6 +263,18 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 			"modelFaithful", faithScr,
 			"injected", fullRedraw,
 			"start", fullRedrawStart)
+	} else if att.ReplayBudget > 0 && attachResizedGrid {
+		// Diagnostic: the inject was skipped because THIS attach resized the grid,
+		// so the model can't be trusted for a full-frame redraw yet — raw replay
+		// (with the app's SIGWINCH repaint) carries the screen instead.
+		slog.Info("attach.altredraw",
+			"sid", sess.ID().String(),
+			"budget", att.ReplayBudget,
+			"wedgeAlt", altActive,
+			"injected", false,
+			"skip", "attach_resized",
+			"from", fmt.Sprintf("%dx%d", prevCols, prevRows),
+			"to", fmt.Sprintf("%dx%d", att.Cols, att.Rows))
 	}
 
 	// Footer re-emit (fallback): only when the full-model redraw didn't

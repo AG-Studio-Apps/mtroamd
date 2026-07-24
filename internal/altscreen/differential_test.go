@@ -3,8 +3,10 @@ package altscreen
 import (
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -78,12 +80,12 @@ func TestDifferentialAgainstTmux(t *testing.T) {
 	sess := "difftest"
 	exec.Command("tmux", "kill-session", "-t", sess).Run()
 	if err := exec.Command("tmux", "new-session", "-d", "-s", sess,
-		"-x", itoa(cols), "-y", itoa(rows), "cat "+tmp.Name()+"; sleep 60").Run(); err != nil {
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows), "cat "+tmp.Name()+"; sleep 60").Run(); err != nil {
 		t.Skipf("tmux new-session failed: %v", err)
 	}
 	exec.Command("tmux", "set", "-t", sess, "status", "off").Run()
 	// let tmux drain the pipe
-	exec.Command("sh", "-c", "sleep 3").Run()
+	time.Sleep(3 * time.Second) // let tmux drain the piped ring before capture
 	out, err := exec.Command("tmux", "capture-pane", "-t", sess, "-p").Output()
 	exec.Command("tmux", "kill-session", "-t", sess).Run()
 	if err != nil {
@@ -105,23 +107,4 @@ func TestDifferentialAgainstTmux(t *testing.T) {
 	if diverged == 0 {
 		t.Logf("model matches tmux on all %d rows", rows)
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var d []byte
-	for n > 0 {
-		d = append([]byte{byte('0' + n%10)}, d...)
-		n /= 10
-	}
-	if neg {
-		d = append([]byte{'-'}, d...)
-	}
-	return string(d)
 }

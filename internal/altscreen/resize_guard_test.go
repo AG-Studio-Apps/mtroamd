@@ -28,63 +28,29 @@ func footerRow(s *Screen) int {
 	return -1
 }
 
-// TestResizeInvalidatesRedraw is the regression for BOTH prime failure modes:
-//   - SHRINK below the footer drops it (lockscreen / keyboard-up).
-//   - GROW strands the footer in the middle with blanks below (cold-start
-//     reattach at full height after the model was at a keyboard-up height).
-//
-// In both cases the top-anchored resize leaves the grid NOT matching where the
-// app will redraw, so the guard must mark the model unfaithful → the attach
-// path falls back to raw replay (which carries the app's post-SIGWINCH repaint)
-// rather than injecting a stale/misplaced frame.
-func TestResizeInvalidatesRedraw(t *testing.T) {
-	// SHRINK past the footer.
-	shrink := New(22, 45)
-	shrink.Feed([]byte(claudeFrame(22)))
-	shrink.Resize(10, 45)
-	shrink.Resize(22, 45)
-	if shrink.Faithful() {
-		t.Error("shrink: guard failed — model still faithful after a lossy shrink")
-	}
-
-	// GROW that strands the footer (the cold-start reattach case).
-	grow := New(22, 45)
-	grow.Feed([]byte(claudeFrame(22)))
-	if got := footerRow(grow); got != 20 {
-		t.Fatalf("setup: footer at %d, want 20", got)
-	}
-	grow.Resize(42, 45)
-	if fr := footerRow(grow); fr == 40 {
-		t.Fatal("grow: footer landed at the real bottom (unexpected)")
-	}
-	if grow.Faithful() {
-		t.Error("grow: guard failed — model still faithful after a grow stranded the footer")
-	}
-}
-
-// TestNoResizeStaysFaithful: the guard must NOT fire when the geometry is
-// unchanged — a same-size reattach is exactly where the prime earns its keep
-// (footer aged out of the raw window, no app repaint, model still holds it).
-func TestNoResizeStaysFaithful(t *testing.T) {
-	s := New(42, 45)
-	s.Feed([]byte(claudeFrame(42)))
-	s.Resize(42, 45) // no-op
-	if !s.Faithful() {
-		t.Fatal("no-op resize tripped the guard")
-	}
-}
-
-// TestResizeGuardSelfHeals: after a resize invalidates the model, the app's
-// next full clear + repaint restores fidelity so the prime re-arms.
-func TestResizeGuardSelfHeals(t *testing.T) {
+// TestResizeStrandsFooterUntilRepaint is the PREMISE of the attach-scoped gate
+// (in protocol_handler): a top-anchored resize leaves the grid NOT matching
+// where the app will redraw, so the model must NOT be injected on a resized
+// attach. A GROW strands Claude's bottom-anchored footer mid-screen; only after
+// the app repaints at the new size does the model match again (so a later
+// SAME-geometry reattach injects a correct frame — the prime's value case).
+func TestResizeStrandsFooterUntilRepaint(t *testing.T) {
 	s := New(22, 45)
 	s.Feed([]byte(claudeFrame(22)))
-	s.Resize(42, 45)
-	if s.Faithful() {
-		t.Fatal("expected unfaithful after resize")
+	if footerRow(s) != 20 { // input at CUP row 21 (1-based) = index 20
+		t.Fatalf("setup: footer at %d, want 20", footerRow(s))
 	}
-	s.Feed([]byte(claudeFrame(42))) // app repaints at the new size (ESC[2J + full draw)
-	if !s.Faithful() || footerRow(s) != 40 {
-		t.Fatalf("recovery: faithful=%v footerRow=%d after repaint", s.Faithful(), footerRow(s))
+
+	// Cold-start reattach GROW: model was keyboard-up height, client at full height.
+	s.Resize(42, 45)
+	if footerRow(s) == 40 {
+		t.Fatal("grow unexpectedly placed the footer at the real bottom")
+	}
+	t.Logf("after grow: footer stranded at row %d (real bottom is 40) → attach MUST skip the inject", footerRow(s))
+
+	// App repaints at the new size (Ink on SIGWINCH). Now the model matches.
+	s.Feed([]byte(claudeFrame(42)))
+	if footerRow(s) != 40 {
+		t.Fatalf("after repaint: footer at %d, want 40 (bottom of 42)", footerRow(s))
 	}
 }
