@@ -259,8 +259,10 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// so a captured value is never falsely stale in the unsafe direction.
 	var modelResizeDirty bool
 	if att.ReplayBudget > 0 {
-		hasScr, altScr, faithScr := sess.ScreenState()
-		modelResizeDirty = sess.ScreenResizeDirty()
+		// One screenMu hop for all four fields, so the logged state is internally
+		// consistent (a Pump Feed can't land between separate reads).
+		hasScr, altScr, faithScr, dirtyScr := sess.ScreenSnapshot()
+		modelResizeDirty = dirtyScr
 		// Skip the inject when THIS attach resized (the atomic latch above): the
 		// model is top-anchored and the app will SIGWINCH-repaint, so raw replay
 		// carries it. On a same-geometry attach, InjectAltScreenRepaint is
@@ -718,7 +720,15 @@ func (h *ProtocolHandler) lazySpawnRestoredPTY(ctx context.Context, sess *sessio
 		}
 		return err
 	}
-	// We won the race — start the pump so output flows.
+	// We won the race. The persisted alt-screen Repaint that loadSessionFromDir fed
+	// into the model belongs to the now-DEAD app (this is the dead-sidecar path — a
+	// fresh shell was just spawned, not a reattach to the surviving sidecar). Reset
+	// the model to a clean main-buffer grid BEFORE Pump starts, so
+	// InjectAltScreenRepaint won't ship that stale full frame over the new shell's
+	// main-buffer prompt (a ghost TUI over a live shell); the fresh shell repopulates
+	// the model via Pump.
+	sess.ResetScreenModel()
+	// Start the pump so output flows.
 	go sess.Pump()
 	log.InfoContext(ctx, "session.restored.lazy_spawn",
 		"session", sess.ID().String(),

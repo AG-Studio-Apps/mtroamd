@@ -32,6 +32,14 @@ const maxPersistedBufCapacity = 100 * DefaultBufferCapacity
 // session restores to a fresh model (raw-replay fallback), never a crash.
 const maxPersistedScreenRepaint = 1 << 20
 
+// maxRestoredScreenDim caps meta.Rows / meta.Cols accepted on restore. altscreen.New
+// eagerly allocates a rows*cols main+alt cell grid, so a corrupt/hostile meta.cbor
+// with Rows=Cols=65535 would OOM-crash the daemon at startup (~170 GB), and because
+// restore runs for every persisted session on boot, that is a crash loop. No real
+// terminal approaches this ceiling; an out-of-range value means a corrupt meta, which
+// LoadPersisted drops (logs + removes the dir).
+const maxRestoredScreenDim = 1000
+
 // persistenceFormatVersion identifies the on-disk schema. Bumped
 // whenever the meta.cbor / scrollback.bin layout changes in a way
 // that an older loader can't safely interpret. LoadPersisted drops
@@ -156,12 +164,23 @@ func (s *Session) SaveTo(parentDir string) error {
 	s.screenMu.Lock()
 	bufBytes, writePos, headSeq, full := s.buf.Snapshot()
 	var screenRepaint []byte
-	if s.screen != nil && s.screen.AltActive() && s.screen.Faithful() {
+	var screenRows, screenCols int
+	// Only persist a faithful, alt-active, NON-resize-dirty model. Skipping a
+	// resize-dirty model matters: its grid is top-anchored / misplaced (a resize
+	// landed but the app hasn't repainted), and restore can't re-derive the dirty
+	// flag (Feed clears it), so persisting it would ship the misplaced frame on the
+	// first reattach after a restart — the very spill this guards.
+	if s.screen != nil && s.screen.AltActive() && s.screen.Faithful() && !s.screen.ResizeDirty() {
 		// Cap at save too (restore enforces the same ceiling): a Repaint that
 		// can't be round-tripped is persisted as nothing so we fall back to raw
 		// replay, rather than writing a frame every flush that restore will drop.
 		if rp := s.screen.Repaint(); len(rp) <= maxPersistedScreenRepaint {
 			screenRepaint = rp
+			// Capture the model's OWN dimensions here under screenMu so the
+			// persisted geometry matches the frame. Reading s.rows/s.cols in the
+			// separate s.mu section below can race a concurrent Resize and stamp
+			// an old-geometry Repaint with new-geometry dims (garbled restore).
+			screenRows, screenCols = s.screen.Size()
 		}
 	}
 	// Capture lastSidecarSeq UNDER screenMu, atomically with headSeq + the
@@ -216,6 +235,14 @@ func (s *Session) SaveTo(parentDir string) error {
 		ScreenRepaint:          screenRepaint,
 	}
 	s.mu.Unlock()
+	// When a Repaint is persisted, the stored geometry must match the FRAME (the
+	// model's own size, captured atomically under screenMu above), not the possibly
+	// concurrently-resized session dims — else restore builds the grid at one size
+	// and Feeds it a frame authored for another.
+	if screenRepaint != nil {
+		meta.Rows = uint16(screenRows)
+		meta.Cols = uint16(screenCols)
+	}
 
 	dir := filepath.Join(parentDir, sessionsSubdir, s.id.String())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -352,6 +379,14 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		// dropped session (logs + removes the dir).
 		return nil, fmt.Errorf("buffer capacity %d exceeds maximum %d",
 			meta.BufCapacity, maxPersistedBufCapacity)
+	}
+	if meta.Rows > maxRestoredScreenDim || meta.Cols > maxRestoredScreenDim {
+		// Same class of hardening as BufCapacity: altscreen.New(meta.Rows, meta.Cols)
+		// eagerly allocates a rows*cols main+alt grid, so an out-of-range dim from a
+		// corrupt/hostile meta.cbor would OOM-crash startup (and crash-loop, since
+		// restore runs per session on boot). Reject up front — dropped session.
+		return nil, fmt.Errorf("screen dimensions %dx%d exceed maximum %d",
+			meta.Cols, meta.Rows, maxRestoredScreenDim)
 	}
 
 	scrollBytes, err := os.ReadFile(filepath.Join(dir, scrollbackFilename))

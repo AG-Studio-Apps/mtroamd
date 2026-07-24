@@ -1151,6 +1151,38 @@ func (s *Session) ScreenResizeDirty() bool {
 	return s.screen.ResizeDirty()
 }
 
+// ScreenSnapshot reads has/alt/faithful/resizeDirty in ONE screenMu hold, so the
+// four values are mutually consistent (a Pump Feed can't land between them). The
+// attach path uses it for the attach.altredraw diagnostic and the footer-re-emit
+// gate; InjectAltScreenRepaint still re-checks authoritatively under its own lock
+// for the actual inject decision. Returns all-false when there is no model.
+func (s *Session) ScreenSnapshot() (has, alt, faithful, resizeDirty bool) {
+	if s.screen == nil {
+		return false, false, false, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return true, s.screen.AltActive(), s.screen.Faithful(), s.screen.ResizeDirty()
+}
+
+// ResetScreenModel replaces the live screen-model with a fresh, cleared main-buffer
+// grid at the current geometry. The lazy-spawn restore path (dead sidecar / reboot)
+// calls this after spawning a FRESH shell: the persisted alt-screen Repaint that
+// loadSessionFromDir fed into the model belongs to the now-DEAD app, so leaving it
+// would make InjectAltScreenRepaint ship that stale full-frame over the new shell's
+// main-buffer prompt (a ghost TUI). Resetting drops it back to raw replay; the fresh
+// shell repopulates the model via Pump. Must run BEFORE Pump starts. Reads geometry
+// under s.mu, then swaps the screen under screenMu (no lock nesting).
+func (s *Session) ResetScreenModel() {
+	if s.screen == nil {
+		return
+	}
+	rows, cols := s.WindowSize()
+	s.screenMu.Lock()
+	s.screen = altscreen.New(int(rows), int(cols))
+	s.screenMu.Unlock()
+}
+
 func (s *Session) InjectAltScreenRepaint() (start uint64, ok bool) {
 	if s.screen == nil {
 		return 0, false

@@ -700,3 +700,81 @@ func TestScreenRepaintNotPersistedForMainScreen(t *testing.T) {
 		t.Fatal("InjectAltScreenRepaint should be false for a restored main-screen session")
 	}
 }
+
+// TestScreenRepaintNotPersistedWhenResizeDirty guards the resize-dirty spill:
+// SaveTo must NOT persist a Repaint when the model is resize-dirty (geometry
+// changed, app hasn't repainted). Restore cannot re-derive the flag (Feed clears
+// it), so persisting a misplaced grid would ship the stranded-footer frame on the
+// first reattach after a restart — the very spill this feature prevents.
+func TestScreenRepaintNotPersistedWhenResizeDirty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, nil)
+	original.screen.Feed([]byte("\x1b[?1049h\x1b[H\x1b[2J\x1b[2;3Hhello\x1b[6;1Hfooter"))
+	if !original.screen.AltActive() || !original.screen.Faithful() {
+		t.Fatalf("setup: model not faithful alt (alt=%v faithful=%v)",
+			original.screen.AltActive(), original.screen.Faithful())
+	}
+	// A geometry change after the last repaint top-anchors the grid → resize-dirty.
+	r, c := original.screen.Size()
+	original.screen.Resize(r+4, c)
+	if !original.screen.ResizeDirty() {
+		t.Fatal("setup: model should be resize-dirty after a geometry change")
+	}
+
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
+	}
+	restored, err := reg.Lookup(original.ID())
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if _, ok := restored.InjectAltScreenRepaint(); ok {
+		t.Fatal("a resize-dirty model must not persist a Repaint (would resurrect the spill on restore)")
+	}
+}
+
+// TestRestoreRejectsOversizedDims guards the OOM: a corrupt/hostile meta.cbor with
+// an out-of-range dimension must be DROPPED, not fed to altscreen.New (which would
+// eagerly allocate a rows*cols grid and OOM-crash the daemon at startup).
+func TestRestoreRejectsOversizedDims(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, []byte("hi\n"))
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	// Corrupt the on-disk meta with an out-of-range dimension.
+	metaPath := filepath.Join(dir, sessionsSubdir, original.ID().String(), "meta.cbor")
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m persistedSessionMeta
+	if err := cbor.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.Rows, m.Cols = 65535, 65535
+	tampered, err := cbor.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	// LoadPersisted logs + drops the bad session; it must NOT panic/OOM or fail.
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted should tolerate a corrupt session (drop it), got: %v", err)
+	}
+	if _, err := reg.Lookup(original.ID()); err == nil {
+		t.Fatal("session with oversized dims should have been dropped, not loaded")
+	}
+}
