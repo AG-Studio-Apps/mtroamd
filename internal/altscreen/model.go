@@ -192,18 +192,18 @@ func (s *Screen) Resize(rows, cols int) {
 	if rows == s.rows && cols == s.cols {
 		return
 	}
-	// Guard: the resize below is a top-left-anchored copy, so shrinking below
-	// existing content silently drops the bottom rows / right cols. Claude's
-	// prompt + status footer live at the BOTTOM, so a keyboard-up / lockscreen
-	// shrink discards them and the grown-back grid can no longer serve a faithful
-	// full-frame redraw. When that happens, mark the model unfaithful so the
-	// attach path falls back to raw replay (which carries the app's post-SIGWINCH
-	// repaint) instead of injecting a footer-less frame. Recovers to faithful on
-	// the next full clear / alt-enter, exactly like any other unfaithful op — and
-	// Claude re-clears regularly, so the prime re-arms on its own.
-	if s.shrinkDropsContent(rows, cols) {
-		s.faithful = false
-	}
+	// Guard: ANY geometry change invalidates the model's ability to serve a
+	// faithful full-frame redraw until the app repaints at the new size. The
+	// resize below is a top-left-anchored copy, so a SHRINK drops the bottom rows
+	// and a GROW strands bottom-anchored content (Claude's prompt/footer) in the
+	// middle with blank rows below — neither matches where the app will actually
+	// redraw on its SIGWINCH. Mark the model unfaithful so InjectAltScreenRepaint
+	// bails and the attach path falls back to raw replay (which carries the app's
+	// post-resize repaint) instead of injecting a stale/misplaced frame. Recovers
+	// to faithful on the next full clear / alt-enter (Claude re-clears regularly),
+	// so the prime re-arms on its own. We only reach here when the geometry
+	// actually changed (the no-op case returned above), so this is unconditional.
+	s.faithful = false
 	s.main = resizeGrid(s.main, rows, cols)
 	s.alt = resizeGrid(s.alt, rows, cols)
 	if s.altActive {
@@ -216,28 +216,6 @@ func (s *Screen) Resize(rows, cols int) {
 	s.x = clamp(s.x, 0, cols-1)
 	s.y = clamp(s.y, 0, rows-1)
 	s.wrapNext = false
-}
-
-// shrinkDropsContent reports whether resizing the ACTIVE grid to rows×cols would
-// drop any non-blank cell — i.e. the top-left-anchored copy in resizeGrid loses
-// real content off the bottom or the right. Used to invalidate the model's
-// full-frame redraw after a lossy shrink (a bottom-anchored prompt/footer).
-func (s *Screen) shrinkDropsContent(rows, cols int) bool {
-	for r := rows; r < s.rows && r < len(s.grid); r++ {
-		for c := 0; c < s.cols && c < len(s.grid[r]); c++ {
-			if !isBlank(s.grid[r][c]) {
-				return true
-			}
-		}
-	}
-	for r := 0; r < rows && r < len(s.grid); r++ {
-		for c := cols; c < s.cols && c < len(s.grid[r]); c++ {
-			if !isBlank(s.grid[r][c]) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func resizeGrid(old [][]cell, rows, cols int) [][]cell {
