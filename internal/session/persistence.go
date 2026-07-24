@@ -157,22 +157,8 @@ func (s *Session) SaveTo(parentDir string) error {
 	bufBytes, writePos, headSeq, full := s.buf.Snapshot()
 	var screenRepaint []byte
 	if s.screen != nil && s.screen.AltActive() && s.screen.Faithful() {
-		// Cap at save too (restore enforces the same ceiling): a Repaint that
-		// can't be round-tripped is persisted as nothing so we fall back to raw
-		// replay, rather than writing a frame every flush that restore will drop.
-		if rp := s.screen.Repaint(); len(rp) <= maxPersistedScreenRepaint {
-			screenRepaint = rp
-		}
+		screenRepaint = s.screen.Repaint()
 	}
-	// Capture lastSidecarSeq UNDER screenMu, atomically with headSeq + the
-	// Repaint, so the persisted (Repaint, HeadSeq, LastConsumedSidecarSeq) triple
-	// is a single consistent snapshot. Pump advances all three under screenMu, so
-	// the restore resume (FrameResume(lcs+1)) is guaranteed strictly newer than
-	// the persisted frame — no double-feed, no skip. screenMu → s.mu matches the
-	// established order.
-	s.mu.Lock()
-	lastSidecarSeq := s.lastSidecarSeq
-	s.mu.Unlock()
 	s.screenMu.Unlock()
 
 	// Read alt-screen flag outside s.mu — it has its own lock on the
@@ -180,13 +166,6 @@ func (s *Session) SaveTo(parentDir string) error {
 	// order is safe in both directions. Captured before the meta init
 	// to keep s.mu's critical section pure-session.
 	altActive := s.wedge.AltScreenActive()
-	// A persisted Repaint means the model was a faithful ALT screen, so keep the
-	// wedge tracker in agreement on restore — otherwise the model can come back
-	// alt-active while the wedge (read at a different instant) says main-buffer,
-	// a disagreement that drives resize/footer/vertical-walk detection wrong.
-	if screenRepaint != nil {
-		altActive = true
-	}
 	// Same idea for the OSC title tracker.
 	lastTitle := ""
 	if s.titleTracker != nil {
@@ -208,7 +187,7 @@ func (s *Session) SaveTo(parentDir string) error {
 		HeadSeq:                headSeq,
 		WritePos:               writePos,
 		Full:                   full,
-		LastConsumedSidecarSeq: lastSidecarSeq,
+		LastConsumedSidecarSeq: s.lastSidecarSeq,
 		AltScreenActive:        altActive,
 		LastTitle:              lastTitle,
 		HookInstalled:          s.hookInstalled,

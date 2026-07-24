@@ -1807,32 +1807,18 @@ func (s *Session) Pump() {
 		if n > 0 {
 			data := chunk[:n]
 			filtered := filter.Process(data)
-			// Read this chunk's sidecar watermark up front so it advances in
-			// lockstep with the ring + screen below. LastConsumedSeq is stable
-			// after the Read — nothing below consumes more sidecar bytes.
-			var seq uint64
-			if seqAware != nil {
-				seq = seqAware.LastConsumedSeq()
-			}
 			if len(filtered) > 0 {
-				// Write to the ring, feed the live screen-model, AND advance the
-				// sidecar watermark under screenMu TOGETHER, so the model's grid,
-				// the ring head, and lastSidecarSeq stay in lockstep. The attach /
-				// snapshot paths capture all three under the same lock
-				// (InjectAltScreenRepaint / SaveTo), so no PTY chunk can land
-				// between them — the redraw exactly matches the ring prefix AND the
-				// sidecar watermark it pins the resume window to (a skew here would
-				// make the restore resume double-feed a chunk already in the
-				// persisted Repaint). Cheap: a ~rows×cols cell walk per chunk.
-				// screenMu → s.mu (inside AdvanceSidecarSeq) matches the established
-				// order (InjectAltScreenRepaint); no path takes s.mu → screenMu.
+				// Write to the ring and feed the live screen-model under
+				// screenMu TOGETHER, so the model's grid and the ring head
+				// stay in lockstep: the attach path snapshots both under the
+				// same lock (InjectAltScreenRepaint), so no PTY chunk can land
+				// between the redraw snapshot and its ring injection — the
+				// redraw exactly matches the ring prefix it pins the window to.
+				// Cheap: a ~rows×cols cell walk per chunk.
 				s.screenMu.Lock()
 				_, _ = s.buf.Write(filtered)
 				if s.screen != nil {
 					s.screen.Feed(filtered)
-				}
-				if seqAware != nil {
-					s.AdvanceSidecarSeq(seq)
 				}
 				s.screenMu.Unlock()
 				// Feed the wedge watcher with the post-filter byte
@@ -1863,17 +1849,16 @@ func (s *Session) Pump() {
 				}
 			}
 			if seqAware != nil {
-				// lastSidecarSeq was advanced in lockstep with the ring+screen
-				// above when filtered was non-empty; when everything was filtered
-				// out (a pure query chunk — no ring/screen change) advance it here,
-				// where there is nothing it can skew. Then Ack (best-effort — a
-				// network error just means the sidecar re-sends our lcs on the next
-				// FrameResume) and stamp the fg anchors now that buf.HeadSeq
-				// reflects this chunk (client-visible post-filter seq space).
-				if len(filtered) == 0 {
-					s.AdvanceSidecarSeq(seq)
-				}
+				// Watermark the highest sidecar seq we've durably
+				// committed. Best-effort Ack — a network error here
+				// just means the sidecar will get our up-to-date lcs
+				// on the next attach via FrameResume.
+				seq := seqAware.LastConsumedSeq()
+				s.AdvanceSidecarSeq(seq)
 				_ = seqAware.Ack(seq)
+				// Stamp the fg transition anchors now that buf.HeadSeq
+				// reflects this chunk — so the size anchor lands in the
+				// client-visible post-filter seq space.
 				s.observeForegroundAnchor()
 			}
 			s.Touch()
