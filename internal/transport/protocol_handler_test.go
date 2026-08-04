@@ -373,17 +373,26 @@ func TestProtocolHandlerReplaysBufferedOutputOnReattach(t *testing.T) {
 // older than the window; the alt-screen reconstruction must put it back.
 // We assert the replay STREAM contains the footer text — true only when
 // the screen was reconstructed, not when a raw window was shipped.
-func TestProtocolHandlerReconstructsAltScreenFooterOnReattach(t *testing.T) {
+func TestProtocolHandlerSurfacesAltScreenFooterOnReattach(t *testing.T) {
 	t.Parallel()
 	h := newHandlerHarness(t)
 	defer h.cleanup()
 
-	const rows, cols = 8, 24
+	// SAME geometry as the harness session (24×80): a cold-start reattach at
+	// the same size is the footer-survival value case — no SIGWINCH, so the app
+	// won't repaint, and the event-driven footer has aged out of the raw budget
+	// window. The attach must surface it anyway. It does so via the full-frame
+	// redraw (the faithful live model carries the footer); the ReconstructBottomRows
+	// re-emit is the fallback for an UNFAITHFUL model, unit-tested in
+	// altscreen.TestReconstructBottomRowsRestoresFooter. A DIFFERENT geometry
+	// would (correctly) skip both — the resulting SIGWINCH makes the app repaint
+	// — so this test stays same-geometry to exercise the surfacing path.
+	const rows, cols = 24, 80
 	const footer = "-- esc to interrupt"
 	var out []byte
 	// Enter alt screen + clear, then draw the footer ONCE on the last row.
 	out = append(out, []byte("\x1b[?1049h\x1b[2J")...)
-	out = append(out, []byte("\x1b[8;1H"+footer)...)
+	out = append(out, []byte("\x1b[24;1H"+footer)...)
 	// Spinner on row 3 only: ~720B total stays inside the 4096 ring (footer
 	// retained), but pushes the footer-draw past the 256B budget so a raw
 	// byte-window replay would miss it.
