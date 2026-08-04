@@ -100,6 +100,12 @@ type persistedSessionMeta struct {
 	// Pointer + omitempty so pre-hook snapshots round-trip as nil
 	// (unknown); the next lazy respawn reconciles the real value.
 	HookInstalled *bool `cbor:"hook,omitempty"`
+
+	// ShimReady snapshots Session.shimReady so a reattach after a daemon
+	// restart reports whether the shell has the broker shim dir on PATH
+	// without a respawn. Pointer + omitempty so pre-broker snapshots
+	// round-trip as nil (unknown → iOS warns to regenerate).
+	ShimReady *bool `cbor:"shim_ready,omitempty"`
 }
 
 // SaveTo writes the session's metadata + ring-buffer bytes to a
@@ -153,6 +159,7 @@ func (s *Session) SaveTo(parentDir string) error {
 		AltScreenActive:        altActive,
 		LastTitle:              lastTitle,
 		HookInstalled:          s.hookInstalled,
+		ShimReady:              s.shimReady,
 	}
 	s.mu.Unlock()
 
@@ -352,6 +359,7 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		lastSnapshotSeq:  meta.HeadSeq,
 		lastSidecarSeq:   meta.LastConsumedSidecarSeq,
 		hookInstalled:    meta.HookInstalled,
+		shimReady:        meta.ShimReady,
 		restoredFromDisk: true,
 		// Without this the wedge watcher is nil on restored sessions
 		// and every nil-guarded call site (Resize → ArmResize, Pump →

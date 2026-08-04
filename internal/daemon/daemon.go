@@ -11,7 +11,9 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +31,7 @@ import (
 	"github.com/AG-Studio-Apps/mtroamd/internal/cert"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ptyclient"
+	"github.com/AG-Studio-Apps/mtroamd/internal/secret"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 	"github.com/AG-Studio-Apps/mtroamd/internal/transport"
 )
@@ -136,11 +139,23 @@ type Config struct {
 
 // Daemon owns the lifetime of the long-running server pieces.
 type Daemon struct {
-	cfg      Config
-	logger   *slog.Logger
-	cert     tls.Certificate
-	certFP   cert.Fingerprint
-	registry *session.Registry
+	cfg    Config
+	logger *slog.Logger
+	cert   tls.Certificate
+	certFP cert.Fingerprint
+	// bootID identifies this daemon process instance (random hex per
+	// start). Reported on every Allocate so clients can detect a daemon
+	// restart (= RAM secret store wiped) vs a plain reconnect.
+	bootID string
+	// shimSyncMu serializes the store-update + on-disk shim sync pair in
+	// HandleSetSessionSecrets: each is individually safe, but two
+	// overlapping pushes for the same session could interleave so the
+	// LOSING push's SyncShims runs last and the disk shims no longer
+	// match the store (a declared command with no shim = silently
+	// token-less; review finding). One daemon-wide mutex - pushes are
+	// rare and SyncShims is a handful of tiny file writes.
+	shimSyncMu sync.Mutex
+	registry   *session.Registry
 	// allocateExts maps AllocateRequest.Kind → the embedder extension that
 	// handles it. Nil/empty for a stock terminal daemon (no agent/MCP code in
 	// core). Populated in New() from Config.AllocateExtensions.
@@ -168,7 +183,7 @@ type Daemon struct {
 	// mtroamHandler is cached from New() so the poller can create a
 	// TCPServer with the same handler after startup.
 	mtroamHandler *transport.ProtocolHandler
-	ipc         *ipc.Server
+	ipc           *ipc.Server
 	// stateDir is the persistence root resolved at New(). Reused by
 	// spawnSession when starting the per-session flusher.
 	stateDir string
@@ -178,6 +193,13 @@ type Daemon struct {
 	// startedAt is set once in New so HandleStatus can compute
 	// uptime without keeping a separate state machine.
 	startedAt time.Time
+	// secrets is the in-memory secret broker (v1.7.6+): per-session
+	// secret sets pushed by SetSessionSecrets, delivered to consuming
+	// commands at exec time via `secret-exec`. Held in RAM ONLY — never
+	// written to the session snapshot, dropped on reap — so there is no
+	// on-disk secret footprint and a daemon restart simply loses it
+	// (the client re-pushes on reconnect).
+	secrets *secret.Store
 }
 
 // sessionExtraEnvForID returns the per-session env additions the
@@ -200,6 +222,57 @@ func sessionExtraEnv(sess *session.Session) []string {
 	return sessionExtraEnvForID(sess.ID())
 }
 
+// sessionShimDir is the ONE place the per-session PATH-shadow shim
+// directory layout is defined; shimSpawnEnv (spawn-time PATH) and
+// Daemon.shimDirFor (SyncShims target) both derive from it so the two
+// can never drift apart (a drift = spawn PATH pointing at a dir SyncShims
+// never populates, secrets silently undelivered).
+func sessionShimDir(stateDir, sid string) string {
+	return filepath.Join(stateDir, "sessions", sid, "shims")
+}
+
+// defaultSpawnPATH seeds the child's PATH only when the daemon itself has
+// an empty/unset PATH (a bare process launched from a stripped env).
+// Without it the emitted PATH would collapse to "<shimdir>:" — shim dir
+// plus an empty (=cwd) element — and every command in every session
+// would stop resolving (review finding). Mirrors the conventional
+// login(1)/systemd default.
+const defaultSpawnPATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// shimSpawnEnv returns the ExtraEnv additions that put a session's
+// PATH-shadow shim dir FIRST on PATH and export MESHTERM_SHIM_DIR. The
+// dir itself is created lazily by SyncShims on the first SetSessionSecrets
+// (a missing PATH entry is harmless — shells skip it — so the spawn hot
+// path takes no mkdir syscall). Prepending to os.Getenv("PATH") matches
+// pty.BuildEnv's baseline (PATH is allowlisted) plus the shim dir, so it
+// never gives a worse PATH than the child would otherwise get. Added on
+// EVERY spawn so a later SetSessionSecrets takes effect with no respawn
+// (PATH already includes the dir). Caveats: a login shell that rebuilds
+// PATH from profile drops the prepend — adoption then needs one fresh
+// window/reconnect (the accepted mtRoam limitation). And a daemon-restart
+// RESPAWN passes basePATH="" (the original --env-file env, PATH included,
+// was consumed at spawn and is not persisted), so a custom toolchain PATH
+// from the env-file is absent until the client reconnects and re-stages —
+// the same accepted daemon-restart trade as the RAM secret store.
+func shimSpawnEnv(stateDir, sid, basePATH string) []string {
+	dir := sessionShimDir(stateDir, sid)
+	// Prepend to the EFFECTIVE PATH: a user-supplied PATH (from
+	// --env-file) if present, else the daemon's, else a sane default.
+	// Prepending (not replacing) means a client that set
+	// PATH=$HOME/toolchain/bin:... in its env-file keeps those entries -
+	// the shim dir just goes first.
+	if basePATH == "" {
+		basePATH = os.Getenv("PATH")
+	}
+	if basePATH == "" {
+		basePATH = defaultSpawnPATH
+	}
+	return []string{
+		"MESHTERM_SHIM_DIR=" + dir,
+		"PATH=" + dir + string(os.PathListSeparator) + basePATH,
+	}
+}
+
 // New constructs a Daemon. Loads or generates the TLS cert,
 // creates the session registry, builds the QUIC listener and IPC
 // server. Does NOT start any goroutines — call Run for that.
@@ -220,6 +293,11 @@ func New(cfg Config) (*Daemon, error) {
 		logger = slog.Default()
 	}
 
+	bootIDBytes := make([]byte, 8)
+	if _, err := rand.Read(bootIDBytes); err != nil {
+		return nil, fmt.Errorf("generate boot id: %w", err)
+	}
+
 	mgr := &cert.Manager{Dir: cfg.CertDir}
 	tlsCert, fp, err := mgr.LoadOrGenerate()
 	if err != nil {
@@ -227,11 +305,17 @@ func New(cfg Config) (*Daemon, error) {
 	}
 
 	reg := session.NewRegistry(cfg.MaxSessions, cfg.IdleTimeout, 0, cfg.MaxIdleTimeout)
+	// Broker store created before OnReap so the reap hook can drop a
+	// session's secrets (the closure can't reference `d`, declared below).
+	secretStore := secret.NewStore()
 	// Surface idle-GC reap events in the operational log. Pairs
 	// with the session.attach / session.detach events emitted by
 	// the transport layer so operators tailing logs see the full
 	// lifecycle of a session.
 	reg.OnReap = func(s *session.Session) {
+		// Drop the session's broker secrets from memory the moment it's
+		// reaped - the secret set must never outlive its session.
+		secretStore.ClearSession(s.ID().String())
 		logger.Info("session.reaped",
 			"session", s.ID().String(),
 			"name_hash", session.NameHash(s.ID(), s.Name()),
@@ -265,9 +349,11 @@ func New(cfg Config) (*Daemon, error) {
 		logger:    logger,
 		cert:      tlsCert,
 		certFP:    fp,
+		bootID:    hex.EncodeToString(bootIDBytes),
 		registry:  reg,
 		stateDir:  stateDir,
 		startedAt: time.Now(),
+		secrets:   secretStore,
 	}
 
 	// Index any embedder-registered allocate extensions by Kind. The core
@@ -364,7 +450,7 @@ func New(cfg Config) (*Daemon, error) {
 				SessionID:    sess.ID().String(),
 				Rows:         rows,
 				Cols:         cols,
-				ExtraEnv:     sessionExtraEnv(sess),
+				ExtraEnv:     append(sessionExtraEnv(sess), shimSpawnEnv(stateDir, sess.ID().String(), "")...),
 				StateDir:     stateDir,
 				DaemonBinary: daemonBinary,
 				Logger:       logger,
@@ -378,6 +464,11 @@ func New(cfg Config) (*Daemon, error) {
 			// the new sidecar reported. A later allocate then reports the
 			// current truth rather than the pre-restart snapshot.
 			sess.SetHookInstalled(conn.HookInstalled())
+			// shimReady comes from the SIDECAR (it re-asserts the shim dir
+			// on the live PATH in the seeded rcfile and reports whether it
+			// is guaranteed), not an assumption that shimSpawnEnv ran - a
+			// login shell could otherwise have rebuilt PATH and dropped it.
+			sess.SetShimReady(conn.ShimReady())
 			return conn, nil
 		},
 	}
@@ -693,10 +784,10 @@ func (d *Daemon) tailnetTCPPoller(ctx context.Context, wg *sync.WaitGroup, errCh
 // compromised local helper that could otherwise feed unbounded
 // strings into our registry maps + log lines.
 const (
-	maxNameLen      = 256        // Session.Name; echoed in every list response + every log line.
-	maxShellLen     = 4 * 1024   // Path to a shell binary; longer than this is pathological.
-	maxExecJoinLen  = 16 * 1024  // Total bytes across all Exec[] joined by spaces.
-	maxExecArgCount = 128        // Cap individual element count too — argv length is finite in practice.
+	maxNameLen      = 256       // Session.Name; echoed in every list response + every log line.
+	maxShellLen     = 4 * 1024  // Path to a shell binary; longer than this is pathological.
+	maxExecJoinLen  = 16 * 1024 // Total bytes across all Exec[] joined by spaces.
+	maxExecArgCount = 128       // Cap individual element count too — argv length is finite in practice.
 
 	// maxSearchPatternLen caps the regex source length on SessionSearchRequest.
 	// Go RE2 compile time is bounded but not free; a 1 KiB ceiling is well
@@ -728,8 +819,10 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	// a hook state). reused != nil exactly distinguishes the core paths
 	// from the extension path here.
 	var hookInstalled *bool
+	var shimReady *bool
 	if reused != nil {
 		hookInstalled = sess.HookInstalled()
+		shimReady = sess.ShimReady()
 	}
 
 	tok, err := d.registry.IssueAttachToken(sess.ID())
@@ -764,12 +857,92 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		Name:            sess.Name(),
 		Reused:          reused,
 		HookInstalled:   hookInstalled,
+		ShimReady:       shimReady,
+		BootID:          d.bootID,
 	}
 }
 
 // HandlePing implements ipc.Handler.
 func (d *Daemon) HandlePing(ctx context.Context, req ipc.PingRequest) ipc.PingResponse {
 	return ipc.PingResponse{Nonce: req.Nonce}
+}
+
+// shimDirFor is the per-session PATH-shadow shim directory. Lives in the
+// session's own state dir so it's cleaned up with the session and stays
+// 0700/uid-private.
+func (d *Daemon) shimDirFor(sid string) string {
+	return sessionShimDir(d.stateDir, sid)
+}
+
+// HandleSetSessionSecrets stores a session's full secret set in memory
+// (REPLACING any prior set) and (re)generates its PATH shims from the
+// union of declared commands. Re-validates keys + commands here as the
+// trust boundary. Requires the session to be live so a bogus id can't
+// grow the store unboundedly. Values are held in RAM only — never
+// written to the session snapshot.
+func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSecretsRequest) ipc.SetSessionSecretsResponse {
+	sid, err := session.ParseSessionID(req.SessionID)
+	if err != nil {
+		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest, Msg: err.Error()}
+	}
+	if _, err := d.registry.Lookup(sid); err != nil {
+		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrUnknownSession, Msg: err.Error()}
+	}
+	payload := secret.Payload{Secrets: make([]secret.Entry, 0, len(req.Secrets))}
+	seen := make(map[string]struct{}, len(req.Secrets))
+	for _, e := range req.Secrets {
+		if !secret.ValidKey(e.Key) {
+			return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
+				Msg: "invalid key " + e.Key}
+		}
+		// Reject duplicates like ParsePayload does - this handler is the
+		// trust boundary for DIRECT IPC callers too, and a silently
+		// last-wins duplicate would deliver an unpredictable value
+		// (review finding).
+		if _, dup := seen[e.Key]; dup {
+			return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
+				Msg: "duplicate key " + e.Key}
+		}
+		seen[e.Key] = struct{}{}
+		for _, c := range e.Cmds {
+			if !secret.ValidCommand(c) {
+				return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrBadRequest,
+					Msg: "invalid command " + c}
+			}
+		}
+		payload.Secrets = append(payload.Secrets, secret.Entry{Key: e.Key, Value: e.Value, Cmds: e.Cmds})
+	}
+	sidStr := sid.String()
+	d.shimSyncMu.Lock()
+	defer d.shimSyncMu.Unlock()
+	d.secrets.SetSession(sidStr, payload)
+	cmds := d.secrets.Commands(sidStr)
+	if err := secret.SyncShims(d.shimDirFor(sidStr), d.daemonBinary, d.IPCSocketPath(), cmds); err != nil {
+		d.logger.Warn("secret.shims.sync_failed", "session", sidStr, "err", err.Error())
+		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
+	}
+	d.logger.Info("secret.set", "session", sidStr,
+		"keys", len(payload.Secrets), "commands", len(cmds))
+	return ipc.SetSessionSecretsResponse{Ok: true}
+}
+
+// HandleGetSecrets returns ONLY the env a command should be exec'd with
+// in a session (least privilege). Empty Env (Ok=true) = nothing for that
+// command; the caller then execs the real binary unchanged. Does not
+// require the session to be live: a same-uid `secret-exec` querying a
+// just-reaped session simply gets an empty result and fails open.
+//
+// The session id is CALLER-SUPPLIED (secret-exec reads it from the
+// session env) and deliberately NOT bound to the requesting connection:
+// the IPC socket is uid-private, and a same-uid process can already
+// read any sibling session's /proc environ, state dir, or dial this
+// socket directly - so per-session isolation against a same-uid caller
+// is not enforceable at this layer, only at the OS-sandbox layer. The
+// broker's promise (per the locked design) is keeping values out of
+// the provider-bound agent CONTEXT and ambient env, not containing an
+// adversarial same-uid process.
+func (d *Daemon) HandleGetSecrets(_ context.Context, req ipc.GetSecretsRequest) ipc.GetSecretsResponse {
+	return ipc.GetSecretsResponse{Ok: true, Env: d.secrets.EnvForCommand(req.SessionID, req.Command)}
 }
 
 // HandleListSessions returns a snapshot of every live session on
@@ -822,7 +995,7 @@ func (d *Daemon) HandleStatus(ctx context.Context, _ ipc.StatusRequest) ipc.Stat
 		StartedAtNs:      d.startedAt.UnixNano(),
 		UptimeNs:         now.Sub(d.startedAt).Nanoseconds(),
 		QUICAddr:         d.quic.Addr().String(),
-		MTRoamTCPAddr:      d.TCPAddr(),
+		MTRoamTCPAddr:    d.TCPAddr(),
 		CertFingerprint:  d.certFP.String(),
 		SessionCount:     d.registry.Len(),
 		MaxSessions:      d.registry.Capacity(),
@@ -1149,6 +1322,9 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 			extraEnv = append(extraEnv, k+"="+req.Env[k])
 		}
 	}
+	// Shim env LAST, prepending the shim dir to the user's PATH (req.Env
+	// PATH if set, else the daemon's) - so a client's custom PATH survives.
+	extraEnv = append(extraEnv, shimSpawnEnv(d.stateDir, sid.String(), req.Env["PATH"])...)
 	ptyHandle, err := ptyclient.SpawnNew(context.Background(), ptyclient.SpawnConfig{
 		SessionID:    sid.String(),
 		Shell:        req.Shell,
@@ -1192,6 +1368,10 @@ func (d *Daemon) spawnSession(req ipc.AllocateRequest) (*session.Session, error)
 	// via AllocateResponse.HookInstalled. ptyHandle is the *ptyclient.Conn
 	// that carries the value the detached sidecar reported.
 	sess.SetHookInstalled(ptyHandle.HookInstalled())
+	// shimReady is the sidecar-verified value (it re-asserts the shim dir
+	// on PATH after the user's rc and reports whether it is guaranteed),
+	// not an assumption - persisted + surfaced on AllocateResponse.
+	sess.SetShimReady(ptyHandle.ShimReady())
 
 	if err := d.registry.Add(sess); err != nil {
 		_ = sess.Close()

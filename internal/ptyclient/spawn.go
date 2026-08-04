@@ -104,6 +104,7 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 	sockPath := filepath.Join(sessionDir, "sidecar.sock")
 	pidPath := filepath.Join(sessionDir, "sidecar.pid")
 	hookStatusPath := filepath.Join(sessionDir, ptysidecar.HookStatusFilename)
+	shimStatusPath := filepath.Join(sessionDir, ptysidecar.ShimStatusFilename)
 	// Remove any stale socket from a previous crashed sidecar. The
 	// pidfile is gated by flock so we leave it alone — the sidecar's
 	// AcquirePidfile will return ErrPidfileLocked if a live owner
@@ -112,6 +113,7 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 	// Drop any stale hook-status from a previous sidecar so a failed
 	// re-seed reads as nil (unknown) rather than the old value.
 	_ = os.Remove(hookStatusPath)
+	_ = os.Remove(shimStatusPath)
 
 	// Write the env file. We build the same curated allowlist +
 	// defaults that pty.Spawn would have used in-process, then append
@@ -213,6 +215,7 @@ func SpawnNew(ctx context.Context, cfg SpawnConfig) (*Conn, error) {
 	// the daemon to store on the session. A missing/garbled file → nil
 	// (unknown), the safe fallback.
 	conn.hookInstalled = readHookStatus(hookStatusPath)
+	conn.shimReady = readHookStatus(shimStatusPath)
 	return conn, nil
 }
 

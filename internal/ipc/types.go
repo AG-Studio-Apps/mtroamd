@@ -25,7 +25,66 @@ const (
 	TypeRenameSession = "RenameSession"
 	TypeStatus        = "Status"
 	TypeSessionSearch = "SessionSearch"
+	// Secret broker (v1.7.6+). SetSessionSecrets is the client → daemon
+	// full push of a session's secret set; GetSecrets is the local
+	// consumer (`mtroamd secret-exec`) asking for the values a command
+	// should be exec'd with. Both are additive: older daemons reject the
+	// unknown type via the dispatch default, older clients never send it.
+	TypeSetSessionSecrets = "SetSessionSecrets"
+	TypeGetSecrets        = "GetSecrets"
 )
+
+// SecretEntry is the CBOR wire form of one broker secret: env-var name,
+// value, and the command basenames it is injected into. Distinct from
+// internal/secret.Entry (which carries JSON tags for the client-staged
+// file); `set-secrets` converts the parsed file into these before the
+// IPC. Short cbor keys keep the frame small.
+type SecretEntry struct {
+	Key   string   `cbor:"k"`
+	Value string   `cbor:"v"`
+	Cmds  []string `cbor:"c"`
+}
+
+// SetSessionSecretsRequest REPLACES a session's broker secret set (a
+// full push, not a delta). An empty Secrets clears the session. The
+// daemon holds the values in memory only and (re)generates the
+// session's PATH shims from the union of declared commands.
+type SetSessionSecretsRequest struct {
+	T         string        `cbor:"t"`
+	SessionID string        `cbor:"sid"`
+	Secrets   []SecretEntry `cbor:"secrets,omitempty"`
+}
+
+// SetSessionSecretsResponse is a plain ack. Ok=false + Msg on a bad
+// session id or a shim-write failure.
+type SetSessionSecretsResponse struct {
+	T   string `cbor:"t"`
+	Ok  bool   `cbor:"ok"`
+	Err string `cbor:"err,omitempty"`
+	Msg string `cbor:"msg,omitempty"`
+}
+
+// GetSecretsRequest is `secret-exec`'s ask: give me the env for
+// `Command` in session `SessionID`. The caller identifies its session
+// from MESHTERM_SESSION_ID (a same-uid local process; same trust model
+// as the rest of this socket).
+type GetSecretsRequest struct {
+	T         string `cbor:"t"`
+	SessionID string `cbor:"sid"`
+	Command   string `cbor:"cmd"`
+}
+
+// GetSecretsResponse carries ONLY the values for the named command
+// (least privilege — never the full set). Env empty (Ok=true) means the
+// session has no secrets for that command; the caller then execs the
+// real binary unchanged.
+type GetSecretsResponse struct {
+	T   string            `cbor:"t"`
+	Ok  bool              `cbor:"ok"`
+	Env map[string]string `cbor:"env,omitempty"`
+	Err string            `cbor:"err,omitempty"`
+	Msg string            `cbor:"msg,omitempty"`
+}
 
 // AllocateRequest reserves an attach for the named session (or
 // creates a new one if SessionID is empty / "new") and returns the
@@ -170,6 +229,27 @@ type AllocateResponse struct {
 	// (the extension owns its own spawn). Additive/omitempty like
 	// Reused: old peers drop the unknown key.
 	HookInstalled *bool `cbor:"hook,omitempty"`
+
+	// BootID identifies THIS DAEMON PROCESS instance (random hex,
+	// regenerated every daemon start; not persisted). `mtroamd connect`
+	// emits it as the MTRM_BOOT_ID bootstrap line. iOS keys its
+	// "already delivered broker secrets" cache on (boot id, content
+	// fingerprint): the secret store is RAM-only, so a changed boot id
+	// means the store was wiped and a re-push is required, while an
+	// unchanged one lets a reconnect skip the redundant SFTP stage +
+	// set-secrets exec entirely (review finding — every .ready re-pushed
+	// over two extra connections even when the daemon already held the
+	// set). Additive/omitempty: old peers drop the unknown key.
+	BootID string `cbor:"boot_id,omitempty"`
+
+	// ShimReady reports whether the session's shell has the secret-broker
+	// PATH-shadow shim dir on PATH (spawned by a v1.7.8-rc1+ daemon), so a
+	// brokered `set-secrets` would actually reach its tools. Pointer:
+	// nil = unknown (pre-broker spawn) → the client warns the user to
+	// regenerate the session before a hidden secret can take effect;
+	// *true = ready. `mtroamd connect` emits it as MTRM_SHIM_READY.
+	// Additive/omitempty like Reused: old peers drop the unknown key.
+	ShimReady *bool `cbor:"shim_ready,omitempty"`
 
 	// On failure:
 	Err string `cbor:"err,omitempty"`

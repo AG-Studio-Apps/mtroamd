@@ -233,6 +233,8 @@ func runConnect(args []string) int {
 
 	printSessionReused(&resp)
 	printSessionHookInstalled(&resp)
+	printBootID(&resp)
+	printSessionShimReady(&resp)
 
 	return connectExitOK
 }
@@ -255,6 +257,36 @@ func printSessionReused(resp *ipc.AllocateResponse) {
 		v = 1
 	}
 	fmt.Printf("MTRM_SESSION_REUSED %d\n", v)
+}
+
+// printBootID emits the optional MTRM_BOOT_ID bootstrap line: the
+// daemon process instance id (random hex per daemon start, v1.7.8+).
+// Clients key their "broker secrets already delivered" cache on it - a
+// changed id means the RAM secret store was wiped and needs a re-push;
+// an unchanged one lets a reconnect skip the redundant re-delivery.
+// Absent from older daemons; clients treat absence as "always re-push".
+func printBootID(resp *ipc.AllocateResponse) {
+	if resp.BootID == "" {
+		return
+	}
+	fmt.Printf("MTRM_BOOT_ID %s\n", resp.BootID)
+}
+
+// printSessionShimReady emits the optional MTRM_SHIM_READY bootstrap
+// line: 1 when the session's shell has the broker shim dir on PATH (a
+// brokered secret reaches its tools), 0/absent otherwise. Only printed
+// when the daemon reported the bit (v1.7.8+); clients treat absence as
+// "unknown" and warn the user to regenerate the session before relying
+// on a hidden secret. Mirrors printSessionHookInstalled.
+func printSessionShimReady(resp *ipc.AllocateResponse) {
+	if resp.ShimReady == nil {
+		return
+	}
+	v := 0
+	if *resp.ShimReady {
+		v = 1
+	}
+	fmt.Printf("MTRM_SHIM_READY %d\n", v)
 }
 
 // printSessionHookInstalled emits the optional MTRM_LIVE_INJECT
@@ -392,6 +424,8 @@ func runStdioMode(resp *ipc.AllocateResponse) int {
 	// wire bytes, so an appended line would corrupt the stream.
 	printSessionReused(resp)
 	printSessionHookInstalled(resp)
+	printBootID(resp)
+	printSessionShimReady(resp)
 	fmt.Printf("MTRM_STDIO 1 %s %s\n", resp.SessionID, resp.AttachToken)
 	os.Stdout.Sync()
 

@@ -274,6 +274,70 @@ func DecodeSessionSearchResponse(body []byte) (SessionSearchResponse, error) {
 	return resp, nil
 }
 
+// DecodeSetSessionSecretsRequest decodes a SetSessionSecrets frame.
+func DecodeSetSessionSecretsRequest(body []byte) (SetSessionSecretsRequest, error) {
+	t, err := PeekType(body)
+	if err != nil {
+		return SetSessionSecretsRequest{}, err
+	}
+	if t != TypeSetSessionSecrets {
+		return SetSessionSecretsRequest{}, fmt.Errorf("expected SetSessionSecrets frame, got %q", t)
+	}
+	var req SetSessionSecretsRequest
+	if err := protocol.StrictDecMode.Unmarshal(body, &req); err != nil {
+		return SetSessionSecretsRequest{}, err
+	}
+	return req, nil
+}
+
+// DecodeSetSessionSecretsResponse mirrors the request decoder.
+func DecodeSetSessionSecretsResponse(body []byte) (SetSessionSecretsResponse, error) {
+	t, err := PeekType(body)
+	if err != nil {
+		return SetSessionSecretsResponse{}, err
+	}
+	if t != TypeSetSessionSecrets {
+		return SetSessionSecretsResponse{}, fmt.Errorf("expected SetSessionSecrets response, got %q", t)
+	}
+	var resp SetSessionSecretsResponse
+	if err := protocol.StrictDecMode.Unmarshal(body, &resp); err != nil {
+		return SetSessionSecretsResponse{}, err
+	}
+	return resp, nil
+}
+
+// DecodeGetSecretsRequest decodes a GetSecrets frame.
+func DecodeGetSecretsRequest(body []byte) (GetSecretsRequest, error) {
+	t, err := PeekType(body)
+	if err != nil {
+		return GetSecretsRequest{}, err
+	}
+	if t != TypeGetSecrets {
+		return GetSecretsRequest{}, fmt.Errorf("expected GetSecrets frame, got %q", t)
+	}
+	var req GetSecretsRequest
+	if err := protocol.StrictDecMode.Unmarshal(body, &req); err != nil {
+		return GetSecretsRequest{}, err
+	}
+	return req, nil
+}
+
+// DecodeGetSecretsResponse mirrors the request decoder.
+func DecodeGetSecretsResponse(body []byte) (GetSecretsResponse, error) {
+	t, err := PeekType(body)
+	if err != nil {
+		return GetSecretsResponse{}, err
+	}
+	if t != TypeGetSecrets {
+		return GetSecretsResponse{}, fmt.Errorf("expected GetSecrets response, got %q", t)
+	}
+	var resp GetSecretsResponse
+	if err := protocol.StrictDecMode.Unmarshal(body, &resp); err != nil {
+		return GetSecretsResponse{}, err
+	}
+	return resp, nil
+}
+
 func cborMarshal(v any) ([]byte, error) {
 	em, err := cbor.CTAP2EncOptions().EncMode()
 	if err != nil {
