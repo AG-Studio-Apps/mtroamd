@@ -201,6 +201,24 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// clamp; out-of-range dims are now silently ignored (the prior
 	// >0 gate kept zero-dim Attaches from resizing, but accepted
 	// everything above zero).
+	// Resize the PTY + live screen-model to the exclusive client's geometry, and
+	// latch whether THIS attach changed the grid size. `attachResizedGrid` is an
+	// ATOMIC local decision (pre-resize geometry vs the attach dims) — unlike the
+	// model's resize-dirty flag it CANNOT be raced by the Pump goroutine clearing
+	// dirty between the resize and the inject below (the Pump feeds the model
+	// under screenMu in a separate acquisition). A geometry change top-anchors
+	// the model (it can't know where the app will redraw — a grow strands a
+	// bottom-anchored prompt mid-screen, a shrink drops it) and SIGWINCHes the
+	// app, so we skip BOTH the injected redraw and the footer re-emit and let raw
+	// replay carry the app's fresh repaint (rc5 behaviour, known-good for
+	// cold-start). A same-geometry attach is a no-op resize; the model's own
+	// resize-dirty flag (checked in InjectAltScreenRepaint + the footer gate)
+	// then catches a still-un-repainted MID-SESSION resize, and otherwise the
+	// prime fires for its value case (footer aged out, no fresh repaint coming).
+	prevRows, prevCols := sess.WindowSize()
+	attachResizedGrid := attachMode == session.AttachExclusive &&
+		dimsInBounds(att.Rows, att.Cols) &&
+		(prevRows != att.Rows || prevCols != att.Cols)
 	if attachMode == session.AttachExclusive && dimsInBounds(att.Rows, att.Cols) {
 		_ = sess.Resize(att.Rows, att.Cols)
 	}
@@ -220,18 +238,75 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// attaches.
 	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
 
-	// Footer re-emit: the status footer + the prompt's border block are
-	// event-driven (drawn once, not on every output frame like the spinner /
-	// conversation), so they age out of the recency-based replay window and a
-	// reattaching client rebuilds the screen WITHOUT them. Reconstruct the
-	// bottom rows from the ring and INJECT them into the output ring as real
-	// bytes BEFORE computing the window — so they're the newest content and ride
-	// the NORMAL replay (real seqs, no client/protocol change). Gated on the
-	// model staying FAITHFUL: vim/htop (scroll region / IL / DL) get nothing —
-	// they have no such footer and the model can't model their ops. The redraw
-	// is cursor-neutral (ESC7/ESC8), so other attached clients see only an
-	// idempotent in-place refresh of the bottom rows.
-	if altActive {
+	// Full-frame redraw (preferred): when a full-screen TUI is running and
+	// the live screen-model is faithful, inject the WHOLE synthesized clean
+	// frame and pin the replay window to start right before it (below), so
+	// the client replays ONLY the redraw — not the truncated raw byte tail
+	// it cannot reassemble into a 2-D screen. This is the fix for cold-start
+	// alt-screen spill: the daemon hands the client a complete screen, the
+	// way tmux/mosh do. fullRedrawStart marks the pre-inject head; the
+	// override after computeReplayWindow clamps `start` to it.
+	// Gate the redraw on the client having a replay budget (budget-less CLI
+	// attaches keep full raw replay) and on the live screen-model's OWN
+	// authoritative alt+faithful check inside InjectAltScreenRepaint — NOT on
+	// the wedge heuristic (altActive), so a wedge miss can't suppress a redraw
+	// the model can serve.
+	fullRedraw := false
+	var fullRedrawStart uint64
+	// Read once and reuse for the footer-re-emit gate below (single lock hop; no
+	// TOCTOU between two separate reads). dirty can only go true→false during an
+	// attach (Pump feeding the app's repaint; no concurrent Resize mid-handshake),
+	// so a captured value is never falsely stale in the unsafe direction.
+	var modelResizeDirty bool
+	if att.ReplayBudget > 0 {
+		// One screenMu hop for all four fields, so the logged state is internally
+		// consistent (a Pump Feed can't land between separate reads).
+		hasScr, altScr, faithScr, dirtyScr := sess.ScreenSnapshot()
+		modelResizeDirty = dirtyScr
+		// Skip the inject when THIS attach resized (the atomic latch above): the
+		// model is top-anchored and the app will SIGWINCH-repaint, so raw replay
+		// carries it. On a same-geometry attach, InjectAltScreenRepaint is
+		// authoritative — it still refuses (ok=false) on a main-buffer, unfaithful,
+		// or resize-dirty model (the last catches a MID-SESSION resize whose
+		// repaint hasn't landed), so a stale/top-anchored grid is never shipped.
+		if !attachResizedGrid {
+			if start, ok := sess.InjectAltScreenRepaint(); ok {
+				fullRedraw = true
+				fullRedrawStart = start
+			}
+		}
+		slog.Info("attach.altredraw",
+			"sid", sess.ID().String(),
+			"budget", att.ReplayBudget,
+			"wedgeAlt", altActive,
+			"modelHas", hasScr,
+			"modelAlt", altScr,
+			"modelFaithful", faithScr,
+			"attachResized", attachResizedGrid,
+			"modelResizeDirty", modelResizeDirty,
+			"injected", fullRedraw,
+			"start", fullRedrawStart)
+	}
+
+	// Footer re-emit (fallback): only when the full-model redraw didn't
+	// fire (model unfaithful / stale / not on the alt buffer). The status
+	// footer + the prompt's border block are event-driven (drawn once, not
+	// on every output frame like the spinner / conversation), so they age
+	// out of the recency-based replay window and a reattaching client
+	// rebuilds the screen WITHOUT them. Reconstruct the bottom rows from the
+	// ring and INJECT them as real bytes BEFORE computing the window — so
+	// they're the newest content and ride the NORMAL replay (real seqs, no
+	// client/protocol change). Gated on the reconstruct staying FAITHFUL:
+	// vim/htop (scroll region / IL / DL) get nothing — they have no such
+	// footer. The redraw is cursor-neutral (ESC7/ESC8), so other attached
+	// clients see only an idempotent in-place refresh of the bottom rows.
+	//
+	// Also skip on a resized attach (the atomic latch OR a still-dirty model):
+	// like the full redraw, ReconstructBottomRows would place the bottom rows at
+	// the NEW geometry from OLD-geometry ring bytes (a grow misplaces them — the
+	// same regression the full-redraw gate guards). The app's SIGWINCH repaint
+	// carries the footer on a resized attach instead.
+	if altActive && !fullRedraw && !attachResizedGrid && !modelResizeDirty {
 		tail := buf.TailSeq()
 		if ring, _, _ := buf.ReadSince(tail, int(buf.HeadSeq()-tail)); len(ring) > 0 {
 			rows, cols := sess.WindowSize()
@@ -265,6 +340,23 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 
 	start, head, trunc := computeReplayWindow(
 		buf, att.AckSeq, att.ReplayBudget, altActive)
+
+	// When we injected a full-model redraw, replay ONLY it (plus any live
+	// PTY bytes that landed after): the synthesized frame IS the complete
+	// screen, so everything before it is redundant and the raw tail is
+	// unreassemblable. A frame is ATOMIC — a small ReplayBudget must never
+	// slice `start` into the middle of it (computeReplayWindow would pin
+	// start = head - capBytes, landing inside the frame and replaying a
+	// half-frame: garbage, worse than the bug we're fixing). So pin `start`
+	// to the pre-inject head whenever we injected, even when that EXTENDS
+	// the window past the budget cap: one frame is bounded (< a worst-case
+	// styled screen ≪ AltScreenReplayCap) and coherent. trunc stays true
+	// (pre-redraw output was intentionally skipped) — matching the existing
+	// alt-screen contract the client already handles (no scrollback to lose).
+	if fullRedraw && fullRedrawStart <= head {
+		start = fullRedrawStart
+		trunc = true
+	}
 
 	// Sync writes on the single stream — outputPump and the read
 	// pump's control responses (Pong, AttachAck etc.) both call
@@ -628,7 +720,15 @@ func (h *ProtocolHandler) lazySpawnRestoredPTY(ctx context.Context, sess *sessio
 		}
 		return err
 	}
-	// We won the race — start the pump so output flows.
+	// We won the race. The persisted alt-screen Repaint that loadSessionFromDir fed
+	// into the model belongs to the now-DEAD app (this is the dead-sidecar path — a
+	// fresh shell was just spawned, not a reattach to the surviving sidecar). Reset
+	// the model to a clean main-buffer grid BEFORE Pump starts, so
+	// InjectAltScreenRepaint won't ship that stale full frame over the new shell's
+	// main-buffer prompt (a ghost TUI over a live shell); the fresh shell repopulates
+	// the model via Pump.
+	sess.ResetScreenModel()
+	// Start the pump so output flows.
 	go sess.Pump()
 	log.InfoContext(ctx, "session.restored.lazy_spawn",
 		"session", sess.ID().String(),

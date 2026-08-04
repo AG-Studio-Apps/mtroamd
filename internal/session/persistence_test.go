@@ -625,3 +625,156 @@ func TestLoadPersistedDropsOversizedBufCapacity(t *testing.T) {
 		t.Errorf("oversized-BufCapacity dir wasn't cleaned up")
 	}
 }
+
+// TestScreenRepaintRoundTrip is grid-persistence: a session that was on a
+// faithful ALT screen at save time must come back with a faithful alt model
+// (not the empty main-buffer fallback), so InjectAltScreenRepaint fires on the
+// first reattach after a daemon restart instead of the raw-tail spill.
+func TestScreenRepaintRoundTrip(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, nil)
+	// Drive the live model onto the alt screen with content (as a full-screen
+	// TUI would) → faithful + alt, so SaveTo persists the Repaint frame.
+	original.screen.Feed([]byte("\x1b[?1049h\x1b[H\x1b[2J\x1b[2;3Hhello world\x1b[6;1Hfooter"))
+	if !original.screen.AltActive() || !original.screen.Faithful() {
+		t.Fatalf("setup: model not faithful alt (alt=%v faithful=%v)",
+			original.screen.AltActive(), original.screen.Faithful())
+	}
+	want := string(original.screen.Repaint())
+
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
+	}
+	restored, err := reg.Lookup(original.ID())
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+
+	has, alt, faithful := restored.ScreenState()
+	if !has || !alt || !faithful {
+		t.Fatalf("restored ScreenState has=%v alt=%v faithful=%v, want all true", has, alt, faithful)
+	}
+	if got := string(restored.screen.Repaint()); got != want {
+		t.Fatalf("restored grid differs from original:\n  got:  %q\n  want: %q", got, want)
+	}
+	if _, ok := restored.InjectAltScreenRepaint(); !ok {
+		t.Fatal("InjectAltScreenRepaint should return ok=true on the restored alt session")
+	}
+}
+
+// TestScreenRepaintNotPersistedForMainScreen: a session NOT on the alt screen
+// (or unfaithful) persists no Repaint, so it restores to a fresh model and
+// falls back to raw replay — the unchanged, pre-grid-persistence behavior and
+// the back-compat path for old snapshots that have no screen_repaint field.
+func TestScreenRepaintNotPersistedForMainScreen(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, []byte("just a shell prompt\n"))
+	if original.screen.AltActive() {
+		t.Fatal("setup: fresh session should be on the main screen")
+	}
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
+	}
+	restored, err := reg.Lookup(original.ID())
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+
+	_, alt, _ := restored.ScreenState()
+	if alt {
+		t.Fatal("main-screen session should not restore as alt-active")
+	}
+	if _, ok := restored.InjectAltScreenRepaint(); ok {
+		t.Fatal("InjectAltScreenRepaint should be false for a restored main-screen session")
+	}
+}
+
+// TestScreenRepaintNotPersistedWhenResizeDirty guards the resize-dirty spill:
+// SaveTo must NOT persist a Repaint when the model is resize-dirty (geometry
+// changed, app hasn't repainted). Restore cannot re-derive the flag (Feed clears
+// it), so persisting a misplaced grid would ship the stranded-footer frame on the
+// first reattach after a restart — the very spill this feature prevents.
+func TestScreenRepaintNotPersistedWhenResizeDirty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, nil)
+	original.screen.Feed([]byte("\x1b[?1049h\x1b[H\x1b[2J\x1b[2;3Hhello\x1b[6;1Hfooter"))
+	if !original.screen.AltActive() || !original.screen.Faithful() {
+		t.Fatalf("setup: model not faithful alt (alt=%v faithful=%v)",
+			original.screen.AltActive(), original.screen.Faithful())
+	}
+	// A geometry change after the last repaint top-anchors the grid → resize-dirty.
+	r, c := original.screen.Size()
+	original.screen.Resize(r+4, c)
+	if !original.screen.ResizeDirty() {
+		t.Fatal("setup: model should be resize-dirty after a geometry change")
+	}
+
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
+	}
+	restored, err := reg.Lookup(original.ID())
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	if _, ok := restored.InjectAltScreenRepaint(); ok {
+		t.Fatal("a resize-dirty model must not persist a Repaint (would resurrect the spill on restore)")
+	}
+}
+
+// TestRestoreRejectsOversizedDims guards the OOM: a corrupt/hostile meta.cbor with
+// an out-of-range dimension must be DROPPED, not fed to altscreen.New (which would
+// eagerly allocate a rows*cols grid and OOM-crash the daemon at startup).
+func TestRestoreRejectsOversizedDims(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	original := makePersistedSession(t, []byte("hi\n"))
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+	// Corrupt the on-disk meta with an out-of-range dimension.
+	metaPath := filepath.Join(dir, sessionsSubdir, original.ID().String(), "meta.cbor")
+	raw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m persistedSessionMeta
+	if err := cbor.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.Rows, m.Cols = 65535, 65535
+	tampered, err := cbor.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	// LoadPersisted logs + drops the bad session; it must NOT panic/OOM or fail.
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted should tolerate a corrupt session (drop it), got: %v", err)
+	}
+	if _, err := reg.Lookup(original.ID()); err == nil {
+		t.Fatal("session with oversized dims should have been dropped, not loaded")
+	}
+}
