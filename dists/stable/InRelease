@@ -5,44 +5,44 @@ Origin: mtroamd
 Label: mtroamd
 Suite: stable
 Codename: stable
-Date: Tue, 21 Jul 2026 14:52:30 UTC
+Date: Tue, 04 Aug 2026 11:57:55 UTC
 Architectures: amd64 arm64 armhf
 Components: main
 Description: mtroamd apt repository (stable — production, matches the App Store app)
 MD5Sum:
- 9028ad3755abbb05d7fba3b3d1924675 835 main/binary-amd64/Packages
- 8aaf4691284d4a4a0dcad95712ac1d92 567 main/binary-amd64/Packages.gz
+ b4738cf10b9bd001c2acb2bba13f6947 835 main/binary-amd64/Packages
+ 6859e416f3e7c645fdc7903aa5673807 567 main/binary-amd64/Packages.gz
  f90e7450bdac51d8c482829bb60ac906 170 main/binary-amd64/Release
- 05093b633d224eb866d709387591ae94 835 main/binary-arm64/Packages
- e479d4c50da6039b4410194a7989d271 568 main/binary-arm64/Packages.gz
+ ffdf22a9438f96448ce8993c9338e611 835 main/binary-arm64/Packages
+ a6ed744b321aeed591aa55a138105d15 566 main/binary-arm64/Packages.gz
  adf0b28c2f6b053f208ddc8150883763 170 main/binary-arm64/Release
- 47c94e49e046e81481ff8941dcd097e5 835 main/binary-armhf/Packages
- 4eca24536d0cf55ba7865566bb970a38 567 main/binary-armhf/Packages.gz
+ e852a8fbe69d413a83179c817932b288 835 main/binary-armhf/Packages
+ ad32a1c1701a18677453e1cd17600ce6 564 main/binary-armhf/Packages.gz
  f975c3b552ca6eb8f27c0e8e5444b47e 170 main/binary-armhf/Release
 SHA1:
- 9447fcc47eb233b223bbf6b27e44fcaa6c0f751c 835 main/binary-amd64/Packages
- ebf4955fcaa9f7d5b85acb93e4a33dcfda9f511a 567 main/binary-amd64/Packages.gz
+ fa207a3f48ca7efe2460edde787d43a460990c57 835 main/binary-amd64/Packages
+ 691239b4acb28802858baa1057ae96ab86486b81 567 main/binary-amd64/Packages.gz
  d8e699d4cdbbb18911a97477b937d71470c37bb6 170 main/binary-amd64/Release
- aa9e0afdb3e826382ecd17f3189cf83503e19912 835 main/binary-arm64/Packages
- 5d82d3ab8d762102291149184de231660b978c8b 568 main/binary-arm64/Packages.gz
+ 2fdf3f4df2a802b9bf06365a3d18cba809daaf44 835 main/binary-arm64/Packages
+ 8b4e1317a8d10b4aae2dad865b8200e4be9056f9 566 main/binary-arm64/Packages.gz
  347c0661639556364807804a99589c1b3e7f451f 170 main/binary-arm64/Release
- e9e980d7339b3e8dd795f71d5afc80061f8dc9d5 835 main/binary-armhf/Packages
- dd93917f60c42c64ac43e3521e8232ca7a58a739 567 main/binary-armhf/Packages.gz
+ fa95b3f25a8f9000059e0bc976ba9e6838015111 835 main/binary-armhf/Packages
+ 86e9aac914f799c44a4e409df5b537f84959949b 564 main/binary-armhf/Packages.gz
  6aaba6a991a381d0b35dd5962d7672ca55b9a4e7 170 main/binary-armhf/Release
 SHA256:
- 5751267aa48df625ba219595b70a40c0e2e2939512a3f9b3bf54e2188d127038 835 main/binary-amd64/Packages
- d50d9aeda1d00a0aa5b2f16542fe5a42b91d73e7ca3169a83478e5e29a0cb9bc 567 main/binary-amd64/Packages.gz
+ 595f18471a89a658c2db14a0b2819a1416b2176bdac6069d88f64c88ecd4567d 835 main/binary-amd64/Packages
+ b3878ad976ee76f9bdc46a524b9a0ca9fe2b3c671232f0930ba4605d0c80c0c9 567 main/binary-amd64/Packages.gz
  44f2bb5798d5026bd6c45b7c8e96089b9405546092f59c8e260e0a6abc2c7f78 170 main/binary-amd64/Release
- ab87894ce68b7810c8b37ea396501575df00c6488b9fe7d69d44172e76f39bbd 835 main/binary-arm64/Packages
- a5e084772a69daeeefb74d18e7592e73037cdf076a3222a4d736c5a92aa1db6a 568 main/binary-arm64/Packages.gz
+ bfd02a14f9f5134f98f14dbf98a7488004df4e17170ca9152eb220955795f12f 835 main/binary-arm64/Packages
+ 2bef07dadd4a686e6197660116f2127006c5a2044d8da69a79bfaf7812419a44 566 main/binary-arm64/Packages.gz
  ef5608775c73afda4a4e888970aebb7c37a4d41ec777b656d96626b9cfebf72e 170 main/binary-arm64/Release
- 115e827c425155ed7b92acd4f5ce925caebc016b35874b41e51667d39b0034b9 835 main/binary-armhf/Packages
- 31f8e7fd30d46043b9f7ef18b503addf32fbc0fae114cbeb7ab50d0b11dc9998 567 main/binary-armhf/Packages.gz
+ b02b4ee25e1b5db07a7f5fbaddfedca6331acaf666484e5a103c3fe5379afa7f 835 main/binary-armhf/Packages
+ 361928f3d2b208ccd402ea6d4fc48a8fbf985b6ccc6c4d1981c032ba214abaf4 564 main/binary-armhf/Packages.gz
  e6d800339f3ddc8d71bfa32617aaa809f29137fd6cc08caf768fc5d9b61a7382 170 main/binary-armhf/Release
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCal+HrgAKCRBQfbpy8DxF
-wnfDAQD1e6qLAGXhvO4bICgroGsZagVyQCTv4IZ9o7/pgKouEAD/ZLty6HBBLrp7
-05mFSuJWxymDlnGhC9vnMvzx12smGQo=
-=STC7
+iHUEARYKAB0WIQRhcl45oaTu8yi+NpRQfbpy8DxFwgUCanHTwwAKCRBQfbpy8DxF
+wq/PAQDr2SWAIyw/MU3l4IQOPV/dQLR8Ii9VgJjZ7FGGZ3d3SQD9E3ccMGJVbxAj
+tC1RUYPe10QyPjKP3VDMUKNsK4yaVwA=
+=j8yy
 -----END PGP SIGNATURE-----
