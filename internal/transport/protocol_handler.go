@@ -259,6 +259,15 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// so a captured value is never falsely stale in the unsafe direction.
 	var modelResizeDirty bool
 	if att.ReplayBudget > 0 {
+		// Repair a model that disagrees with the PTY about whether a full-screen app is
+		// running BEFORE reading its state, so a session whose model was rebuilt under a
+		// still-running app can start earning the prime back instead of being stuck
+		// main-buffer for its whole life. See Session.ReconcileAltScreen.
+		if sess.ReconcileAltScreen() {
+			slog.Info("attach.altreconcile: model was main-buffer while the pty is on the "+
+				"alt screen — adopted the alt buffer, unfaithful until the app repaints",
+				"sid", sess.ID().String())
+		}
 		// One screenMu hop for all four fields, so the logged state is internally
 		// consistent (a Pump Feed can't land between separate reads).
 		hasScr, altScr, faithScr, dirtyScr := sess.ScreenSnapshot()

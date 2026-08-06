@@ -1183,6 +1183,34 @@ func (s *Session) ResetScreenModel() {
 	s.screenMu.Unlock()
 }
 
+// ReconcileAltScreen repairs a screen model that disagrees with the PTY about whether a
+// full-screen app is running.
+//
+// ★ The wedge watcher reads the live byte stream and knows the PTY is on the alt screen;
+// the model only knows what it has parsed since it was built. Those diverge whenever the
+// model is rebuilt under a still-running app — a restore that carried no persisted
+// repaint, or ResetScreenModel on the lazy-spawn path. Because a running app never
+// re-emits ?1049h, the divergence is permanent: the model paints into its main grid, its
+// alt grid stays empty, nothing is ever injectable, and persistence saves no repaint (it
+// only saves an alt-active model), so the state survives every restart. The session
+// silently loses the attach prime for the rest of its life, which is the reattach footer
+// loss the prime exists to prevent.
+//
+// Adopting the alt buffer costs nothing when we are wrong (the model is marked unfaithful,
+// so nothing is injected until the app's next full clear rebuilds it), and restores the
+// prime when we are right. Returns true when it repaired something, for the caller to log.
+//
+// Lock order: WedgeAltScreenActive takes s.mu and releases it BEFORE screenMu is acquired,
+// so this never nests s.mu inside screenMu (the established order is screenMu → s.mu).
+func (s *Session) ReconcileAltScreen() bool {
+	if s.screen == nil || !s.WedgeAltScreenActive() {
+		return false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return s.screen.AdoptAltScreen()
+}
+
 func (s *Session) InjectAltScreenRepaint() (start uint64, ok bool) {
 	if s.screen == nil {
 		return 0, false
