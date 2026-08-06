@@ -61,6 +61,11 @@ type UserUnitOptions struct {
 // load-bearing for v0.6+: it preserves pty-sidecar children across
 // daemon restart (the default control-group kill wipes the whole
 // cgroup including sidecars + their child shells).
+//
+// The Memory* ceilings are equally load-bearing, for the opposite
+// reason: KillMode=process means anything that escapes a session
+// survives every unit cycle and accumulates for the life of the boot,
+// so the cgroup is the only thing bounding the damage.
 func RenderUserUnit(opts *UserUnitOptions) string {
 	o := UserUnitOptions{}
 	if opts != nil {
@@ -105,6 +110,28 @@ func RenderUserUnit(opts *UserUnitOptions) string {
 	fmt.Fprintln(&b, "# default (control-group) wipes every sidecar + child shell on")
 	fmt.Fprintln(&b, "# unit cycle, defeating v0.6.0's restart-resilient PTY split.")
 	fmt.Fprintln(&b, "KillMode=process")
+	fmt.Fprintln(&b, "# Cgroup ceilings. Everything the daemon owns shares this cgroup -")
+	fmt.Fprintln(&b, "# the daemon, every session's pty-sidecar, their child shells, and")
+	fmt.Fprintln(&b, "# any agent (Claude/codex/agy) a user runs inside one. Uncapped,")
+	fmt.Fprintln(&b, "# a runaway or a leak walks the whole box into swap thrash and the")
+	fmt.Fprintln(&b, "# machine stops responding WITHOUT the OOM killer ever firing (box")
+	fmt.Fprintln(&b, "# freeze 2026-08-06: 5.0G resident + 4.0G swap on a 7.7G host,")
+	fmt.Fprintln(&b, "# oom_kill count 0). The v1.7.3 per-sidecar oom_score_adj only picks")
+	fmt.Fprintln(&b, "# WHO dies once the kernel decides someone must; it cannot stop the")
+	fmt.Fprintln(&b, "# thrash. These do:")
+	fmt.Fprintln(&b, "#   MemoryHigh    soft throttle - reclaim pressure starts here")
+	fmt.Fprintln(&b, "#   MemoryMax     hard cap - the in-cgroup OOM killer takes ONE")
+	fmt.Fprintln(&b, "#                 process (a session), never the whole box")
+	fmt.Fprintln(&b, "#   MemorySwapMax the load-bearing one - a small swap budget is what")
+	fmt.Fprintln(&b, "#                 forces a prompt in-cgroup kill instead of hours of")
+	fmt.Fprintln(&b, "#                 thrashing. It takes no percentage, so it is absolute.")
+	fmt.Fprintln(&b, "# The percentages are of installed RAM, so these are sane on a 2G VPS")
+	fmt.Fprintln(&b, "# and a 64G workstation alike. Override with a drop-in")
+	fmt.Fprintln(&b, "# (~/.config/systemd/user/mtroamd.service.d/*.conf) - drop-ins survive")
+	fmt.Fprintln(&b, "# `mtroamd migrate` and reinstall, edits to this file do not.")
+	fmt.Fprintln(&b, "MemoryHigh=40%")
+	fmt.Fprintln(&b, "MemoryMax=55%")
+	fmt.Fprintln(&b, "MemorySwapMax=512M")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "[Install]")
 	fmt.Fprintln(&b, "WantedBy=default.target")

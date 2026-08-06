@@ -158,7 +158,23 @@ Common flags accepted by most subcommands:
     file. Wiped by **uninstall \-\-purge**.
 
 **~/.config/systemd/user/mtroamd.service** (Linux, systemd-user)
-:   Supervisor unit when systemd-user is the detected backend.
+:   Supervisor unit when systemd-user is the detected backend. Ships cgroup
+    ceilings (**MemoryHigh=40%**, **MemoryMax=55%**, **MemorySwapMax=512M**;
+    percentages are of installed RAM) so a runaway session or a leak cannot
+    take the host down - the in-cgroup OOM killer sacrifices one session
+    instead. To tune them, add a drop-in rather than editing this file: a
+    drop-in survives **mtroamd migrate** and reinstall, an in-unit edit does
+    not.
+
+**~/.config/systemd/user/mtroamd.service.d/\*.conf** (Linux, systemd-user)
+:   Optional operator overrides, e.g. raising the memory ceilings on a host
+    dedicated to mtroamd:
+
+        [Service]
+        MemoryHigh=70%
+        MemoryMax=85%
+
+    Apply with **systemctl \-\-user daemon-reload && systemctl \-\-user restart mtroamd**.
 
 **~/Library/LaunchAgents/com.agstudio.mtroamd.plist** (macOS)
 :   Supervisor plist when launchd is the detected backend.
