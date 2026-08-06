@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -96,10 +97,12 @@ func TestWaitForSocket(t *testing.T) {
 // innocent: the journal showed 2770 attaches and 2770 detaches, perfectly
 // balanced. It closed every client; the clients just never noticed.
 
-// stallGrace is the deadline these tests give the bridge to notice a teardown.
-// Generous relative to the real thing (which should be instant) so a loaded CI
-// box cannot flake it, but far below any "hung forever" reading.
-const stallGrace = 10 * time.Second
+// stallGrace is the deadline these tests give the bridge to finish tearing down.
+// It has to clear the worst legitimate case: an injected stall PLUS the full
+// stdoutFlushGrace, which a wedged writer can never complete and therefore
+// always pays in full. Generous beyond that so a loaded CI box cannot flake it,
+// while staying far below any "hung forever" reading.
+var stallGrace = stdoutFlushGrace + 15*time.Second
 
 // runBridge runs bridgeStdio and reports whether it returned in time.
 func runBridge(conn net.Conn, in io.Reader, out io.Writer) bool {
@@ -291,6 +294,103 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 }
 
 func (s *syncBuffer) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.buf.Bytes()...)
+}
+
+// TestBridgeExitsOnStdoutWriteError covers the path the split introduced: the
+// writer hits a Write error and must CANCEL, not just return. The old io.Copy
+// tore the process down on the first failed write; a writer that returned
+// quietly would leave the reader pumping into a queue nobody drains — the same
+// leaked-client shape, re-entered through the error path.
+func TestBridgeExitsOnStdoutWriteError(t *testing.T) {
+	client, daemon := net.Pipe()
+	defer client.Close()
+	defer daemon.Close()
+
+	// Keep the daemon side producing so the writer is exercised, and hold stdin
+	// open so EOF cannot be what ends the bridge.
+	go func() {
+		for {
+			if _, err := daemon.Write([]byte("output")); err != nil {
+				return
+			}
+		}
+	}()
+	stdin, stdinWriter := io.Pipe()
+	defer stdinWriter.Close()
+
+	if !runBridge(client, stdin, errWriter{}) {
+		t.Fatal("bridge did not exit after a stdout write error — the reader is left " +
+			"pumping into a queue nobody drains")
+	}
+}
+
+// errWriter fails every write, standing in for an SSH channel whose far side
+// has gone away (EIO / short write, with no SIGPIPE because it is not fd 1).
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) { return 0, errors.New("stdout gone") }
+
+// TestBridgeFlushesOnNonReaderTeardown covers the second gap the split
+// introduced: the flush must run whichever path cancels, not only the reader's
+// own EOF. The stdin pump and the signal handler both cancel ctx directly, and
+// an earlier version put the flush in the reader's defer, so those paths exited
+// mid-drain and dropped queued output.
+func TestBridgeFlushesOnNonReaderTeardown(t *testing.T) {
+	client, daemon := net.Pipe()
+	defer client.Close()
+
+	want := []byte("the last screenful must survive teardown")
+	go func() { _, _ = daemon.Write(want) }()
+
+	// Slow enough that a missing or too-short flush shows as truncation rather
+	// than passing by luck.
+	out := &slowBuffer{delay: 200 * time.Millisecond, wrote: make(chan struct{}, 1)}
+
+	// stdin is held open until the payload has actually reached the writer, so
+	// the teardown races nothing: without this the EOF can fire before the
+	// daemon's bytes are ever read, and the test passes vacuously.
+	stdin, stdinWriter := io.Pipe()
+	go func() {
+		select {
+		case <-out.wrote:
+		case <-time.After(5 * time.Second):
+		}
+		stdinWriter.Close() // stdin EOF: the non-reader teardown path
+	}()
+
+	if !runBridge(client, stdin, out) {
+		t.Fatal("bridge did not exit on stdin EOF")
+	}
+	if got := out.Bytes(); !bytes.Equal(got, want) {
+		t.Errorf("queued output was dropped on a non-reader teardown path: got %q, want %q", got, want)
+	}
+}
+
+// slowBuffer writes at a deliberate crawl so a missing or too-short flush shows
+// up as truncation rather than passing by luck.
+type slowBuffer struct {
+	delay time.Duration
+	wrote chan struct{} // signalled once, when the first chunk lands
+	mu    sync.Mutex
+	buf   bytes.Buffer
+}
+
+func (s *slowBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	n, err := s.buf.Write(p)
+	s.mu.Unlock()
+	select {
+	case s.wrote <- struct{}{}:
+	default:
+	}
+	time.Sleep(s.delay) // stall AFTER recording, so teardown must wait on us
+	return n, err
+}
+
+func (s *slowBuffer) Bytes() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]byte(nil), s.buf.Bytes()...)

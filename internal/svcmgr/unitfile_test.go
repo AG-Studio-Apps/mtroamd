@@ -29,15 +29,19 @@ Type=simple
 ExecStart=%h/.local/bin/mtroamd serve --addr 0.0.0.0:49820 --mtroam-tcp-addr tailnet:49920 --socket %h/.local/share/mtroamd/mtroamd.sock
 Restart=on-failure
 RestartSec=5
-# KillMode=process so ` + "`systemctl restart`" + ` only SIGTERMs the main
+# KillMode=process so ` + "`" + `systemctl restart` + "`" + ` only SIGTERMs the main
 # daemon — the per-session pty-sidecar children survive in their
 # cgroup waiting for the new daemon to dial them back. The
 # default (control-group) wipes every sidecar + child shell on
 # unit cycle, defeating v0.6.0's restart-resilient PTY split.
 KillMode=process
-# Cgroup ceilings. Everything the daemon owns shares this cgroup -
-# the daemon, every session's pty-sidecar, their child shells, and
-# any agent (Claude/codex/agy) a user runs inside one. Uncapped,
+# Cgroup ceilings for the daemon and everything it OWNS: mtroamd
+# itself, every session's pty-sidecar, their child shells, and any
+# agent (Claude/codex/agy) a user runs inside one. NOT the
+# ` + "`" + `mtroamd connect` + "`" + ` clients - those are spawned by the SSH server
+# and live in its session scope, outside this cgroup entirely, so
+# they are bounded by the client-side teardown fix, not by these.
+# Uncapped,
 # a runaway or a leak walks the whole box into swap thrash and the
 # machine stops responding WITHOUT the OOM killer ever firing (box
 # freeze 2026-08-06: 5.0G resident + 4.0G swap on a 7.7G host,
@@ -47,16 +51,26 @@ KillMode=process
 #   MemoryHigh    soft throttle - reclaim pressure starts here
 #   MemoryMax     hard cap - the in-cgroup OOM killer takes ONE
 #                 process (a session), never the whole box
+#   OOMPolicy     load-bearing WITH MemoryMax: systemd's default is
+#                 ` + "`" + `stop` + "`" + `, which turns any in-cgroup OOM kill into a
+#                 stop of THIS UNIT - so one runaway session would
+#                 take the daemon down and, with KillMode=process,
+#                 strand every sidecar with nothing to dial them
+#                 back. ` + "`" + `continue` + "`" + ` keeps the daemon serving.
 #   MemorySwapMax the load-bearing one - a small swap budget is what
 #                 forces a prompt in-cgroup kill instead of hours of
 #                 thrashing. It takes no percentage, so it is absolute.
-# The percentages are of installed RAM, so these are sane on a 2G VPS
-# and a 64G workstation alike. Override with a drop-in
+# Percentages are of installed RAM, so one value suits a small VPS and
+# a big workstation. They are set higher than the box-safety maths
+# alone would suggest because an agent session is ~400M RSS: at 40%
+# a 1G host could not run one at all, and throttling every session on
+# the host is worse than the rare runaway. Override with a drop-in
 # (~/.config/systemd/user/mtroamd.service.d/*.conf) - drop-ins survive
-# ` + "`mtroamd migrate`" + ` and reinstall, edits to this file do not.
-MemoryHigh=40%
-MemoryMax=55%
+# ` + "`" + `mtroamd migrate` + "`" + ` and reinstall, edits to this file do not.
+MemoryHigh=55%
+MemoryMax=70%
 MemorySwapMax=512M
+OOMPolicy=continue
 
 [Install]
 WantedBy=default.target
@@ -75,9 +89,10 @@ WantedBy=default.target
 func TestRenderUserUnitContainsMemoryCeilings(t *testing.T) {
 	got := RenderUserUnit(nil)
 	for _, want := range []string{
-		"\nMemoryHigh=40%\n",
-		"\nMemoryMax=55%\n",
+		"\nMemoryHigh=55%\n",
+		"\nMemoryMax=70%\n",
 		"\nMemorySwapMax=512M\n",
+		"\nOOMPolicy=continue\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("emitted unit is missing %q — the cgroup would be uncapped", strings.TrimSpace(want))
@@ -131,7 +146,7 @@ func TestFlakeModulesCarryMemoryCeilings(t *testing.T) {
 		t.Skipf("flake.nix not readable from here: %v", err)
 	}
 	flake := string(raw)
-	for _, want := range []string{`MemoryHigh = "40%";`, `MemoryMax = "55%";`, `MemorySwapMax = "512M";`} {
+	for _, want := range []string{`MemoryHigh = "55%";`, `MemoryMax = "70%";`, `MemorySwapMax = "512M";`, `OOMPolicy = "continue";`} {
 		// Two modules (NixOS + home-manager), so each directive appears twice.
 		if got := strings.Count(flake, want); got != 2 {
 			t.Errorf("flake.nix has %d copies of %q, want 2 (NixOS + home-manager modules) "+

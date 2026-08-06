@@ -31,26 +31,42 @@ const (
 // Tuning for the daemon → stdout path in bridgeStdio.
 const (
 	// stdoutQueueDepth buffers bursts so a briefly-slow SSH channel does not
-	// stall the conn reader. 16 × 32 KiB ≈ 512 KiB worst case per client —
-	// deliberately modest, since the whole point of this change is to stop
-	// these processes costing the box memory.
-	stdoutQueueDepth = 16
-	// stdoutFlushGrace bounds the drain of already-queued output after the
-	// daemon hangs up, so a clean disconnect does not lose the last screenful.
-	stdoutFlushGrace = 2 * time.Second
+	// stall the conn reader. Sized against stdoutFlushGrace, not just against
+	// memory: whatever this holds must be drainable within that grace on a poor
+	// link, or a clean disconnect truncates the last screenful. 8 × 32 KiB =
+	// 256 KiB, which drains inside the grace at ~25 KB/s.
+	stdoutQueueDepth = 8
+	// stdoutFlushGrace bounds the drain of already-queued output once teardown
+	// starts, so a disconnect does not lose the last screenful. Must outlast a
+	// full stdoutQueueDepth on a bad link (256 KiB at ~25 KB/s ≈ 10s); a 2s
+	// grace silently truncated exactly what it existed to preserve.
+	stdoutFlushGrace = 12 * time.Second
 )
 
-// stdoutStallTimeout is how long a FULL queue may stay full before we give up
-// on the channel and tear the bridge down.
+// stdoutStallTimeout bounds how long a FULL queue may stay full before we tear
+// the bridge down. It is the ONLY exit for the backpressured case, and picking
+// it is a genuine trade with no free answer.
 //
-// This is the second of the two exit paths, and it covers the case the first
-// cannot: a stdout that has wedged means the reader is parked handing off a
-// chunk, so it is not in conn.Read and will not see the daemon close either.
-// Rather than being unbounded (the old behaviour, i.e. the leak), that wait now
-// ends here. Generous on purpose - 512 KiB still drains inside this even on a
-// poor cellular link, so only a channel that has genuinely stopped reading
-// trips it.
-const stdoutStallTimeout = 120 * time.Second
+// The reader normally sees a daemon close instantly, because it parks in
+// conn.Read. But once stdout wedges and the queue fills we are no longer
+// reading, and a close cannot be detected without reading: a non-blocking
+// MSG_PEEK still returns the bytes already buffered ahead of the FIN, so it
+// cannot distinguish "peer gone" from "more data". Reading into an overflow to
+// find the FIN is exactly the unbounded buffering this change exists to avoid.
+//
+// So the two failure modes pull opposite ways. Too SHORT drops a healthy
+// session: a suspended iOS app stops draining the channel entirely, and if the
+// session is still producing output (a build, an agent turn) the queue fills
+// while nothing is wrong. Too LONG re-creates the leak: a client whose channel
+// is genuinely dead lingers, holding one of the daemon's 64 MaxInflight
+// loopback slots, and an app retry-looping over a flaky link stacks them until
+// new attaches are refused.
+//
+// Five minutes sits deliberately between: it comfortably outlasts an
+// app-switch, and a session backgrounded longer than that reattaches on resume,
+// which is mtRoam's ordinary behaviour and not a data loss. Meanwhile a dead
+// client is reclaimed in minutes instead of never.
+const stdoutStallTimeout = 5 * time.Minute
 
 // runConnect is the SSH-side helper. It dials the daemon's unix
 // socket, sends an AllocateRequest, prints the bootstrap line on
@@ -477,8 +493,8 @@ func bridgeStdio(conn net.Conn, in io.Reader, out io.Writer) int {
 }
 
 // bridgeStdioWithStall is bridgeStdio with the stall budget injected, so the
-// teardown tests can exercise the wedged-stdout path in milliseconds instead of
-// two minutes. Passing it in beats a mutable package var: nothing shared is
+// teardown tests can exercise the backpressure path in milliseconds instead of
+// half an hour. Passing it in beats a mutable package var: nothing shared is
 // rewritten, so the tests cannot race each other or leak state between cases.
 func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time.Duration) int {
 	// SIGHUP is the useful one: sshd sends it when a channel goes away, so it
@@ -490,6 +506,24 @@ func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time
 	ctx, cancel := context.WithCancel(sigCtx)
 	defer cancel()
 
+	pending := make(chan []byte, stdoutQueueDepth)
+	flushed := make(chan struct{})
+
+	// stdout writer. A write error CANCELS: it means the channel is gone, and
+	// the old io.Copy tore the process down the instant one happened. Returning
+	// quietly instead would leave the reader pumping into a queue nobody drains
+	// — the leaked-client shape this whole change exists to remove, re-entered
+	// through the error path.
+	go func() {
+		defer close(flushed)
+		defer cancel()
+		for chunk := range pending {
+			if _, err := out.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+
 	// stdin → daemon. Safe as a plain io.Copy: if it blocks forever in read(2)
 	// the process still exits, because main os.Exit()s on our return and that
 	// does not wait for goroutines.
@@ -498,54 +532,25 @@ func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time
 		_, _ = io.Copy(conn, in)
 	}()
 
-	// daemon → stdout, deliberately SPLIT into a reader and a writer.
+	// daemon → stdout, deliberately SPLIT into this reader and the writer above.
 	//
-	// This is the fix for the process leak that froze a box on 2026-08-06
-	// (~275 of these accumulated over 31 days). It used to be a single
-	// io.Copy(out, conn), and io.Copy is one read→write loop: while it is
-	// blocked writing to stdout it is NOT reading conn. When the SSH channel's
-	// stdout pipe filled because the far side stopped draining — phone dropped
-	// off, app killed, tailscaled still holding the pipe open so stdin never
-	// hit EOF — that goroutine pinned itself in write(2) and never came back to
-	// notice the daemon closing. Neither fd is deadline-capable (Go does not
-	// register std fds with the netpoller), so nothing could interrupt it and
-	// the process lived until the next reboot.
+	// This is the fix for the process leak that froze a box on 2026-08-06. It
+	// used to be a single io.Copy(out, conn), and io.Copy is one read→write
+	// loop: while it is blocked writing to stdout it is NOT reading conn. When
+	// the SSH channel's stdout pipe filled because the far side stopped draining
+	// — phone dropped off, app killed, tailscaled still holding the pipe open so
+	// stdin never hit EOF — that goroutine pinned itself in write(2) and never
+	// came back to notice the daemon closing. Neither fd is deadline-capable (Go
+	// does not register std fds with the netpoller), so nothing could interrupt
+	// it and the process lived until the next reboot.
 	//
 	// Reading in its own goroutine means the conn read parks in the netpoller,
-	// so a daemon close is observed IMMEDIATELY regardless of what stdout is
-	// doing. The daemon is reliable here: the journal for the leaking boot
-	// showed 2770 attaches and 2770 detaches, so it released every client.
+	// so a daemon close is seen at once whenever we are actually reading — which
+	// is every case except a wedged stdout. That one is bounded by
+	// stdoutStallTimeout instead; see there for why it cannot be detected.
 	go func() {
-		// NB defer order is load-bearing: this cancel is registered FIRST so it
-		// runs LAST, after the flush defer below. Cancelling earlier would let
-		// <-ctx.Done() release and main os.Exit() while output was still being
-		// drained, dropping the tail of the session.
 		defer cancel()
-		pending := make(chan []byte, stdoutQueueDepth)
-		flushed := make(chan struct{})
-		go func() {
-			defer close(flushed)
-			for chunk := range pending {
-				if _, err := out.Write(chunk); err != nil {
-					return
-				}
-			}
-		}()
-
-		// One exit path for every way this loop can end, so the writer is
-		// always released and always given the same bounded chance to drain.
-		// Letting it drain is what stops a clean disconnect losing the last
-		// screenful; bounding the wait is what stops a wedged stdout turning
-		// the teardown back into the hang this whole change removes.
-		defer func() {
-			close(pending)
-			flushTimer := time.NewTimer(stdoutFlushGrace)
-			defer flushTimer.Stop()
-			select {
-			case <-flushed:
-			case <-flushTimer.C:
-			}
-		}()
+		defer close(pending)
 
 		buf := make([]byte, 32*1024)
 		for {
@@ -557,7 +562,7 @@ func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time
 				chunk := make([]byte, n)
 				copy(chunk, buf[:n])
 				if !enqueue(ctx, pending, chunk, stall) {
-					return // stdout wedged past the stall budget, or shutting down
+					return
 				}
 			}
 			if err != nil {
@@ -567,31 +572,49 @@ func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time
 	}()
 
 	<-ctx.Done()
+
+	// Unblock the reader so it can finish and close `pending`. Without this the
+	// flush below waits its full grace on every teardown that did NOT come from
+	// the reader — stdin EOF, a signal — because the reader is still parked in
+	// conn.Read and the writer is still ranging over a channel nobody closes.
+	// The conn is being torn down regardless; runStdioMode closes it too.
+	_ = conn.Close()
+
+	// Give the writer a bounded chance to drain what is still queued before main
+	// os.Exit()s, WHICHEVER path cancelled us. Doing this in the reader's defer
+	// instead only covered the reader's own EOF: the stdin pump cancels on a
+	// write error to conn, and the signal handler cancels directly, and both of
+	// those would have exited mid-flush and dropped the last screenful.
+	flushTimer := time.NewTimer(stdoutFlushGrace)
+	defer flushTimer.Stop()
+	select {
+	case <-flushed:
+	case <-flushTimer.C:
+	}
 	return connectExitOK
 }
 
 // enqueue hands a chunk to the stdout writer, reporting false when the bridge
 // should tear down instead.
 //
-// The fast path is a plain send; the timer is only armed once the queue is
-// already full, so a healthy session pays nothing. A full queue that stays full
-// for stdoutStallTimeout means the far side has stopped reading altogether, and
-// exiting is the right answer — the SESSION is owned by the daemon and its
-// pty-sidecar, so dropping this bridge never loses the user's work.
+// The fast path is a plain send, so a healthy session pays nothing. Backpressure
+// itself is NOT a failure — a suspended iOS app stops draining the channel
+// entirely and its session should survive that — so the wait is bounded only by
+// `stall`, whose value is the trade documented on stdoutStallTimeout.
 func enqueue(ctx context.Context, pending chan<- []byte, chunk []byte, stall time.Duration) bool {
 	select {
 	case pending <- chunk:
 		return true
 	default:
 	}
-	timer := time.NewTimer(stall)
-	defer timer.Stop()
+	deadline := time.NewTimer(stall)
+	defer deadline.Stop()
 	select {
 	case pending <- chunk:
 		return true
 	case <-ctx.Done():
 		return false
-	case <-timer.C:
+	case <-deadline.C:
 		return false
 	}
 }

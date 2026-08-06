@@ -192,9 +192,10 @@
                   # Cgroup ceilings — keep in sync with the unit SSOT. Uncapped,
                   # a leak or a runaway session thrashes the box into a livelock
                   # with the OOM killer never firing (freeze 2026-08-06).
-                  MemoryHigh = "40%";
-                  MemoryMax = "55%";
+                  MemoryHigh = "55%";
+                  MemoryMax = "70%";
                   MemorySwapMax = "512M";
+                  OOMPolicy = "continue";
                 };
               };
               environment.systemPackages = [ cfg.package ];
@@ -261,9 +262,10 @@
                 # Cgroup ceilings — keep in sync with the unit SSOT. Uncapped,
                 # a leak or a runaway session thrashes the box into a livelock
                 # with the OOM killer never firing (freeze 2026-08-06).
-                MemoryHigh = "40%";
-                MemoryMax = "55%";
+                MemoryHigh = "55%";
+                MemoryMax = "70%";
                 MemorySwapMax = "512M";
+                OOMPolicy = "continue";
               };
               Install.WantedBy = [ "default.target" ];
             };
