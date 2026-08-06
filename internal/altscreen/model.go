@@ -111,16 +111,36 @@ type Screen struct {
 	// The caller uses it to fall back to the raw byte-window replay.
 	faithful bool
 
-	// resizedDirty is set when Resize() changes the geometry and cleared on the
-	// next Feed. While set, the grid is top-anchored to the NEW size but the app
-	// has NOT yet redrawn to it — a grow strands bottom-anchored content
-	// (Claude's prompt) mid-screen; a shrink drops it — so the model must NOT be
-	// injected as an authoritative frame (it would ship the misplaced grid: the
-	// cold-start-grow regression that parked the prime). The heal is any output
-	// after the resize: SIGWINCH makes Ink/Claude/vim/htop re-render, so the
-	// first post-resize Feed restores the grid to where the app actually draws
-	// (see TestResizeStrandsFooterUntilRepaint). Distinct from `faithful`, which
-	// tracks un-emulatable ops and recovers only on a full clear.
+	// resizedDirty is set when Resize() changes the geometry and cleared only
+	// when the app paints real content on the LAST row of the new geometry.
+	// While set, the grid is top-anchored to the NEW size but the app has NOT
+	// yet redrawn to it — a grow strands bottom-anchored content (Claude's
+	// prompt) mid-screen and leaves the rows below it blank; a shrink drops it —
+	// so the model must NOT be injected as an authoritative frame (it would ship
+	// the misplaced grid: the cold-start-grow regression that parked the prime).
+	//
+	// ★★ The heal used to be ANY output after the resize, on the theory that
+	// output means the app is responding to SIGWINCH. That is false for an app
+	// that emits continuously: Claude/Ink stream tokens and tick a spinner, so
+	// the first byte to arrive after a resize cleared the latch while the newly
+	// grown rows were still blank. The model then reported itself injectable and
+	// the attach shipped an authoritative full frame whose bottom rows were
+	// empty — the client rendered it faithfully and the user lost the input box
+	// and status bar until the app happened to repaint. Diagnosed 2026-08-06
+	// from a device capture showing contentBottom=23 in a correctly-sized
+	// 39-row client grid, with the cursor already restored to row 36.
+	//
+	// Painting the last row is the evidence that the app has re-anchored to the
+	// new geometry, because a bottom-anchored TUI's own footer lands there
+	// (Claude's "auto mode on", vim's status line, htop's meter). It is a WRITE
+	// that heals, not merely the row being non-blank: after a shrink the last
+	// row already carries surviving top-anchored content, which proves nothing.
+	// An app that deliberately leaves its last row blank never heals and simply
+	// falls back to raw byte replay, which is the pre-prime behaviour and
+	// renders correctly — the safe direction.
+	//
+	// Distinct from `faithful`, which tracks un-emulatable ops and recovers only
+	// on a full clear.
 	resizedDirty bool
 }
 
@@ -270,12 +290,6 @@ func isBlank(g cell) bool {
 
 // Feed replays a chunk of raw pty bytes into the grid.
 func (s *Screen) Feed(p []byte) {
-	if len(p) > 0 {
-		// Output after a resize is the app responding to SIGWINCH (Ink/Claude
-		// re-render the full frame; vim/htop repaint). The grid now tracks the
-		// app's real post-resize screen again, so it's injectable once more.
-		s.resizedDirty = false
-	}
 	// Reassemble a multi-byte rune split across the previous chunk boundary.
 	// QueryFilter already carries partial CSI/OSC across chunks, so the only
 	// partial tail the model sees is a ground-state UTF-8 rune. Copy so we
@@ -407,6 +421,11 @@ func (s *Screen) setCell(x, y int, r rune, w int8) {
 		row[x-1] = s.blank() // clobbered a spacer → clear its lead
 	}
 	row[x] = cell{r: r, a: s.cur, width: w}
+	// ★ The ONLY thing that heals a resize-dirty model: the app painting real
+	// content on the LAST row of the new geometry. See `resizedDirty`.
+	if s.resizedDirty && y == s.rows-1 && !isBlank(row[x]) {
+		s.resizedDirty = false
+	}
 }
 
 func (s *Screen) advance(w int) {
