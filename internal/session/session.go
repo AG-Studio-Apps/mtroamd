@@ -634,6 +634,50 @@ func (s *Session) WedgeAltScreenActive() bool {
 	return w.AltScreenActive()
 }
 
+// shellComms are foreground commands that cannot themselves be drawing a
+// full-screen TUI. Used ONLY as a veto on the wedge tracker, and only when the
+// screen model has no trustworthy answer — see AltScreenForClient.
+var shellComms = map[string]bool{
+	"bash": true, "zsh": true, "sh": true, "dash": true,
+	"fish": true, "ksh": true, "ash": true, "tcsh": true, "csh": true,
+}
+
+// AltScreenForClient reports whether the session's pty is on the alternate
+// screen, for every decision taken on a client's behalf at attach time:
+// AttachAck.AltScreenActive (which makes the client prime its own emulator onto
+// the alt buffer), the AltScreenReplayCap clamp, the footer re-emit, and the
+// repaint nudge.
+//
+// ★ Why not WedgeAltScreenActive directly. That flag is byte-derived while the
+// daemon is watching, but it is ALSO seeded from a persisted boolean on restore
+// (loadSessionFromDir → SetAltScreenActive, the v1.1.2 "Bug A" fix). If a TUI
+// exits while the daemon is down and the ?1049l is evicted from the sidecar ring
+// before it reconnects, the flag comes back TRUE and stays true for the life of
+// the session. A latched flag is not cosmetic: the client primes ESC[?1049h into
+// a plain shell, and an iOS client on the alt buffer routes pans to its
+// mouse-wheel forwarder — which drops them for a non-mouse app, so scrollback
+// panning dies outright. It also caps replay at 128 KiB and lets the footer
+// re-emit and the repaint nudge fire on the main buffer.
+//
+// ★ Order is load-bearing. The screen model parses the same post-filter stream
+// as the tracker AND is rebuilt accurately on restore, so it wins whenever it is
+// faithful. That deliberately covers the pathological case the foreground check
+// would get WRONG: a TUI killed without emitting ?1049l leaves the pty genuinely
+// on the alt buffer with a shell in the foreground, and the model knows it.
+// Only when the model cannot answer does the tracker apply, and then a shell
+// foreground vetoes it — an unknown/empty comm (non-Linux host, pre-v1.6.1
+// sidecar) is not a shell, so the tracker still stands.
+func (s *Session) AltScreenForClient() bool {
+	if has, alt, faithful, _ := s.ScreenSnapshot(); has && faithful {
+		return alt
+	}
+	alt := s.WedgeAltScreenActive()
+	if alt && shellComms[s.ForegroundComm()] {
+		return false
+	}
+	return alt
+}
+
 // LastTitle returns the most recent terminal title observed in the
 // PTY byte stream via OSC 0/2 sequences. Used by the transport layer
 // to populate AttachAck.LastTitle so iOS / mtroam clients can prime

@@ -236,7 +236,11 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// Alt-screen state only matters when a budget came (the clamp is
 	// budget-gated) — skip the two mutex hops for budget-less CLI
 	// attaches.
-	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
+	// AltScreenForClient, not WedgeAltScreenActive: the tracker's flag can latch
+	// true across a daemon restart and would then clamp replay to
+	// AltScreenReplayCap, re-emit an alt footer, and nudge a repaint — all on a
+	// plain shell. See Session.AltScreenForClient.
+	altActive := att.ReplayBudget > 0 && sess.AltScreenForClient()
 
 	// Full-frame redraw (preferred): when a full-screen TUI is running and
 	// the live screen-model is faithful, inject the WHOLE synthesized clean
@@ -278,7 +282,12 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		slog.Info("attach.altredraw",
 			"sid", sess.ID().String(),
 			"budget", att.ReplayBudget,
-			"wedgeAlt", altActive,
+			// wedgeAlt keeps its original meaning (the RAW tracker flag) so log
+			// archives stay comparable; altActive is the reconciled decision the
+			// replay/nudge/footer paths and the ack actually use. A line with
+			// wedgeAlt=true altActive=false is the latched-flag case.
+			"wedgeAlt", sess.WedgeAltScreenActive(),
+			"altActive", altActive,
 			"modelHas", hasScr,
 			"modelAlt", altScr,
 			"modelFaithful", faithScr,
@@ -475,7 +484,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		Restored:        wasRestored,
 		FreshlyCreated:  freshlyCreated,
 		RTTNanos:        rttNanosFor(ctrl),
-		AltScreenActive: sess.WedgeAltScreenActive(),
+		AltScreenActive: sess.AltScreenForClient(),
 		LastTitle:       sess.LastTitle(),
 		// fg transition anchors (v1.6.3+): time + ring byte-seq of the
 		// last foreground change, plus its cwd. See fgSinceToNanos.

@@ -778,3 +778,56 @@ func TestRestoreRejectsOversizedDims(t *testing.T) {
 		t.Fatal("session with oversized dims should have been dropped, not loaded")
 	}
 }
+
+// TestAltScreenForClientIgnoresLatchedTracker pins the 2026-08-07 fix for the
+// dead-scrollback bug. TestAltScreenActiveRoundTrip above deliberately makes the
+// tracker sticky across a restart; this pins the OTHER half — a sticky flag must
+// not be reported to clients once the screen model disagrees.
+//
+// Real-world shape (session "agnticStudio"): a TUI exited while the daemon was
+// down, its ?1049l was evicted from the sidecar ring before the daemon
+// reconnected, and meta.alt_active came back true for a plain bash session. The
+// daemon then told every attaching client to prime ESC[?1049h, and an iOS client
+// on the alt buffer routes pans to its mouse-wheel forwarder, which drops them
+// for a non-mouse app — scrollback panning died completely.
+func TestAltScreenForClientIgnoresLatchedTracker(t *testing.T) {
+	t.Parallel()
+	s := makePersistedSession(t, []byte("z"))
+	// Latch the tracker exactly as a restore would.
+	s.wedge.SetAltScreenActive(true)
+	if !s.WedgeAltScreenActive() {
+		t.Fatal("precondition: tracker should be latched active")
+	}
+	// The model is a fresh main-buffer grid — what loadSessionFromDir builds when
+	// there is no persisted alt Repaint to replay.
+	has, alt, faithful, _ := s.ScreenSnapshot()
+	if !has || !faithful || alt {
+		t.Fatalf("precondition: want a faithful main-buffer model, got "+
+			"has=%v alt=%v faithful=%v", has, alt, faithful)
+	}
+	if s.AltScreenForClient() {
+		t.Error("AltScreenForClient trusted a latched tracker over a faithful " +
+			"main-buffer model — clients will prime the alt buffer into a shell")
+	}
+}
+
+// TestAltScreenForClientTrustsFaithfulAltModel is the guard in the OTHER
+// direction, which is the dangerous one: under-reporting alt means the client
+// never primes its emulator onto the alt buffer and a truncated replay leaves it
+// rendering a full-screen TUI onto the main buffer (the prompt-spill class the
+// CRITICAL banner in MTRoamTransport.primeAltScreenIfNeeded guards).
+func TestAltScreenForClientTrustsFaithfulAltModel(t *testing.T) {
+	t.Parallel()
+	s := makePersistedSession(t, []byte("z"))
+	// Put the MODEL on the alt screen, and leave the tracker inactive — the
+	// inverse latch (a restart that missed the ?1049h).
+	s.screen.Feed([]byte("\x1b[?1049h"))
+	if _, alt, faithful, _ := s.ScreenSnapshot(); !alt || !faithful {
+		t.Fatalf("precondition: want a faithful alt model, got alt=%v faithful=%v",
+			alt, faithful)
+	}
+	if !s.AltScreenForClient() {
+		t.Error("AltScreenForClient refused a faithful alt-screen model — " +
+			"clients will not prime the alt buffer and replay will spill")
+	}
+}
