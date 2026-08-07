@@ -1107,42 +1107,75 @@ func (s *Session) Resize(rows, cols uint16) error {
 	return err
 }
 
-// NudgePTYGeometry raises a SIGWINCH at the child WITHOUT changing the session's
-// geometry: it drops one row on the PTY and immediately puts it back. The attach path
-// uses it to make a full-screen app repaint ITSELF, so the client can be handed the app's
-// own frame instead of one the daemon reconstructed from its model.
+// NudgeRepaint provokes a full-screen app to redraw itself by briefly shrinking the
+// terminal by one row and restoring it. Used by the attach path, because a same-geometry
+// reattach raises no SIGWINCH and so leaves the app silent.
 //
-// ★ Deliberately does NOT go through Resize, and deliberately touches nothing but the
-// PTY. The session's geometry is identical when this returns, so s.rows/s.cols, the live
-// screen-model and the wedge watcher must not observe a resize at all. Routing this
-// through Resize instead would: mark the model resize-dirty twice (which then blocks the
-// very fallback we rely on when the app does not answer), double-count resizesObserved in
-// the wedge diagnostics, and arm the wedge detector twice — the last of which can surface
-// a false "may be wedged" banner. Not arming it is what makes that risk vanish rather
-// than merely be suppressed.
+// ★ Goes through Resize for BOTH legs on purpose. An earlier revision poked the PTY
+// directly to avoid disturbing the model, and that was backwards: the app answers the
+// shrink in ~13ms, so its rows-1 frame was fed by Pump into a model still sized rows,
+// leaving a top-anchored grid that still reported itself faithful and got persisted. That
+// is exactly the corruption the Resize-before-SetSize ordering fix exists to prevent.
+// Keeping the model in lockstep means the intermediate frame lands in a correctly sized
+// grid and resizedDirty gates the model while it is in transition, both for free.
 //
-// Returns false when there is nothing to nudge (closed, stream-backed, no PTY, or a
-// degenerate height), so the caller can fall back.
-func (s *Session) NudgePTYGeometry(hold time.Duration) bool {
+// The wedge watcher is muted across the pair. It arms on each leg, and its `silent`
+// detector compares bytes since the LAST arm, so an app that coalesces the two SIGWINCHes
+// and answers only the first can look wedged 2s later and raise a false recovery banner.
+//
+// ★ The restore refuses to clobber. A displacing attach or a peer Resize can land during
+// the hold (AcquireClient cancels the previous handler's context but does not wait for
+// it), and blindly writing back the geometry captured beforehand would leave the PTY
+// disagreeing with the session with nothing to reconcile them. If anyone else moved the
+// geometry we simply leave theirs in place; it is newer and it is authoritative.
+//
+// No-op when there is nothing to nudge, or when the height is too small for the shrink to
+// be meaningful — a 1-row terminal has no room for a scroll region plus a status line and
+// TUIs variously clamp, refuse to draw, or emit a resize error.
+const (
+	// minNudgeRows is the smallest height worth nudging: shrinking a 2-row terminal
+	// yields a 1-row one, which many TUIs mis-render or refuse outright, and whatever
+	// they draw at that size is then fed into the model.
+	minNudgeRows = 6
+	// nudgeWedgeGrace mutes the wedge detector across the two arms. Over-muting only
+	// delays a real detection; under-muting puts a false "may be wedged" banner in the
+	// user's face.
+	nudgeWedgeGrace = 5 * time.Second
+)
+
+func (s *Session) NudgeRepaint(hold time.Duration) bool {
+	rows, cols := s.WindowSize()
+	if rows < minNudgeRows {
+		return false
+	}
 	s.mu.Lock()
-	rows, cols, pty, closed := s.rows, s.cols, s.pty, s.closed
+	closed, pty := s.closed, s.pty
 	s.mu.Unlock()
-	if closed || pty == nil || rows < 2 {
+	if closed || pty == nil {
 		return false
 	}
-	if err := pty.SetSize(rows-1, cols); err != nil {
-		slog.Debug("session.NudgePTYGeometry: shrink failed", "sid", s.id.String(), "err", err)
+
+	s.SuppressWedgeUntil(time.Now().Add(nudgeWedgeGrace))
+	if err := s.Resize(rows-1, cols); err != nil {
+		slog.Debug("session.NudgeRepaint: shrink failed", "sid", s.id.String(), "err", err)
 		return false
 	}
-	if hold > 0 {
-		time.Sleep(hold)
+	time.Sleep(hold)
+
+	// Only restore if nobody else has moved the geometry in the meantime.
+	if nowRows, nowCols := s.WindowSize(); nowRows != rows-1 || nowCols != cols {
+		slog.Info("session.NudgeRepaint: geometry changed under the nudge — leaving it",
+			"sid", s.id.String(), "now", fmt.Sprintf("%dx%d", nowCols, nowRows))
+		return false
 	}
-	if err := pty.SetSize(rows, cols); err != nil {
-		// Best effort restore already attempted; the geometry the session believes in is
-		// unchanged, and the next real Resize will re-assert it.
-		slog.Warn("session.NudgePTYGeometry: restore failed — PTY may be one row short",
+	if err := s.Resize(rows, cols); err != nil {
+		slog.Warn("session.NudgeRepaint: restore failed — retrying once",
 			"sid", s.id.String(), "err", err)
-		return false
+		if err2 := s.Resize(rows, cols); err2 != nil {
+			slog.Error("session.NudgeRepaint: PTY left one row short",
+				"sid", s.id.String(), "want_rows", rows, "err", err2)
+			return false
+		}
 	}
 	return true
 }
