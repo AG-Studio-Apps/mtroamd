@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"errors"
@@ -351,6 +352,18 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		comm, _, _, _ := sess.ForegroundSnapshot()
 		if shouldResetStrandedMouse(att.ReplayBudget, wasRestored, comm) {
 			_, _ = sess.InjectOutput([]byte("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"))
+		}
+		// Same sanitisation, for the ALT BUFFER. The mouse half above has always
+		// been here; the buffer half was missing, and it is the more damaging of
+		// the two — a client left on the alt screen has no scrollback to pan at
+		// all. Gated on our OWN reconciled answer (altForClient), so a session we
+		// believe really is running a TUI is never yanked back to the main buffer,
+		// and only fired when the replay actually strands the client there.
+		if !altForClient &&
+			replayEndsOnAltScreen(sess.Buffer(), att.AckSeq, att.ReplayBudget, altActive) {
+			_, _ = sess.InjectOutput([]byte("\x1b[?1049l"))
+			slog.Info("attach.altstrand", "sid", sess.ID().String(),
+				"msg", "replay ended on the alt screen for a non-alt session; injected ?1049l")
 		}
 	}
 
@@ -872,6 +885,50 @@ func (h *ProtocolHandler) resolveAttach(att protocol.Attach, ctrl io.Writer, src
 // bloat per-session state or logs (the 64 KiB frame cap is the only other bound).
 // (Low, security audit v1.7.0.)
 const maxClientIDLen = 128
+
+// altScreenTogglesInReplay reports whether the bytes a client is about to replay
+// END on the alternate screen — i.e. the last buffer-switch sequence in the
+// window is an ENTER with no matching EXIT after it.
+//
+// This is the alt-buffer twin of the stranded-mouse sanitisation above, and it
+// exists for the same reason: a TUI killed ungracefully (SIGKILL, host reboot,
+// a daemon restart that ate its exit sequence) never emits ?1049l, so the ring
+// keeps the enter forever. Measured on a real session: 2x ?1049h and ZERO
+// ?1049l, the last one 16 KiB before head, immediately followed by
+// ?1000h/?1002h/?1003h/?1006h. Every attach replayed it, so the client came up
+// on the alt buffer believing a dead TUI was live — which on iOS routes pans to
+// the mouse-wheel forwarder and kills scrollback entirely.
+//
+// Scans backwards for the LAST toggle rather than counting: a session can
+// legitimately enter and leave many times, and only the final state matters.
+// Covers the three switch pairs a VT emits (1049, 1047, 47).
+func replayEndsOnAltScreen(buf *session.RingBuffer, ackSeq, budget uint64, altActive bool) bool {
+	if buf == nil {
+		return false
+	}
+	start, head, _ := computeReplayWindow(buf, ackSeq, budget, altActive)
+	if head <= start {
+		return false
+	}
+	win, _, _ := buf.ReadSince(start, int(head-start))
+	if len(win) == 0 {
+		return false
+	}
+	enters := [][]byte{[]byte("\x1b[?1049h"), []byte("\x1b[?1047h"), []byte("\x1b[?47h")}
+	exits := [][]byte{[]byte("\x1b[?1049l"), []byte("\x1b[?1047l"), []byte("\x1b[?47l")}
+	lastEnter, lastExit := -1, -1
+	for _, e := range enters {
+		if i := bytes.LastIndex(win, e); i > lastEnter {
+			lastEnter = i
+		}
+	}
+	for _, e := range exits {
+		if i := bytes.LastIndex(win, e); i > lastExit {
+			lastExit = i
+		}
+	}
+	return lastEnter >= 0 && lastEnter > lastExit
+}
 
 // shouldResetStrandedMouse decides whether an attach should inject the mouse-off
 // DECRSTs to clear a mode a dead TUI stranded. Only replay (budget>0) carries the

@@ -678,3 +678,50 @@ func TestProtocolHandlerGoodbyeReplacedOnDisplacement(t *testing.T) {
 		return
 	}
 }
+
+// TestReplayEndsOnAltScreen covers the alt-buffer twin of the stranded-mouse
+// sanitisation. Built from the REAL failure: session "agnticStudio" carried two
+// ?1049h and zero ?1049l in its ring, the last 16 KiB from head and followed
+// immediately by the mouse-mode enables, so every attach replayed the client
+// onto the alt buffer under a plain bash — killing scrollback panning outright.
+func TestReplayEndsOnAltScreen(t *testing.T) {
+	t.Parallel()
+	const budget = 64 * 1024
+	cases := []struct {
+		name  string
+		write []byte
+		want  bool
+	}{
+		{"the real shape: enter with no exit", []byte(
+			"hello\x1b[?1049h\x1b[2J\x1b[H\x1b[?1000h\x1b[?1006h prompt$ "), true},
+		{"matched enter then exit", []byte(
+			"hello\x1b[?1049h\x1b[2J vim \x1b[?1049l back at the shell$ "), false},
+		{"re-entered after an exit", []byte(
+			"\x1b[?1049h a \x1b[?1049l b \x1b[?1049h c "), true},
+		{"plain shell traffic only", []byte("total 12\r\n-rw-r--r-- 1 james\r\n$ "), false},
+		{"legacy 47h with no exit", []byte("x\x1b[?47h\x1b[2J"), true},
+		{"legacy 1047 pair", []byte("x\x1b[?1047h\x1b[2J\x1b[?1047l"), false},
+		{"empty ring", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, err := session.NewRingBuffer(1 << 20)
+			if err != nil {
+				t.Fatalf("NewRingBuffer: %v", err)
+			}
+			if len(tc.write) > 0 {
+				if _, err := buf.Write(tc.write); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			if got := replayEndsOnAltScreen(buf, 0, budget, false); got != tc.want {
+				t.Errorf("replayEndsOnAltScreen = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("nil buffer is safe", func(t *testing.T) {
+		if replayEndsOnAltScreen(nil, 0, budget, false) {
+			t.Error("nil buffer must not report a stranded alt screen")
+		}
+	})
+}
