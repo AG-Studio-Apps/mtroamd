@@ -914,37 +914,6 @@ func (s *Screen) enterAlt(clear, saveCur bool) {
 	}
 }
 
-// AdoptAltScreen forces the model onto the alternate buffer without having seen the
-// DECSET that would normally put it there.
-//
-// ★ For the case where an external observer of the PTY (the wedge watcher) knows a
-// full-screen app is running but this model does not — the model was rebuilt while the
-// app was already inside the alt screen, and a running app never re-emits ?1049h. Left
-// alone, such a model paints the app's output into its MAIN grid forever, its alt grid
-// stays empty, and the attach prime can never fire again for that session's whole life.
-//
-// The grid is blanked and the model is marked UNFAITHFUL on purpose: adopting tells us
-// WHERE the app is drawing, not WHAT is on its screen, so the model must not be shipped
-// as an authoritative frame. It recovers the ordinary way, on the app's next full clear
-// (see eraseDisplay), by which point the model has tracked a complete repaint.
-//
-// Returns true when it changed anything. No-op when already on the alt buffer.
-func (s *Screen) AdoptAltScreen() bool {
-	if s.altActive {
-		return false
-	}
-	s.altActive = true
-	s.grid = s.alt
-	for r := 0; r < s.rows; r++ {
-		s.blankRow(s.grid[r])
-	}
-	s.x, s.y = 0, 0
-	s.wrapNext = false
-	// NOT faithful: we know the app is on the alt screen, not what it has drawn.
-	s.faithful = false
-	return true
-}
-
 func (s *Screen) exitAlt(restoreCur bool) {
 	if !s.altActive {
 		return
