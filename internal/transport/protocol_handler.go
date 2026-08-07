@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,59 +235,19 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// Alt-screen state only matters when a budget came (the clamp is
 	// budget-gated) — skip the two mutex hops for budget-less CLI
 	// attaches.
-	altActive := att.ReplayBudget > 0 && sess.WedgeAltScreenActive()
-
-	// ★★ REATTACH REPAINT BOUNCE. Ask the APP to redraw instead of trusting a frame we
-	// synthesised from our own model.
+	// AltScreenForClient, not WedgeAltScreenActive: the tracker's flag can latch
+	// true across a daemon restart and would then clamp replay to
+	// AltScreenReplayCap, re-emit an alt footer, and nudge a repaint — all on a
+	// plain shell. See Session.AltScreenForClient.
 	//
-	// A same-geometry reattach signals nobody: SetSize with unchanged dimensions is an
-	// ioctl that changes nothing, so no SIGWINCH is raised and the app never repaints.
-	// The client is then handed a frame built from the daemon's screen model, and every
-	// fragile thing in this file exists to judge whether that model can be trusted. When
-	// the user rotates the phone the geometry DOES change, the app redraws itself, and the
-	// screen is correct — which is why rotation has always been the workaround.
-	//
-	// So provoke the same thing deliberately: drop one row and put it straight back. The
-	// app answers fast (real Claude emits a full ED 2 frame ~13ms after SIGWINCH, and it
-	// is the FIRST cell-writing output), and raw replay then carries the app's own repaint
-	// rather than our reconstruction. Measured against real vim over the real transport:
-	// the client receives a genuine repaint reaching the bottom row of the new geometry.
-	//
-	// Gating, all required:
-	//   - ALT SCREEN ONLY. This is load-bearing. A bounce was removed from the reattach
-	//     path once before (see internal/daemon/daemon.go) because two SIGWINCHes made a
-	//     bash prompt redraw twice and left duplicate prompts in the ring. That is a
-	//     MAIN-buffer problem; on the alt screen a redraw is an idempotent full-frame
-	//     overwrite, so the objection does not apply.
-	//   - EXCLUSIVE ONLY, and only when no other client is attached: pty geometry belongs
-	//     to the session, so a bounce reflows the app for every attached client.
-	//   - budget-gated, matching altActive, so CLI attaches are untouched.
-	//   - skipped when this attach already resized, because the app is getting a real
-	//     SIGWINCH from that anyway.
-	//
-	// The two Resize calls are deliberately BACK TO BACK with no work between them. The
-	// wedge watcher scans for cursor_row only while a SHRINK is armed, and the second arm
-	// disables and resets that scan, so a sub-millisecond bounce closes the window before
-	// the app's ~13ms response can trip it. The suppression window covers the `silent`
-	// detector, which fires 2s later if too few bytes flow after the last arm.
-	bounced := false
-	if !attachResizedGrid && altActive &&
-		attachMode == session.AttachExclusive &&
-		len(sess.PeerModes(attachGen)) == 0 {
-		headBefore := uint64(0)
-		if b := sess.Buffer(); b != nil {
-			headBefore = b.HeadSeq()
-		}
-		if sess.NudgePTYGeometry(nudgeHoldWindow) {
-			// ★ Only treat this as bounced if the app ACTUALLY repainted. If it did not
-			// (wedged, not a TUI, ignores SIGWINCH, stream-backed), fall through to the
-			// synthesised frame exactly as before — otherwise we would have thrown away
-			// the one complete screen we can produce and delivered nothing in its place.
-			// That is what a fake-PTY harness with no app behind it exposes, and it is
-			// the difference between this being safer than today and worse than it.
-			bounced = waitForAppRepaint(sess, headBefore)
-		}
-	}
+	// ★ Evaluated ONCE for the whole attach. The ack (far below) and the
+	// diagnostic reuse these values rather than re-reading: a Pump feed landing
+	// between two reads — common, since a reattach often coincides with the app
+	// repainting — would otherwise let one attach clamp replay as alt-screen
+	// while telling the client it is on the main buffer.
+	altForClient := sess.AltScreenForClient()
+	wedgeAltRaw := sess.WedgeAltScreenActive()
+	altActive := att.ReplayBudget > 0 && altForClient
 
 	// Full-frame redraw (preferred): when a full-screen TUI is running and
 	// the live screen-model is faithful, inject the WHOLE synthesized clean
@@ -321,7 +280,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		// authoritative — it still refuses (ok=false) on a main-buffer, unfaithful,
 		// or resize-dirty model (the last catches a MID-SESSION resize whose
 		// repaint hasn't landed), so a stale/top-anchored grid is never shipped.
-		if !attachResizedGrid && !bounced {
+		if !attachResizedGrid {
 			if start, ok := sess.InjectAltScreenRepaint(); ok {
 				fullRedraw = true
 				fullRedrawStart = start
@@ -330,14 +289,18 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		slog.Info("attach.altredraw",
 			"sid", sess.ID().String(),
 			"budget", att.ReplayBudget,
-			"wedgeAlt", altActive,
+			// wedgeAlt keeps its original meaning (the RAW tracker flag) so log
+			// archives stay comparable; altActive is the reconciled decision the
+			// replay/nudge/footer paths and the ack actually use. A line with
+			// wedgeAlt=true altActive=false is the latched-flag case.
+			"wedgeAlt", wedgeAltRaw,
+			"altActive", altActive,
 			"modelHas", hasScr,
 			"modelAlt", altScr,
 			"modelFaithful", faithScr,
 			"attachResized", attachResizedGrid,
 			"modelResizeDirty", modelResizeDirty,
 			"injected", fullRedraw,
-			"bounced", bounced,
 			"start", fullRedrawStart)
 	}
 
@@ -528,7 +491,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		Restored:        wasRestored,
 		FreshlyCreated:  freshlyCreated,
 		RTTNanos:        rttNanosFor(ctrl),
-		AltScreenActive: sess.WedgeAltScreenActive(),
+		AltScreenActive: altForClient,
 		LastTitle:       sess.LastTitle(),
 		// fg transition anchors (v1.6.3+): time + ring byte-seq of the
 		// last foreground change, plus its cwd. See fgSinceToNanos.
@@ -575,6 +538,38 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	)
 
 	pumpsCtx, pumpsCancel := context.WithCancel(attachCtx)
+
+	// ★★ REATTACH REPAINT NUDGE — provoke the app to redraw itself.
+	//
+	// A same-geometry reattach signals nobody: SetSize with unchanged dimensions changes
+	// nothing, so no SIGWINCH is raised and the app never repaints. The client is handed a
+	// frame reconstructed from the daemon's model, and the trust apparatus above exists to
+	// judge that reconstruction. Rotating the phone changes the geometry, the app redraws
+	// and the screen is correct, which is why rotation has always been the workaround.
+	//
+	// So do it deliberately: drop a row, hold, restore. The app's repaint then arrives as
+	// ordinary LIVE output on top of whatever the attach already delivered.
+	//
+	// ★ ADDITIVE: the synthesised frame is still always sent. An earlier revision skipped
+	// it and tried to prove the app had repainted first, which cannot be done — on a
+	// streaming session any output looks like a repaint, and the false positive threw away
+	// the only complete screen the daemon can produce.
+	//
+	// ★ CONCURRENT, and only once the pumps are up. Run inline between the AttachAck and
+	// the output pump, its sleep held back the synthesised frame, the footer re-emit and
+	// every replayed byte, so the client saw nothing at all for the duration. Here it costs
+	// the attach nothing, and NudgeRepaint bails on a cancelled context or a lost exclusive
+	// claim, so teardown is never waiting on it.
+	if !attachResizedGrid && altActive && attachMode == session.AttachExclusive {
+		// ★ Require the MODEL to agree a full-screen app is running, not just the wedge
+		// watcher: its flag is seeded from the DEAD app's persisted meta on the restore
+		// path and lazySpawnRestoredPTY does not clear it, so alone it would authorise a
+		// PTY mutation against a freshly spawned bash prompt.
+		if _, modelAlt, _, _ := sess.ScreenSnapshot(); modelAlt &&
+			len(sess.PeerModes(attachGen)) == 0 {
+			go sess.NudgeRepaint(pumpsCtx, attachGen, nudgeHoldWindow)
+		}
+	}
 	defer pumpsCancel()
 
 	// recoverPump contains a panic to a single per-attach goroutine.
@@ -896,14 +891,13 @@ func shouldResetStrandedMouse(replayBudget uint64, wasRestored bool, fgComm stri
 // shell (not a TUI/agent). Only when a session's foreground is a plain shell is
 // it safe to inject a mouse-mode reset on attach: a shell never wants mouse
 // reporting, whereas a live TUI (htop/vim/claude) would be broken by a blind
-// reset. Allowlist (not a TUI denylist) so a node-wrapped agent reported as
-// "node" is never mistaken for a shell. Login shells arrive as "-bash".
+// reset.
+//
+// Delegates to session.IsPlainShellComm so there is ONE allowlist. A second copy
+// living here is how the alt-screen foreground veto came to miss "-bash" and
+// "mksh" while this one handled them.
 func isPlainShellComm(comm string) bool {
-	switch strings.TrimPrefix(comm, "-") {
-	case "bash", "zsh", "sh", "dash", "ash", "fish", "ksh", "mksh", "tcsh", "csh":
-		return true
-	}
-	return false
+	return session.IsPlainShellComm(comm)
 }
 
 func readAttach(s io.Reader) (protocol.Attach, error) {
@@ -995,6 +989,11 @@ func closeMsgFor(code uint64) string {
 // clamped — full replay stays their contract.
 const AltScreenReplayCap = 128 * 1024
 
+// minNudgeRows is the smallest height worth nudging; below it the shrink would produce a
+// degenerate 1-row terminal. Lives with the session because NudgeRepaint enforces it.
+//
+// nudgeWedgeGrace mutes the wedge detector across the two resize arms.
+//
 // nudgeHoldWindow is how long the PTY stays one row short before being restored.
 //
 // ★ MEASURED, and load-bearing. A back-to-back nudge with no hold at all does NOT make
@@ -1006,49 +1005,6 @@ const AltScreenReplayCap = 128 * 1024
 // latency on a loaded box, and it costs the attach ~120ms in exchange for a screen the
 // app itself drew.
 const nudgeHoldWindow = 120 * time.Millisecond
-
-// bounceRepaintBudget bounds how long an attach waits for the app's SIGWINCH repaint
-// before giving up and computing the replay window anyway. Real Claude answers in ~13ms,
-// but Ink throttles renders to roughly one per 250ms, so a burst can be answered up to
-// ~226ms after the first signal. On expiry we proceed with what is in the ring, which is
-// exactly today's behaviour — the safe direction.
-const bounceRepaintBudget = 300 * time.Millisecond
-
-// bounceRepaintQuiet is how long the ring must stop growing before the repaint burst is
-// considered finished. A frame arrives as one or a few chunks; this keeps a multi-chunk
-// repaint from being cut in half.
-const bounceRepaintQuiet = 25 * time.Millisecond
-
-// waitForAppRepaint blocks until the session's ring has grown past headBefore and then
-// gone quiet, or until bounceRepaintBudget expires. Returns true when output was observed.
-// Polling rather than a fixed sleep so the common case (a fast app) costs ~15ms, not 300.
-func waitForAppRepaint(sess *session.Session, headBefore uint64) bool {
-	buf := sess.Buffer()
-	if buf == nil {
-		return false
-	}
-	deadline := time.Now().Add(bounceRepaintBudget)
-	sawOutput := false
-	lastHead := headBefore
-	quietSince := time.Time{}
-	for time.Now().Before(deadline) {
-		head := buf.HeadSeq()
-		switch {
-		case head > lastHead:
-			sawOutput = true
-			lastHead = head
-			quietSince = time.Time{}
-		case sawOutput:
-			if quietSince.IsZero() {
-				quietSince = time.Now()
-			} else if time.Since(quietSince) >= bounceRepaintQuiet {
-				return true
-			}
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	return sawOutput
-}
 
 // altScreenFooterRows is how many bottom rows the daemon re-emits into the ring
 // on an alt-screen attach (the footer block: status footer + separator + prompt

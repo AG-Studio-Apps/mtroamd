@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -618,12 +619,14 @@ func (s *Session) SetWedgeLogPath(path string) {
 }
 
 // WedgeAltScreenActive returns the alternate-screen state observed by
-// the wedge watcher at the moment of the call. Used by the transport
-// layer to populate AttachAck.AltScreenActive so iOS / mtroam clients
-// can prime their local Terminal into alt-buffer mode before replay
-// — without that, a truncated replay window leaves the client emulator
-// stuck on the normal buffer even though the session is semantically
-// on the alt screen (Claude /tui, htop, less, vim).
+// the wedge watcher at the moment of the call.
+//
+// ★ This is NOT what clients are told. It is one of three inputs to
+// AltScreenForClient, which owns the AttachAck.AltScreenActive answer
+// and the replay/footer/nudge gate — go there instead. This flag is
+// seeded from a persisted boolean on restore and can latch true for
+// the life of a session, which is why it is no longer read directly.
+// Its remaining non-diagnostic caller is AltScreenForClient itself.
 func (s *Session) WedgeAltScreenActive() bool {
 	s.mu.Lock()
 	w := s.wedge
@@ -632,6 +635,96 @@ func (s *Session) WedgeAltScreenActive() bool {
 		return false
 	}
 	return w.AltScreenActive()
+}
+
+// IsPlainShellComm reports whether a foreground process comm is an interactive
+// shell rather than a TUI/agent. An allowlist, NOT a TUI denylist, so a
+// node-wrapped agent reported as "node" is never mistaken for a shell.
+//
+// ★ Login shells arrive as "-bash": ForegroundComm falls back to argv whenever
+// /proc/<pgid>/comm is unreadable or names an interpreter, so the prefix must be
+// stripped or the check silently no-ops on exactly the sessions it targets.
+//
+// Canonical home for the allowlist. The transport's mouse-mode-reset gate uses
+// this same list; a second, divergent copy is how the veto came to miss "-bash"
+// and "mksh" in the first place.
+func IsPlainShellComm(comm string) bool {
+	switch strings.TrimPrefix(comm, "-") {
+	case "bash", "zsh", "sh", "dash", "ash", "fish", "ksh", "mksh", "tcsh", "csh":
+		return true
+	}
+	return false
+}
+
+// AltScreenForClient reports whether the session's pty is on the alternate
+// screen, for every decision taken on a client's behalf at attach time:
+// AttachAck.AltScreenActive (which makes the client prime its own emulator onto
+// the alt buffer), the AltScreenReplayCap clamp, the footer re-emit, and the
+// repaint nudge.
+//
+// ★ Why not WedgeAltScreenActive directly. That flag is byte-derived while the
+// daemon is watching, but it is ALSO seeded from a persisted boolean on restore
+// (loadSessionFromDir → SetAltScreenActive, the v1.1.2 "Bug A" fix). If a TUI
+// exits while the daemon is down and the ?1049l is evicted from the sidecar ring
+// before it reconnects, the flag comes back TRUE and stays true for the life of
+// the session. A latched flag is not cosmetic: the client primes ESC[?1049h into
+// a plain shell, and an iOS client on the alt buffer routes pans to its
+// mouse-wheel forwarder — which drops them for a non-mouse app, so scrollback
+// panning dies outright. It also caps replay at 128 KiB and lets the footer
+// re-emit and the repaint nudge fire on the main buffer.
+//
+// ★ Order is load-bearing, and the model's answer is NOT a boolean — it is
+// three-state. Positive alt from a faithful model always wins: that covers the
+// case the foreground check would get WRONG, a TUI killed without emitting
+// ?1049l, which leaves the pty genuinely on the alt buffer under a shell.
+// Negative alt only wins when the model has OBSERVED a buffer switch
+// (KnowsBufferState), because a restored model defaults to main-buffer and
+// faithful while knowing nothing. Everything else is ambiguous and falls to the
+// tracker, vetoed by a shell foreground.
+func (s *Session) AltScreenForClient() bool {
+	has, alt, faithful, knows := s.screenAltEvidence()
+	// Informed AND trustworthy: the model settles it, in either direction.
+	// NEGATIVE evidence needs `knows` because a restored session builds a fresh
+	// main-buffer model that reports faithful=true while having observed nothing
+	// (persistence.go saves a Repaint ONLY for a faithful, non-resize-dirty ALT
+	// model), and believing that would spill a TUI onto the main screen.
+	if has && faithful && knows {
+		return alt
+	}
+	// The model says ALT but we cannot fully trust it — MarkStale fires on a
+	// sidecar byte GAP, so an unfaithful model may have missed a transition
+	// outright. Take it anyway: this is positive evidence, and the costs are
+	// asymmetric. Over-reporting costs the client a redundant alt prime;
+	// under-reporting leaves it unprimed and spills a full-screen TUI onto the
+	// main buffer. It also stops the foreground veto below from overriding the
+	// model on a pty that is genuinely on the alt screen — a TUI SIGKILLed
+	// without emitting ?1049l leaves exactly that, alt buffer under a shell.
+	if has && alt {
+		return true
+	}
+	// Nothing but the tracker, which may be a latched restore seed. THIS is where
+	// the foreground is load-bearing — the reported session's model was ignorant,
+	// so the veto is what actually resolved it. A shell cannot itself be drawing a
+	// full-screen TUI, so it vetoes a flag nothing else corroborates. An
+	// unknown/empty comm (non-Linux host, pre-v1.6.1 sidecar) is deliberately NOT
+	// a shell, so the tracker still stands there, as it did before.
+	altTracked := s.WedgeAltScreenActive()
+	if altTracked && IsPlainShellComm(s.ForegroundComm()) {
+		return false
+	}
+	return altTracked
+}
+
+// screenAltEvidence reads every alt-relevant model field under ONE screenMu hop,
+// so the four values are internally consistent (a Pump Feed cannot land between
+// them and produce a mixed verdict).
+func (s *Session) screenAltEvidence() (has, alt, faithful, knows bool) {
+	if s.screen == nil {
+		return false, false, false, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return true, s.screen.AltActive(), s.screen.Faithful(), s.screen.KnowsBufferState()
 }
 
 // LastTitle returns the most recent terminal title observed in the
@@ -1123,42 +1216,94 @@ func (s *Session) Resize(rows, cols uint16) error {
 	return err
 }
 
-// NudgePTYGeometry raises a SIGWINCH at the child WITHOUT changing the session's
-// geometry: it drops one row on the PTY and immediately puts it back. The attach path
-// uses it to make a full-screen app repaint ITSELF, so the client can be handed the app's
-// own frame instead of one the daemon reconstructed from its model.
+// NudgeRepaint provokes a full-screen app to redraw itself by briefly shrinking the
+// terminal by one row and restoring it. Used by the attach path, because a same-geometry
+// reattach raises no SIGWINCH and so leaves the app silent.
 //
-// ★ Deliberately does NOT go through Resize, and deliberately touches nothing but the
-// PTY. The session's geometry is identical when this returns, so s.rows/s.cols, the live
-// screen-model and the wedge watcher must not observe a resize at all. Routing this
-// through Resize instead would: mark the model resize-dirty twice (which then blocks the
-// very fallback we rely on when the app does not answer), double-count resizesObserved in
-// the wedge diagnostics, and arm the wedge detector twice — the last of which can surface
-// a false "may be wedged" banner. Not arming it is what makes that risk vanish rather
-// than merely be suppressed.
+// ★ Goes through Resize for BOTH legs on purpose. An earlier revision poked the PTY
+// directly to avoid disturbing the model, and that was backwards: the app answers the
+// shrink in ~13ms, so its rows-1 frame was fed by Pump into a model still sized rows,
+// leaving a top-anchored grid that still reported itself faithful and got persisted. That
+// is exactly the corruption the Resize-before-SetSize ordering fix exists to prevent.
+// Keeping the model in lockstep means the intermediate frame lands in a correctly sized
+// grid and resizedDirty gates the model while it is in transition, both for free.
 //
-// Returns false when there is nothing to nudge (closed, stream-backed, no PTY, or a
-// degenerate height), so the caller can fall back.
-func (s *Session) NudgePTYGeometry(hold time.Duration) bool {
+// The wedge watcher is muted across the pair. It arms on each leg, and its `silent`
+// detector compares bytes since the LAST arm, so an app that coalesces the two SIGWINCHes
+// and answers only the first can look wedged 2s later and raise a false recovery banner.
+//
+// ★ The restore refuses to clobber. A displacing attach or a peer Resize can land during
+// the hold (AcquireClient cancels the previous handler's context but does not wait for
+// it), and blindly writing back the geometry captured beforehand would leave the PTY
+// disagreeing with the session with nothing to reconcile them. If anyone else moved the
+// geometry we simply leave theirs in place; it is newer and it is authoritative.
+//
+// No-op when there is nothing to nudge, or when the height is too small for the shrink to
+// be meaningful — a 1-row terminal has no room for a scroll region plus a status line and
+// TUIs variously clamp, refuse to draw, or emit a resize error.
+const (
+	// minNudgeRows is the smallest height worth nudging: shrinking a 2-row terminal
+	// yields a 1-row one, which many TUIs mis-render or refuse outright, and whatever
+	// they draw at that size is then fed into the model.
+	minNudgeRows = 6
+	// nudgeWedgeGrace mutes the wedge detector across the two arms. Over-muting only
+	// delays a real detection; under-muting puts a false "may be wedged" banner in the
+	// user's face.
+	nudgeWedgeGrace = 5 * time.Second
+)
+
+func (s *Session) NudgeRepaint(ctx context.Context, gen uint64, hold time.Duration) bool {
+	rows, cols := s.WindowSize()
+	if rows < minNudgeRows {
+		return false
+	}
 	s.mu.Lock()
-	rows, cols, pty, closed := s.rows, s.cols, s.pty, s.closed
+	closed, pty := s.closed, s.pty
 	s.mu.Unlock()
-	if closed || pty == nil || rows < 2 {
+	if closed || pty == nil {
 		return false
 	}
-	if err := pty.SetSize(rows-1, cols); err != nil {
-		slog.Debug("session.NudgePTYGeometry: shrink failed", "sid", s.id.String(), "err", err)
+
+	// ★ Only the CURRENT exclusive client may move session-wide geometry, checked here
+	// and again after the hold. Every other session-mutating path in the transport does
+	// this; without it a displaced handler keeps nudging a session it no longer owns, and
+	// the client that displaced it is denied its own frame because the PTY is a row short
+	// at the moment its geometry is compared.
+	if ctx.Err() != nil || !s.IsCurrentExclusive(gen) {
 		return false
 	}
-	if hold > 0 {
-		time.Sleep(hold)
+	s.SuppressWedgeUntil(time.Now().Add(nudgeWedgeGrace))
+	if err := s.Resize(rows-1, cols); err != nil {
+		slog.Debug("session.NudgeRepaint: shrink failed", "sid", s.id.String(), "err", err)
+		return false
 	}
-	if err := pty.SetSize(rows, cols); err != nil {
-		// Best effort restore already attempted; the geometry the session believes in is
-		// unchanged, and the next real Resize will re-assert it.
-		slog.Warn("session.NudgePTYGeometry: restore failed — PTY may be one row short",
+	// Interruptible: on teardown or displacement, restore immediately rather than
+	// holding a shrunken PTY for the rest of the window.
+	select {
+	case <-time.After(hold):
+	case <-ctx.Done():
+	}
+
+	// Only restore if nobody else has moved the geometry in the meantime.
+	if !s.IsCurrentExclusive(gen) {
+		// Someone else owns the session now; their geometry is authoritative.
+		slog.Info("session.NudgeRepaint: displaced during the hold — leaving geometry alone",
+			"sid", s.id.String())
+		return false
+	}
+	if nowRows, nowCols := s.WindowSize(); nowRows != rows-1 || nowCols != cols {
+		slog.Info("session.NudgeRepaint: geometry changed under the nudge — leaving it",
+			"sid", s.id.String(), "now", fmt.Sprintf("%dx%d", nowCols, nowRows))
+		return false
+	}
+	if err := s.Resize(rows, cols); err != nil {
+		slog.Warn("session.NudgeRepaint: restore failed — retrying once",
 			"sid", s.id.String(), "err", err)
-		return false
+		if err2 := s.Resize(rows, cols); err2 != nil {
+			slog.Error("session.NudgeRepaint: PTY left one row short",
+				"sid", s.id.String(), "want_rows", rows, "err", err2)
+			return false
+		}
 	}
 	return true
 }
