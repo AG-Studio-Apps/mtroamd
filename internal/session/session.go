@@ -659,23 +659,53 @@ var shellComms = map[string]bool{
 // panning dies outright. It also caps replay at 128 KiB and lets the footer
 // re-emit and the repaint nudge fire on the main buffer.
 //
-// ★ Order is load-bearing. The screen model parses the same post-filter stream
-// as the tracker AND is rebuilt accurately on restore, so it wins whenever it is
-// faithful. That deliberately covers the pathological case the foreground check
-// would get WRONG: a TUI killed without emitting ?1049l leaves the pty genuinely
-// on the alt buffer with a shell in the foreground, and the model knows it.
-// Only when the model cannot answer does the tracker apply, and then a shell
-// foreground vetoes it — an unknown/empty comm (non-Linux host, pre-v1.6.1
-// sidecar) is not a shell, so the tracker still stands.
+// ★ Order is load-bearing, and the model's answer is NOT a boolean — it is
+// three-state. Positive alt from a faithful model always wins: that covers the
+// case the foreground check would get WRONG, a TUI killed without emitting
+// ?1049l, which leaves the pty genuinely on the alt buffer under a shell.
+// Negative alt only wins when the model has OBSERVED a buffer switch
+// (KnowsBufferState), because a restored model defaults to main-buffer and
+// faithful while knowing nothing. Everything else is ambiguous and falls to the
+// tracker, vetoed by a shell foreground.
 func (s *Session) AltScreenForClient() bool {
-	if has, alt, faithful, _ := s.ScreenSnapshot(); has && faithful {
-		return alt
+	has, alt, faithful, knows := s.screenAltEvidence()
+	// POSITIVE alt evidence from a faithful model is always authoritative.
+	if has && faithful && alt {
+		return true
 	}
-	alt := s.WedgeAltScreenActive()
-	if alt && shellComms[s.ForegroundComm()] {
+	// NEGATIVE evidence only counts when the model has actually OBSERVED which
+	// buffer the pty is on. A restored session builds a fresh main-buffer model
+	// and is only fed a Repaint when one was persisted, and persistence.go saves
+	// one ONLY for a faithful, non-resize-dirty ALT model — so a genuinely alt
+	// session saved while resize-dirty or unfaithful comes back reporting
+	// main-buffer AND faithful while knowing nothing at all. Trusting that would
+	// tell the client not to prime its alt buffer and spill a full-screen TUI onto
+	// the main screen: the exact prompt-spill class this must not reintroduce.
+	if has && faithful && knows {
 		return false
 	}
-	return alt
+	// Ambiguous: the tracker is all we have, and it may be a latched restore
+	// seed. This is where the foreground is load-bearing — a shell cannot itself
+	// be drawing a full-screen TUI, so it vetoes a flag nothing else corroborates.
+	// An unknown/empty comm (non-Linux host, pre-v1.6.1 sidecar) is deliberately
+	// NOT a shell, so the tracker still stands there, as it did before.
+	altTracked := s.WedgeAltScreenActive()
+	if altTracked && shellComms[s.ForegroundComm()] {
+		return false
+	}
+	return altTracked
+}
+
+// screenAltEvidence reads every alt-relevant model field under ONE screenMu hop,
+// so the four values are internally consistent (a Pump Feed cannot land between
+// them and produce a mixed verdict).
+func (s *Session) screenAltEvidence() (has, alt, faithful, knows bool) {
+	if s.screen == nil {
+		return false, false, false, false
+	}
+	s.screenMu.Lock()
+	defer s.screenMu.Unlock()
+	return true, s.screen.AltActive(), s.screen.Faithful(), s.screen.KnowsBufferState()
 }
 
 // LastTitle returns the most recent terminal title observed in the

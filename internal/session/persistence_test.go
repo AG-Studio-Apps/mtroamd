@@ -779,38 +779,6 @@ func TestRestoreRejectsOversizedDims(t *testing.T) {
 	}
 }
 
-// TestAltScreenForClientIgnoresLatchedTracker pins the 2026-08-07 fix for the
-// dead-scrollback bug. TestAltScreenActiveRoundTrip above deliberately makes the
-// tracker sticky across a restart; this pins the OTHER half — a sticky flag must
-// not be reported to clients once the screen model disagrees.
-//
-// Real-world shape (session "agnticStudio"): a TUI exited while the daemon was
-// down, its ?1049l was evicted from the sidecar ring before the daemon
-// reconnected, and meta.alt_active came back true for a plain bash session. The
-// daemon then told every attaching client to prime ESC[?1049h, and an iOS client
-// on the alt buffer routes pans to its mouse-wheel forwarder, which drops them
-// for a non-mouse app — scrollback panning died completely.
-func TestAltScreenForClientIgnoresLatchedTracker(t *testing.T) {
-	t.Parallel()
-	s := makePersistedSession(t, []byte("z"))
-	// Latch the tracker exactly as a restore would.
-	s.wedge.SetAltScreenActive(true)
-	if !s.WedgeAltScreenActive() {
-		t.Fatal("precondition: tracker should be latched active")
-	}
-	// The model is a fresh main-buffer grid — what loadSessionFromDir builds when
-	// there is no persisted alt Repaint to replay.
-	has, alt, faithful, _ := s.ScreenSnapshot()
-	if !has || !faithful || alt {
-		t.Fatalf("precondition: want a faithful main-buffer model, got "+
-			"has=%v alt=%v faithful=%v", has, alt, faithful)
-	}
-	if s.AltScreenForClient() {
-		t.Error("AltScreenForClient trusted a latched tracker over a faithful " +
-			"main-buffer model — clients will prime the alt buffer into a shell")
-	}
-}
-
 // TestAltScreenForClientTrustsFaithfulAltModel is the guard in the OTHER
 // direction, which is the dangerous one: under-reporting alt means the client
 // never primes its emulator onto the alt buffer and a truncated replay leaves it
@@ -829,5 +797,118 @@ func TestAltScreenForClientTrustsFaithfulAltModel(t *testing.T) {
 	if !s.AltScreenForClient() {
 		t.Error("AltScreenForClient refused a faithful alt-screen model — " +
 			"clients will not prime the alt buffer and replay will spill")
+	}
+}
+
+// TestAltScreenForClientDoesNotTrustAnIgnorantModel pins the follow-up to the
+// latched-tracker fix. The first cut trusted the model whenever it was
+// `has && faithful`, which was wrong in the direction that matters most.
+//
+// persistence.go saves a Repaint ONLY for a faithful, non-resize-dirty ALT
+// model, so a session that was genuinely on the alt screen but resize-dirty (or
+// unfaithful) at save time persists alt_active=true with NO Repaint.
+// loadSessionFromDir then builds a fresh main-buffer model — which reports
+// faithful=true because altscreen.New sets it — and feeds nothing into it. The
+// model is faithful but IGNORANT, and believing it would tell the client not to
+// prime its alt buffer, spilling a full-screen TUI onto the main screen.
+func TestAltScreenForClientDoesNotTrustAnIgnorantModel(t *testing.T) {
+	t.Parallel()
+	s := makePersistedSession(t, []byte("z"))
+	// Exactly the restore shape: tracker seeded true, model fresh and untouched.
+	s.wedge.SetAltScreenActive(true)
+	has, alt, faithful, knows := s.screenAltEvidence()
+	if !has || alt || !faithful || knows {
+		t.Fatalf("precondition: want a fresh faithful main model that knows "+
+			"nothing, got has=%v alt=%v faithful=%v knows=%v",
+			has, alt, faithful, knows)
+	}
+	// Foreground is unknown in this harness (no ForegroundReporter), and unknown
+	// is deliberately not a shell — so the tracker must still stand.
+	if !s.AltScreenForClient() {
+		t.Error("AltScreenForClient believed a model that has never observed a " +
+			"buffer switch — the client will not prime and replay will spill")
+	}
+}
+
+// TestAltScreenForClientTrustsAnInformedMainModel is the counterpart: once the
+// model has actually OBSERVED the pty return to the main buffer, its negative
+// answer is authoritative and must beat a latched tracker. This is the
+// "agnticStudio" case once the model has seen a real ?1049l.
+func TestAltScreenForClientTrustsAnInformedMainModel(t *testing.T) {
+	t.Parallel()
+	s := makePersistedSession(t, []byte("z"))
+	s.wedge.SetAltScreenActive(true)
+	// Observe a real alt enter/exit pair, so the model KNOWS it is on main.
+	s.screen.Feed([]byte("\x1b[?1049h"))
+	s.screen.Feed([]byte("\x1b[?1049l"))
+	if _, alt, faithful, knows := s.screenAltEvidence(); alt || !faithful || !knows {
+		t.Fatalf("precondition: want an informed faithful main model, got "+
+			"alt=%v faithful=%v knows=%v", alt, faithful, knows)
+	}
+	if s.AltScreenForClient() {
+		t.Error("AltScreenForClient trusted a latched tracker over a model that " +
+			"observed the pty return to the main buffer")
+	}
+}
+
+// fgPTY wraps a fake PTY with a fixed foreground command so the
+// ForegroundReporter path is exercised. Only the two interface methods matter;
+// everything else delegates.
+type fgPTY struct {
+	PTY
+	comm string
+}
+
+func (f fgPTY) ForegroundComm() string { return f.comm }
+func (f fgPTY) ForegroundCwd() string  { return "" }
+
+// TestAltScreenForClientShellForegroundVetoesLatchedTracker covers the ACTUAL
+// shape of the reported bug, which the model alone does not resolve.
+//
+// Session "agnticStudio" restored with a latched alt_active=true and NO
+// persisted Repaint, so its model is a fresh main-buffer grid that has never
+// observed a buffer switch — ignorant, not authoritative. What makes the daemon
+// stop lying to the client there is the foreground: a bash foreground cannot be
+// drawing a full-screen TUI, so it vetoes a flag nothing else corroborates.
+// Verified against the live daemon, which reports fg=bash for that session and
+// fg=claude for a genuine alt one.
+func TestAltScreenForClientShellForegroundVetoesLatchedTracker(t *testing.T) {
+	t.Parallel()
+	for _, comm := range []string{"bash", "zsh", "fish", "sh"} {
+		t.Run(comm, func(t *testing.T) {
+			s := makePersistedSession(t, []byte("z"))
+			s.mu.Lock()
+			s.pty = fgPTY{PTY: s.pty, comm: comm}
+			s.mu.Unlock()
+			s.wedge.SetAltScreenActive(true)
+			if _, _, _, knows := s.screenAltEvidence(); knows {
+				t.Fatal("precondition: model should know nothing about the buffer")
+			}
+			if s.AltScreenForClient() {
+				t.Errorf("a %s foreground did not veto a latched tracker — the "+
+					"client will prime its alt buffer into a shell and pans die", comm)
+			}
+		})
+	}
+}
+
+// TestAltScreenForClientTuiForegroundKeepsLatchedTracker is the other half: the
+// veto must be narrow. With the same ignorant model, a TUI foreground means the
+// latched flag is probably RIGHT, and reporting false would stop the client
+// priming and spill the TUI onto the main buffer.
+func TestAltScreenForClientTuiForegroundKeepsLatchedTracker(t *testing.T) {
+	t.Parallel()
+	for _, comm := range []string{"claude", "vim", "htop", ""} {
+		t.Run("comm="+comm, func(t *testing.T) {
+			s := makePersistedSession(t, []byte("z"))
+			s.mu.Lock()
+			s.pty = fgPTY{PTY: s.pty, comm: comm}
+			s.mu.Unlock()
+			s.wedge.SetAltScreenActive(true)
+			if !s.AltScreenForClient() {
+				t.Errorf("foreground %q wrongly vetoed the tracker — replay will "+
+					"spill a full-screen TUI onto the main buffer", comm)
+			}
+		})
 	}
 }

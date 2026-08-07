@@ -111,6 +111,22 @@ type Screen struct {
 	// The caller uses it to fall back to the raw byte-window replay.
 	faithful bool
 
+	// knowsBufferState records whether this model has ever OBSERVED which buffer
+	// the pty is on, as opposed to merely defaulting to the main buffer at
+	// construction. Set by enterAlt/exitAlt, so feeding a persisted Repaint (which
+	// is prefixed with ?1049h) sets it too.
+	//
+	// ★ Why this exists: `altActive == false` is ambiguous without it. A restored
+	// session builds a fresh main-buffer model and only feeds a Repaint when one
+	// was persisted — and persistence.go saves a Repaint ONLY for a faithful,
+	// non-resize-dirty ALT model. So a genuinely alt session saved while
+	// resize-dirty or unfaithful comes back reporting main-buffer AND faithful
+	// while actually knowing nothing. Treating that as authoritative would tell
+	// the client not to prime its alt buffer and spill a full-screen TUI onto the
+	// main screen. Negative alt evidence is only trustworthy when this is true;
+	// POSITIVE alt evidence always is. See Session.AltScreenForClient.
+	knowsBufferState bool
+
 	// resizedDirty is set when Resize() changes the geometry and cleared on the
 	// next Feed. While set, the grid is top-anchored to the NEW size but the app
 	// has NOT yet redrawn to it — a grow strands bottom-anchored content
@@ -161,6 +177,11 @@ func newGrid(rows, cols int) [][]cell {
 
 // Faithful reports whether the model has stayed faithful (see the field doc).
 func (s *Screen) Faithful() bool { return s.faithful }
+
+// KnowsBufferState reports whether the model has observed a buffer switch, so a
+// caller can tell "the pty is on the main buffer" from "this model has never
+// been told". See the field doc.
+func (s *Screen) KnowsBufferState() bool { return s.knowsBufferState }
 
 // ResizeDirty reports whether the grid was geometry-changed but the app has not
 // yet repainted to the new size (see the field doc). The attach path must not
@@ -883,6 +904,7 @@ func (s *Screen) enterAlt(clear, saveCur bool) {
 		s.grid = s.alt
 		s.top, s.bottom = 0, s.rows-1
 	}
+	s.knowsBufferState = true
 	if clear {
 		for r := 0; r < s.rows; r++ {
 			s.blankRow(s.grid[r])
@@ -896,6 +918,9 @@ func (s *Screen) enterAlt(clear, saveCur bool) {
 }
 
 func (s *Screen) exitAlt(restoreCur bool) {
+	// Observing the sequence is what counts, not whether it changed anything: a
+	// ?1049l on an already-main buffer still tells us the pty is on main.
+	s.knowsBufferState = true
 	if !s.altActive {
 		return
 	}
