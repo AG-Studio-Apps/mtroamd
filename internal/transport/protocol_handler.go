@@ -279,7 +279,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		if b := sess.Buffer(); b != nil {
 			headBefore = b.HeadSeq()
 		}
-		if sess.NudgePTYGeometry() {
+		if sess.NudgePTYGeometry(nudgeHoldWindow) {
 			// ★ Only treat this as bounced if the app ACTUALLY repainted. If it did not
 			// (wedged, not a TUI, ignores SIGWINCH, stream-backed), fall through to the
 			// synthesised frame exactly as before — otherwise we would have thrown away
@@ -994,6 +994,18 @@ func closeMsgFor(code uint64) string {
 // v1.6.0 RC. Budget-less clients (mtroam attach/tail) are never
 // clamped — full replay stays their contract.
 const AltScreenReplayCap = 128 * 1024
+
+// nudgeHoldWindow is how long the PTY stays one row short before being restored.
+//
+// ★ MEASURED, and load-bearing. A back-to-back nudge with no hold at all does NOT make
+// Claude repaint: Ink reads the terminal size when it handles SIGWINCH, and by then the
+// size is already restored, so it sees no change and renders nothing. vim and less repaint
+// unconditionally and do not care. Against real Claude the floor is between 0 and 15ms —
+// the app only needs the intermediate size to be observable, not to survive Ink's ~250ms
+// render throttle. 120ms is ~8x that floor, to absorb signal-delivery and scheduling
+// latency on a loaded box, and it costs the attach ~120ms in exchange for a screen the
+// app itself drew.
+const nudgeHoldWindow = 120 * time.Millisecond
 
 // bounceRepaintBudget bounds how long an attach waits for the app's SIGWINCH repaint
 // before giving up and computing the replay window anyway. Real Claude answers in ~13ms,
