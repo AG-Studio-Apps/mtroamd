@@ -1,16 +1,16 @@
 Package: mtroamd
-Version: 1.7.10~rc1
+Version: 1.7.10~rc2
 Architecture: armhf
 Maintainer: AG Studio Apps <james@agnticstudio.com>
 Installed-Size: 17371
 Homepage: https://github.com/AG-Studio-Apps/mtroamd
 Priority: optional
 Section: net
-Filename: pool/main/m/mtroamd/mtroamd_1.7.10~rc1_armhf.deb
-Size: 7378320
-SHA256: c66477399796d34a5f8843dc3f5186fb3f713dc2a855ea8e61f41494d86f90ea
-SHA1: b498df50ad4665df0e5bedc451b25dc271ced757
-MD5sum: 0dc1791bbc28bfc16633debe224c04fe
+Filename: pool/main/m/mtroamd/mtroamd_1.7.10~rc2_armhf.deb
+Size: 7378732
+SHA256: c84453ad1d6373b9c4db0c98d3cf73ef0691f75bec5b1770d9560fa584a409a8
+SHA1: 7203beeaf3fca92b929cc8a3a5517b8b27a696b5
+MD5sum: b560a7b523c6bed2d9c7f3a7e9b85b51
 Description: Persistent terminal sessions for the meshTerm iOS app, plus the mtroam CLI.
  mtroamd is a per-user daemon that hosts QUIC/mtRoam terminal sessions which
  survive disconnects and roaming; mtroam is the laptop CLI that attaches to a
