@@ -1076,6 +1076,34 @@ func (s *Session) Resize(rows, cols uint16) error {
 			"from", fmt.Sprintf("%dx%d", oldCols, oldRows),
 			"to", fmt.Sprintf("%dx%d", cols, rows))
 	}
+	// ★★ ORDER IS LOAD-BEARING: resize the MODEL before the PTY.
+	//
+	// SetSize is what raises SIGWINCH, and the app answers it fast — driving real
+	// Claude, the full ED 2 repaint lands ~13 ms later, and it is the FIRST
+	// cell-writing output after the signal. Pump feeds that repaint into the model on
+	// its own screenMu acquisition, so if the model is still at the OLD geometry when
+	// those bytes arrive, a complete and correct repaint is written into a grid of the
+	// wrong size and then top-anchored by the resize that follows. The result is a
+	// model that looks settled and faithful while its lower rows are blank, which is
+	// exactly the shape of the 2026-08-06 device capture (contentBottom=23 inside a
+	// correctly-sized 39-row client grid, cursor already restored to row 36).
+	//
+	// The window used to be everything between SetSize and the model resize below:
+	// two slog calls and ArmResize. That is small but it is real, and it was measured
+	// deterministic at 1 ms against a Pump feed costing ~643 us. Resizing the model
+	// first closes it outright: no byte emitted in response to a SIGWINCH can reach a
+	// model that has not already adopted the new geometry.
+	//
+	// Gated on an actual geometry change, matching the SIGWINCH the app acts on, and
+	// done regardless of any SetSize error: the model tracks the geometry the client
+	// asked for, and the app redraws to it once the signal lands.
+	if oldRows != rows || oldCols != cols {
+		if s.screen != nil {
+			s.screenMu.Lock()
+			s.screen.Resize(int(rows), int(cols))
+			s.screenMu.Unlock()
+		}
+	}
 	err := pty.SetSize(rows, cols)
 	if err != nil {
 		slog.Warn("session.Resize: PTY SetSize failed",
@@ -1090,18 +1118,6 @@ func (s *Session) Resize(rows, cols uint16) error {
 	if err == nil && (oldRows != rows || oldCols != cols) {
 		if s.wedge != nil {
 			s.wedge.ArmResize(oldRows, rows, cols, s.created)
-		}
-	}
-	// Keep the live screen-model geometry in lockstep with the PTY, but
-	// only when the geometry actually changed (matching the SIGWINCH the
-	// app acts on). We resize regardless of the SetSize error: the model
-	// tracks the client's requested geometry, and the app will redraw to
-	// it once SIGWINCH lands.
-	if oldRows != rows || oldCols != cols {
-		if s.screen != nil {
-			s.screenMu.Lock()
-			s.screen.Resize(int(rows), int(cols))
-			s.screenMu.Unlock()
 		}
 	}
 	return err
