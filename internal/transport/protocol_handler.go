@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -240,7 +239,15 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	// true across a daemon restart and would then clamp replay to
 	// AltScreenReplayCap, re-emit an alt footer, and nudge a repaint — all on a
 	// plain shell. See Session.AltScreenForClient.
-	altActive := att.ReplayBudget > 0 && sess.AltScreenForClient()
+	//
+	// ★ Evaluated ONCE for the whole attach. The ack (far below) and the
+	// diagnostic reuse these values rather than re-reading: a Pump feed landing
+	// between two reads — common, since a reattach often coincides with the app
+	// repainting — would otherwise let one attach clamp replay as alt-screen
+	// while telling the client it is on the main buffer.
+	altForClient := sess.AltScreenForClient()
+	wedgeAltRaw := sess.WedgeAltScreenActive()
+	altActive := att.ReplayBudget > 0 && altForClient
 
 	// Full-frame redraw (preferred): when a full-screen TUI is running and
 	// the live screen-model is faithful, inject the WHOLE synthesized clean
@@ -286,7 +293,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 			// archives stay comparable; altActive is the reconciled decision the
 			// replay/nudge/footer paths and the ack actually use. A line with
 			// wedgeAlt=true altActive=false is the latched-flag case.
-			"wedgeAlt", sess.WedgeAltScreenActive(),
+			"wedgeAlt", wedgeAltRaw,
 			"altActive", altActive,
 			"modelHas", hasScr,
 			"modelAlt", altScr,
@@ -484,7 +491,7 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		Restored:        wasRestored,
 		FreshlyCreated:  freshlyCreated,
 		RTTNanos:        rttNanosFor(ctrl),
-		AltScreenActive: sess.AltScreenForClient(),
+		AltScreenActive: altForClient,
 		LastTitle:       sess.LastTitle(),
 		// fg transition anchors (v1.6.3+): time + ring byte-seq of the
 		// last foreground change, plus its cwd. See fgSinceToNanos.
@@ -884,14 +891,13 @@ func shouldResetStrandedMouse(replayBudget uint64, wasRestored bool, fgComm stri
 // shell (not a TUI/agent). Only when a session's foreground is a plain shell is
 // it safe to inject a mouse-mode reset on attach: a shell never wants mouse
 // reporting, whereas a live TUI (htop/vim/claude) would be broken by a blind
-// reset. Allowlist (not a TUI denylist) so a node-wrapped agent reported as
-// "node" is never mistaken for a shell. Login shells arrive as "-bash".
+// reset.
+//
+// Delegates to session.IsPlainShellComm so there is ONE allowlist. A second copy
+// living here is how the alt-screen foreground veto came to miss "-bash" and
+// "mksh" while this one handled them.
 func isPlainShellComm(comm string) bool {
-	switch strings.TrimPrefix(comm, "-") {
-	case "bash", "zsh", "sh", "dash", "ash", "fish", "ksh", "mksh", "tcsh", "csh":
-		return true
-	}
-	return false
+	return session.IsPlainShellComm(comm)
 }
 
 func readAttach(s io.Reader) (protocol.Attach, error) {

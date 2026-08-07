@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -618,12 +619,14 @@ func (s *Session) SetWedgeLogPath(path string) {
 }
 
 // WedgeAltScreenActive returns the alternate-screen state observed by
-// the wedge watcher at the moment of the call. Used by the transport
-// layer to populate AttachAck.AltScreenActive so iOS / mtroam clients
-// can prime their local Terminal into alt-buffer mode before replay
-// — without that, a truncated replay window leaves the client emulator
-// stuck on the normal buffer even though the session is semantically
-// on the alt screen (Claude /tui, htop, less, vim).
+// the wedge watcher at the moment of the call.
+//
+// ★ This is NOT what clients are told. It is one of three inputs to
+// AltScreenForClient, which owns the AttachAck.AltScreenActive answer
+// and the replay/footer/nudge gate — go there instead. This flag is
+// seeded from a persisted boolean on restore and can latch true for
+// the life of a session, which is why it is no longer read directly.
+// Its remaining non-diagnostic caller is AltScreenForClient itself.
 func (s *Session) WedgeAltScreenActive() bool {
 	s.mu.Lock()
 	w := s.wedge
@@ -634,12 +637,23 @@ func (s *Session) WedgeAltScreenActive() bool {
 	return w.AltScreenActive()
 }
 
-// shellComms are foreground commands that cannot themselves be drawing a
-// full-screen TUI. Used ONLY as a veto on the wedge tracker, and only when the
-// screen model has no trustworthy answer — see AltScreenForClient.
-var shellComms = map[string]bool{
-	"bash": true, "zsh": true, "sh": true, "dash": true,
-	"fish": true, "ksh": true, "ash": true, "tcsh": true, "csh": true,
+// IsPlainShellComm reports whether a foreground process comm is an interactive
+// shell rather than a TUI/agent. An allowlist, NOT a TUI denylist, so a
+// node-wrapped agent reported as "node" is never mistaken for a shell.
+//
+// ★ Login shells arrive as "-bash": ForegroundComm falls back to argv whenever
+// /proc/<pgid>/comm is unreadable or names an interpreter, so the prefix must be
+// stripped or the check silently no-ops on exactly the sessions it targets.
+//
+// Canonical home for the allowlist. The transport's mouse-mode-reset gate uses
+// this same list; a second, divergent copy is how the veto came to miss "-bash"
+// and "mksh" in the first place.
+func IsPlainShellComm(comm string) bool {
+	switch strings.TrimPrefix(comm, "-") {
+	case "bash", "zsh", "sh", "dash", "ash", "fish", "ksh", "mksh", "tcsh", "csh":
+		return true
+	}
+	return false
 }
 
 // AltScreenForClient reports whether the session's pty is on the alternate
@@ -669,28 +683,33 @@ var shellComms = map[string]bool{
 // tracker, vetoed by a shell foreground.
 func (s *Session) AltScreenForClient() bool {
 	has, alt, faithful, knows := s.screenAltEvidence()
-	// POSITIVE alt evidence from a faithful model is always authoritative.
-	if has && faithful && alt {
+	// Informed AND trustworthy: the model settles it, in either direction.
+	// NEGATIVE evidence needs `knows` because a restored session builds a fresh
+	// main-buffer model that reports faithful=true while having observed nothing
+	// (persistence.go saves a Repaint ONLY for a faithful, non-resize-dirty ALT
+	// model), and believing that would spill a TUI onto the main screen.
+	if has && faithful && knows {
+		return alt
+	}
+	// The model says ALT but we cannot fully trust it — MarkStale fires on a
+	// sidecar byte GAP, so an unfaithful model may have missed a transition
+	// outright. Take it anyway: this is positive evidence, and the costs are
+	// asymmetric. Over-reporting costs the client a redundant alt prime;
+	// under-reporting leaves it unprimed and spills a full-screen TUI onto the
+	// main buffer. It also stops the foreground veto below from overriding the
+	// model on a pty that is genuinely on the alt screen — a TUI SIGKILLed
+	// without emitting ?1049l leaves exactly that, alt buffer under a shell.
+	if has && alt {
 		return true
 	}
-	// NEGATIVE evidence only counts when the model has actually OBSERVED which
-	// buffer the pty is on. A restored session builds a fresh main-buffer model
-	// and is only fed a Repaint when one was persisted, and persistence.go saves
-	// one ONLY for a faithful, non-resize-dirty ALT model — so a genuinely alt
-	// session saved while resize-dirty or unfaithful comes back reporting
-	// main-buffer AND faithful while knowing nothing at all. Trusting that would
-	// tell the client not to prime its alt buffer and spill a full-screen TUI onto
-	// the main screen: the exact prompt-spill class this must not reintroduce.
-	if has && faithful && knows {
-		return false
-	}
-	// Ambiguous: the tracker is all we have, and it may be a latched restore
-	// seed. This is where the foreground is load-bearing — a shell cannot itself
-	// be drawing a full-screen TUI, so it vetoes a flag nothing else corroborates.
-	// An unknown/empty comm (non-Linux host, pre-v1.6.1 sidecar) is deliberately
-	// NOT a shell, so the tracker still stands there, as it did before.
+	// Nothing but the tracker, which may be a latched restore seed. THIS is where
+	// the foreground is load-bearing — the reported session's model was ignorant,
+	// so the veto is what actually resolved it. A shell cannot itself be drawing a
+	// full-screen TUI, so it vetoes a flag nothing else corroborates. An
+	// unknown/empty comm (non-Linux host, pre-v1.6.1 sidecar) is deliberately NOT
+	// a shell, so the tracker still stands there, as it did before.
 	altTracked := s.WedgeAltScreenActive()
-	if altTracked && shellComms[s.ForegroundComm()] {
+	if altTracked && IsPlainShellComm(s.ForegroundComm()) {
 		return false
 	}
 	return altTracked

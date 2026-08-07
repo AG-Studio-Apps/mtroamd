@@ -874,7 +874,7 @@ func (f fgPTY) ForegroundCwd() string  { return "" }
 // fg=claude for a genuine alt one.
 func TestAltScreenForClientShellForegroundVetoesLatchedTracker(t *testing.T) {
 	t.Parallel()
-	for _, comm := range []string{"bash", "zsh", "fish", "sh"} {
+	for _, comm := range []string{"bash", "-bash", "mksh", "zsh"} {
 		t.Run(comm, func(t *testing.T) {
 			s := makePersistedSession(t, []byte("z"))
 			s.mu.Lock()
@@ -910,5 +910,81 @@ func TestAltScreenForClientTuiForegroundKeepsLatchedTracker(t *testing.T) {
 					"spill a full-screen TUI onto the main buffer", comm)
 			}
 		})
+	}
+}
+
+// TestAltScreenForClientAcrossRealRestore exercises the ACTUAL persistence path
+// the bug lives in, rather than hand-poking the tracker and the model.
+//
+// The defect is an interaction between three places, none of which the
+// hand-poked tests execute: persistence.go saves a Repaint ONLY for a faithful,
+// non-resize-dirty ALT model; it writes alt_active from the raw tracker; and
+// loadSessionFromDir builds a fresh model and feeds a Repaint only if one is
+// present. Change any of those and the hand-poked tests keep passing while the
+// daemon starts lying to clients again.
+//
+// Case: a session genuinely on the alt screen whose model was marked stale by a
+// sidecar gap before the save. No Repaint is persisted, alt_active goes to disk
+// true, and the restored model is fresh main-buffer + faithful + ignorant. The
+// client MUST still be told alt, or a truncated replay spills the TUI onto the
+// main buffer.
+func TestAltScreenForClientAcrossRealRestore(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	original := makePersistedSession(t, []byte("z"))
+	// Genuinely on the alt screen, per both the tracker and the model...
+	original.wedge.ObserveBytes([]byte("\x1b[?1049h"), original.Created())
+	original.screen.Feed([]byte("\x1b[?1049h"))
+	// ...but a sidecar gap cost us bytes, so the model can't be serialized.
+	original.screen.MarkStale()
+	if err := original.SaveTo(dir); err != nil {
+		t.Fatalf("SaveTo: %v", err)
+	}
+
+	reg := NewRegistry(0, time.Hour, time.Hour, 0)
+	if _, err := LoadPersisted(dir, reg, nullLogger()); err != nil {
+		t.Fatalf("LoadPersisted: %v", err)
+	}
+	restored, err := reg.Lookup(original.ID())
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	// Pin the shape this test exists to protect: no Repaint survived, so the
+	// restored model is ignorant. If this precondition ever stops holding the
+	// save conditions changed and the assertion below is no longer the point.
+	if _, alt, _, knows := restored.screenAltEvidence(); alt || knows {
+		t.Fatalf("precondition: expected an ignorant restored model, got "+
+			"alt=%v knows=%v", alt, knows)
+	}
+	if !restored.AltScreenForClient() {
+		t.Error("a genuinely alt-screen session restored without a Repaint was " +
+			"reported as main-buffer — the client will not prime and replay spills")
+	}
+}
+
+// TestAltScreenForClientShellVetoCannotOverrideAnAltModel pins the tiebreak
+// between the two cases the foreground CANNOT tell apart.
+//
+// A TUI SIGKILLed without emitting ?1049l leaves the pty genuinely on the alt
+// buffer with bash in the foreground. If a sidecar gap has also marked the model
+// stale, the ONLY thing standing between the client and a spilled full-screen
+// TUI is that a model saying "alt" outranks the foreground veto. The costs are
+// asymmetric: over-reporting costs a redundant alt prime, under-reporting spills.
+func TestAltScreenForClientShellVetoCannotOverrideAnAltModel(t *testing.T) {
+	t.Parallel()
+	s := makePersistedSession(t, []byte("z"))
+	s.mu.Lock()
+	s.pty = fgPTY{PTY: s.pty, comm: "bash"}
+	s.mu.Unlock()
+	s.wedge.SetAltScreenActive(true)
+	s.screen.Feed([]byte("\x1b[?1049h")) // genuinely on the alt buffer
+	s.screen.MarkStale()                 // ...but a sidecar gap cost us bytes
+	if _, alt, faithful, _ := s.screenAltEvidence(); !alt || faithful {
+		t.Fatalf("precondition: want an unfaithful ALT model, got alt=%v faithful=%v",
+			alt, faithful)
+	}
+	if !s.AltScreenForClient() {
+		t.Error("a bash foreground overrode a model that says the pty is on the " +
+			"alt buffer — the client will not prime and replay will spill")
 	}
 }
