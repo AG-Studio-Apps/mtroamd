@@ -1123,6 +1123,43 @@ func (s *Session) Resize(rows, cols uint16) error {
 	return err
 }
 
+// NudgePTYGeometry raises a SIGWINCH at the child WITHOUT changing the session's
+// geometry: it drops one row on the PTY and immediately puts it back. The attach path
+// uses it to make a full-screen app repaint ITSELF, so the client can be handed the app's
+// own frame instead of one the daemon reconstructed from its model.
+//
+// ★ Deliberately does NOT go through Resize, and deliberately touches nothing but the
+// PTY. The session's geometry is identical when this returns, so s.rows/s.cols, the live
+// screen-model and the wedge watcher must not observe a resize at all. Routing this
+// through Resize instead would: mark the model resize-dirty twice (which then blocks the
+// very fallback we rely on when the app does not answer), double-count resizesObserved in
+// the wedge diagnostics, and arm the wedge detector twice — the last of which can surface
+// a false "may be wedged" banner. Not arming it is what makes that risk vanish rather
+// than merely be suppressed.
+//
+// Returns false when there is nothing to nudge (closed, stream-backed, no PTY, or a
+// degenerate height), so the caller can fall back.
+func (s *Session) NudgePTYGeometry() bool {
+	s.mu.Lock()
+	rows, cols, pty, closed := s.rows, s.cols, s.pty, s.closed
+	s.mu.Unlock()
+	if closed || pty == nil || rows < 2 {
+		return false
+	}
+	if err := pty.SetSize(rows-1, cols); err != nil {
+		slog.Debug("session.NudgePTYGeometry: shrink failed", "sid", s.id.String(), "err", err)
+		return false
+	}
+	if err := pty.SetSize(rows, cols); err != nil {
+		// Best effort restore already attempted; the geometry the session believes in is
+		// unchanged, and the next real Resize will re-assert it.
+		slog.Warn("session.NudgePTYGeometry: restore failed — PTY may be one row short",
+			"sid", s.id.String(), "err", err)
+		return false
+	}
+	return true
+}
+
 // InjectAltScreenRepaint atomically snapshots the live screen-model and,
 // when a full-screen TUI is running (alt buffer) AND the model is still
 // faithful, injects a synthesized clean full-frame redraw into the output
