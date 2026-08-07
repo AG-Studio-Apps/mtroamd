@@ -1143,7 +1143,7 @@ const (
 	nudgeWedgeGrace = 5 * time.Second
 )
 
-func (s *Session) NudgeRepaint(hold time.Duration) bool {
+func (s *Session) NudgeRepaint(ctx context.Context, gen uint64, hold time.Duration) bool {
 	rows, cols := s.WindowSize()
 	if rows < minNudgeRows {
 		return false
@@ -1155,14 +1155,33 @@ func (s *Session) NudgeRepaint(hold time.Duration) bool {
 		return false
 	}
 
+	// ★ Only the CURRENT exclusive client may move session-wide geometry, checked here
+	// and again after the hold. Every other session-mutating path in the transport does
+	// this; without it a displaced handler keeps nudging a session it no longer owns, and
+	// the client that displaced it is denied its own frame because the PTY is a row short
+	// at the moment its geometry is compared.
+	if ctx.Err() != nil || !s.IsCurrentExclusive(gen) {
+		return false
+	}
 	s.SuppressWedgeUntil(time.Now().Add(nudgeWedgeGrace))
 	if err := s.Resize(rows-1, cols); err != nil {
 		slog.Debug("session.NudgeRepaint: shrink failed", "sid", s.id.String(), "err", err)
 		return false
 	}
-	time.Sleep(hold)
+	// Interruptible: on teardown or displacement, restore immediately rather than
+	// holding a shrunken PTY for the rest of the window.
+	select {
+	case <-time.After(hold):
+	case <-ctx.Done():
+	}
 
 	// Only restore if nobody else has moved the geometry in the meantime.
+	if !s.IsCurrentExclusive(gen) {
+		// Someone else owns the session now; their geometry is authoritative.
+		slog.Info("session.NudgeRepaint: displaced during the hold — leaving geometry alone",
+			"sid", s.id.String())
+		return false
+	}
 	if nowRows, nowCols := s.WindowSize(); nowRows != rows-1 || nowCols != cols {
 		slog.Info("session.NudgeRepaint: geometry changed under the nudge — leaving it",
 			"sid", s.id.String(), "now", fmt.Sprintf("%dx%d", nowCols, nowRows))

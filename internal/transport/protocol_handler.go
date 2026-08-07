@@ -494,38 +494,6 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 		return
 	}
 
-	// ★★ REATTACH REPAINT NUDGE — provoke the app to redraw itself, AFTER the ack.
-	//
-	// A same-geometry reattach signals nobody: SetSize with unchanged dimensions changes
-	// nothing, so no SIGWINCH is raised and the app never repaints. The client is handed a
-	// frame reconstructed from the daemon's model, and the whole trust apparatus above
-	// exists to judge that reconstruction. Rotating the phone changes the geometry, the app
-	// redraws, and the screen is correct — that has always been the user's workaround.
-	//
-	// So do it deliberately: drop a row, hold, restore. The app's repaint then arrives as
-	// ordinary LIVE output on top of whatever the attach already delivered.
-	//
-	// ★ It is deliberately ADDITIVE. An earlier revision skipped the synthesised frame and
-	// tried to prove the app had repainted before doing so; there is no app-agnostic way to
-	// prove that, because on a streaming session any output looks like a repaint, and the
-	// false positive threw away the only complete screen the daemon can produce. The frame
-	// is now always the floor: worst case the client gets exactly what it gets today, best
-	// case the app's own repaint corrects it a moment later.
-	//
-	// Placed after the ack so it adds nothing to attach latency and cannot poison the frame
-	// that has already been chosen.
-	if !attachResizedGrid && altActive && attachMode == session.AttachExclusive {
-		// ★ Require the MODEL to agree that a full-screen app is running, not just the
-		// wedge watcher. The watcher's flag is seeded from the DEAD app's persisted meta
-		// on the restore path and lazySpawnRestoredPTY does not clear it, so on its own it
-		// will happily authorise a PTY mutation against a freshly spawned bash prompt —
-		// which is the main-buffer double-redraw this is gated to avoid.
-		if _, modelAlt, _, _ := sess.ScreenSnapshot(); modelAlt &&
-			len(sess.PeerModes(attachGen)) == 0 {
-			sess.NudgeRepaint(nudgeHoldWindow)
-		}
-	}
-
 	// Structured attach event — operators tailing the daemon's
 	// stderr can see who's coming and going, and a multi-attach
 	// debugging session can pivot on session_id + mode + peer
@@ -554,6 +522,38 @@ func (h *ProtocolHandler) HandleConnection(ctx context.Context, ctrl Conn) {
 	)
 
 	pumpsCtx, pumpsCancel := context.WithCancel(attachCtx)
+
+	// ★★ REATTACH REPAINT NUDGE — provoke the app to redraw itself.
+	//
+	// A same-geometry reattach signals nobody: SetSize with unchanged dimensions changes
+	// nothing, so no SIGWINCH is raised and the app never repaints. The client is handed a
+	// frame reconstructed from the daemon's model, and the trust apparatus above exists to
+	// judge that reconstruction. Rotating the phone changes the geometry, the app redraws
+	// and the screen is correct, which is why rotation has always been the workaround.
+	//
+	// So do it deliberately: drop a row, hold, restore. The app's repaint then arrives as
+	// ordinary LIVE output on top of whatever the attach already delivered.
+	//
+	// ★ ADDITIVE: the synthesised frame is still always sent. An earlier revision skipped
+	// it and tried to prove the app had repainted first, which cannot be done — on a
+	// streaming session any output looks like a repaint, and the false positive threw away
+	// the only complete screen the daemon can produce.
+	//
+	// ★ CONCURRENT, and only once the pumps are up. Run inline between the AttachAck and
+	// the output pump, its sleep held back the synthesised frame, the footer re-emit and
+	// every replayed byte, so the client saw nothing at all for the duration. Here it costs
+	// the attach nothing, and NudgeRepaint bails on a cancelled context or a lost exclusive
+	// claim, so teardown is never waiting on it.
+	if !attachResizedGrid && altActive && attachMode == session.AttachExclusive {
+		// ★ Require the MODEL to agree a full-screen app is running, not just the wedge
+		// watcher: its flag is seeded from the DEAD app's persisted meta on the restore
+		// path and lazySpawnRestoredPTY does not clear it, so alone it would authorise a
+		// PTY mutation against a freshly spawned bash prompt.
+		if _, modelAlt, _, _ := sess.ScreenSnapshot(); modelAlt &&
+			len(sess.PeerModes(attachGen)) == 0 {
+			go sess.NudgeRepaint(pumpsCtx, attachGen, nudgeHoldWindow)
+		}
+	}
 	defer pumpsCancel()
 
 	// recoverPump contains a panic to a single per-attach goroutine.

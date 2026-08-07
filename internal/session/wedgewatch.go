@@ -247,9 +247,17 @@ func (w *wedgeWatcher) SetOnWedge(cb func(WedgeNotice)) {
 // positive storm during `claude --continue` scrollback replay (lots of
 // rapid CUDs from re-painting history, no real wedge). Pass a
 // zero-value time.Time to clear suppression.
+// SuppressUntil mutes detections until t, or leaves a LONGER existing window alone.
+//
+// ★ Never shortens. The recovery sequencer sets a 30s post-recovery cooldown to mute the
+// false-positive storm that `claude --continue` replaying scrollback would otherwise
+// trigger; a plain assignment let any later, shorter suppression (the reattach repaint
+// nudge asks for 5s) silently cut 25s off that guard and re-expose the storm.
 func (w *wedgeWatcher) SuppressUntil(t time.Time) {
 	w.mu.Lock()
-	w.suppressUntil = t
+	if t.After(w.suppressUntil) {
+		w.suppressUntil = t
+	}
 	w.mu.Unlock()
 }
 
