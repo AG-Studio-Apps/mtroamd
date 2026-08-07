@@ -1139,7 +1139,7 @@ func (s *Session) Resize(rows, cols uint16) error {
 //
 // Returns false when there is nothing to nudge (closed, stream-backed, no PTY, or a
 // degenerate height), so the caller can fall back.
-func (s *Session) NudgePTYGeometry() bool {
+func (s *Session) NudgePTYGeometry(hold time.Duration) bool {
 	s.mu.Lock()
 	rows, cols, pty, closed := s.rows, s.cols, s.pty, s.closed
 	s.mu.Unlock()
@@ -1149,6 +1149,9 @@ func (s *Session) NudgePTYGeometry() bool {
 	if err := pty.SetSize(rows-1, cols); err != nil {
 		slog.Debug("session.NudgePTYGeometry: shrink failed", "sid", s.id.String(), "err", err)
 		return false
+	}
+	if hold > 0 {
+		time.Sleep(hold)
 	}
 	if err := pty.SetSize(rows, cols); err != nil {
 		// Best effort restore already attempted; the geometry the session believes in is
