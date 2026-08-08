@@ -679,31 +679,145 @@ func TestProtocolHandlerGoodbyeReplacedOnDisplacement(t *testing.T) {
 	}
 }
 
-// TestReplayEndsOnAltScreen covers the alt-buffer twin of the stranded-mouse
-// sanitisation. Built from the REAL failure: session "agnticStudio" carried two
-// ?1049h and zero ?1049l in its ring, the last 16 KiB from head and followed
-// immediately by the mouse-mode enables, so every attach replayed the client
-// onto the alt buffer under a plain bash — killing scrollback panning outright.
-func TestReplayEndsOnAltScreen(t *testing.T) {
+
+// TestAltScreenScan pins the replay-window scanner. Built from the REAL failure
+// (session "agnticStudio": two ESC[?1049h, zero ESC[?1049l, the last enter
+// followed by the mouse-mode enables) plus the three misreads that killed the
+// first, substring-based attempt at this in review.
+func TestAltScreenScan(t *testing.T) {
 	t.Parallel()
-	const budget = 64 * 1024
 	cases := []struct {
-		name  string
-		write []byte
-		want  bool
+		name    string
+		win     []byte
+		wantAlt bool
+		// wantPast is the offset the window would be trimmed to; -1 = don't care.
+		wantPast int
 	}{
-		{"the real shape: enter with no exit", []byte(
-			"hello\x1b[?1049h\x1b[2J\x1b[H\x1b[?1000h\x1b[?1006h prompt$ "), true},
+		{"the real shape: enter, no exit", []byte(
+			"hi\x1b[?1049h\x1b[2J\x1b[H\x1b[?1006h prompt$ "), true, 10},
 		{"matched enter then exit", []byte(
-			"hello\x1b[?1049h\x1b[2J vim \x1b[?1049l back at the shell$ "), false},
+			"hi\x1b[?1049h vim \x1b[?1049l back$ "), false, -1},
 		{"re-entered after an exit", []byte(
-			"\x1b[?1049h a \x1b[?1049l b \x1b[?1049h c "), true},
-		{"plain shell traffic only", []byte("total 12\r\n-rw-r--r-- 1 james\r\n$ "), false},
-		{"legacy 47h with no exit", []byte("x\x1b[?47h\x1b[2J"), true},
-		{"legacy 1047 pair", []byte("x\x1b[?1047h\x1b[2J\x1b[?1047l"), false},
-		{"empty ring", nil, false},
+			"\x1b[?1049h a \x1b[?1049l b \x1b[?1049h c "), true, -1},
+		{"plain shell traffic", []byte("total 12\r\n-rw-r--r--\r\n$ "), false, -1},
+		{"legacy 47h, no exit", []byte("x\x1b[?47h\x1b[2J"), true, -1},
+		{"legacy 1047 pair", []byte("x\x1b[?1047h\x1b[2J\x1b[?1047l"), false, -1},
+
+		// ★ The three the substring scan got WRONG, each of which injected a
+		// spurious recovery into a healthy main-buffer session.
+		{"RIS after a stranded enter (what `reset` emits)", []byte(
+			"\x1b[?1049h junk \x1bc james@ubuntu:~$ "), false, -1},
+		{"multi-param enter is still an enter", []byte(
+			"\x1b[?1049;1002;1006h\x1b[2J"), true, 18},
+		{"multi-param exit really exits", []byte(
+			"\x1b[?1049h x \x1b[?1002;1049;1006l done"), false, -1},
+		{"1049h inside an OSC title is DATA", []byte(
+			"\x1b]0;weird \x1b[?1049h title\x07 $ "), false, -1},
+		{"1049h inside a DCS payload is DATA", []byte(
+			"\x1bP+q\x1b[?1049h\x1b\\ $ "), false, -1},
+		{"DECRQM query must not count as a set", []byte(
+			"\x1b[?1049$p"), false, -1},
+
+		{"truncated escape at the window edge", []byte("abc\x1b[?104"), false, -1},
+		{"bare ESC at the very end", []byte("abc\x1b"), false, -1},
+		{"empty", nil, false, -1},
 	}
 	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotAlt, gotPast := altScreenScan(tc.win)
+			if gotAlt != tc.wantAlt {
+				t.Errorf("endsOnAlt = %v, want %v", gotAlt, tc.wantAlt)
+			}
+			if tc.wantAlt && tc.wantPast >= 0 && gotPast != tc.wantPast {
+				t.Errorf("offsetPastEnter = %d, want %d", gotPast, tc.wantPast)
+			}
+			// Whenever we would trim, the offset MUST land on a sequence
+			// boundary — never mid-escape — or the client parses garbage.
+			if gotAlt && gotPast > 0 && gotPast < len(tc.win) {
+				if tc.win[gotPast-1] != 'h' {
+					t.Errorf("trim offset %d does not sit just past a CSI final byte (got %q)",
+						gotPast, tc.win[gotPast-1])
+				}
+			}
+		})
+	}
+}
+
+// TestTrimStrandedAltScreenLeavesClientOnMain is the test the first attempt at
+// this fix did not have, and its absence is why an unsound approach looked
+// correct: the old table exercised only the pure detector, so it could not tell
+// "the client is fixed" from "the client is left on the alt buffer with its
+// newest scrollback discarded".
+//
+// The property under test is the one the USER experiences — after the trim, the
+// bytes actually replayed must (a) leave the emulator on the MAIN buffer and
+// (b) still contain everything that followed the stranded enter. The rejected
+// approach (append ESC[?1049l at the tail) satisfies (a) and fails (b): on the
+// real session those bytes were the user's `ls` output and their live prompt.
+func TestTrimStrandedAltScreenLeavesClientOnMain(t *testing.T) {
+	t.Parallel()
+	const budget = 64 * 1024
+	// The real shape: pre-TUI scrollback, a TUI that entered and died without
+	// restoring, then real shell output the user must not lose.
+	pre := []byte("$ old command\r\nold output\r\n")
+	enter := []byte("\x1b[?1049h\x1b[2J\x1b[H\x1b[?1000h\x1b[?1006h")
+	post := []byte("\r\nflowtest\r\npackage-lock.json\r\njames@ubuntu:~$ ")
+
+	for _, tc := range []struct {
+		name string
+		ack  uint64
+	}{{"fresh attach", 0}, {"resume from before the enter", uint64(len(pre) / 2)}} {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, err := session.NewRingBuffer(1 << 20)
+			if err != nil {
+				t.Fatalf("NewRingBuffer: %v", err)
+			}
+			for _, chunk := range [][]byte{pre, enter, post} {
+				if _, err := buf.Write(chunk); err != nil {
+					t.Fatalf("Write: %v", err)
+				}
+			}
+			start, head, _ := computeReplayWindow(buf, tc.ack, budget, false)
+			newStart, trimmed := trimStrandedAltScreen(buf, start, head)
+			if !trimmed {
+				t.Fatal("a window ending on a stranded enter was not trimmed")
+			}
+			replayed, _, _ := buf.ReadSince(newStart, int(head-newStart))
+
+			if onAlt, _ := altScreenScan(replayed); onAlt {
+				t.Error("after trimming, the replayed bytes STILL leave the client " +
+					"on the alt buffer")
+			}
+			if bytes.Contains(replayed, []byte("\x1b[?1049h")) {
+				t.Error("the stranded enter survived the trim")
+			}
+			// (b) — the half the rejected append-an-exit approach threw away.
+			if !bytes.Contains(replayed, []byte("james@ubuntu:~$ ")) {
+				t.Error("the post-enter content (the user's output and live prompt) " +
+					"was lost — this is exactly the regression the tail-injection had")
+			}
+			if !bytes.Contains(replayed, []byte("package-lock.json")) {
+				t.Error("post-enter scrollback was lost")
+			}
+		})
+	}
+}
+
+// TestTrimStrandedAltScreenLeavesCleanWindowsAlone is the other direction: a
+// session that legitimately left the alt screen, or never entered it, must not
+// have its replay window moved at all.
+func TestTrimStrandedAltScreenLeavesCleanWindowsAlone(t *testing.T) {
+	t.Parallel()
+	const budget = 64 * 1024
+	for _, tc := range []struct {
+		name  string
+		write []byte
+	}{
+		{"never entered alt", []byte("$ ls\r\nfile\r\n$ ")},
+		{"entered and exited cleanly", []byte("$ vim\x1b[?1049h edit \x1b[?1049l\r\n$ ")},
+		{"stranded enter, then the user ran `reset`", []byte("\x1b[?1049h junk \x1bc $ ")},
+		{"empty ring", nil},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			buf, err := session.NewRingBuffer(1 << 20)
 			if err != nil {
@@ -714,14 +828,17 @@ func TestReplayEndsOnAltScreen(t *testing.T) {
 					t.Fatalf("Write: %v", err)
 				}
 			}
-			if got := replayEndsOnAltScreen(buf, 0, budget, false); got != tc.want {
-				t.Errorf("replayEndsOnAltScreen = %v, want %v", got, tc.want)
+			start, head, _ := computeReplayWindow(buf, 0, budget, false)
+			got, trimmed := trimStrandedAltScreen(buf, start, head)
+			if trimmed || got != start {
+				t.Errorf("a clean window was trimmed (start %d -> %d) — the client "+
+					"loses scrollback it should have kept", start, got)
 			}
 		})
 	}
 	t.Run("nil buffer is safe", func(t *testing.T) {
-		if replayEndsOnAltScreen(nil, 0, budget, false) {
-			t.Error("nil buffer must not report a stranded alt screen")
+		if _, trimmed := trimStrandedAltScreen(nil, 0, 100); trimmed {
+			t.Error("nil buffer must not report a trim")
 		}
 	})
 }
