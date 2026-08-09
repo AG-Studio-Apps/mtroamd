@@ -34,6 +34,13 @@ type QueryFilter struct {
 	// pending holds the tail bytes of an unfinished escape sequence
 	// from the previous read. Always empty at the end of a clean
 	// process() call when no partial sequence is in flight.
+	//
+	// ★★ ALWAYS a COPY, never a slice of the caller's chunk. Pump reads into a
+	// single reused 8 KiB buffer and hands `chunk[:n]` straight in, so retaining
+	// a slice meant the next read overwrote the very bytes we parked: a sequence
+	// straddling a read boundary was rebuilt from whatever landed there instead.
+	// Process's output feeds the ring as well as the screen model, so that
+	// corruption reached the client too and rendered as literal escape text.
 	pending []byte
 
 	// pty is the writer the filter uses to inject synthetic
@@ -85,14 +92,14 @@ func (q *QueryFilter) Process(chunk []byte) []byte {
 		// pass through.
 		if idx+1 >= len(chunk) {
 			// ESC at end of chunk; might be a partial introducer.
-			q.pending = chunk[idx:]
+			q.pending = append([]byte(nil), chunk[idx:]...) // COPY: `chunk` is the caller's reused read buffer
 			return out
 		}
 		if chunk[idx+1] == 0x5D /* ] */ {
 			consumed, oscOut, isQuery := q.processOSC(chunk[idx:])
 			if consumed == 0 {
 				// Need more bytes — partial OSC (no terminator yet).
-				q.pending = chunk[idx:]
+				q.pending = append([]byte(nil), chunk[idx:]...) // COPY: `chunk` is the caller's reused read buffer
 				return out
 			}
 			if !isQuery {
@@ -139,7 +146,7 @@ func (q *QueryFilter) Process(chunk []byte) []byte {
 		if end >= len(chunk) {
 			// Sequence runs off the end of this chunk; hold for next
 			// read so we evaluate it as a complete unit.
-			q.pending = chunk[idx:]
+			q.pending = append([]byte(nil), chunk[idx:]...) // COPY: `chunk` is the caller's reused read buffer
 			return out
 		}
 		final := chunk[end]

@@ -68,6 +68,8 @@ The minisign public key for `SHA256SUMS.minisig` verification lives in [`docs/re
 
   Or grab a `.deb` straight from a release and `sudo dpkg -i mtroamd_*_<arch>.deb` (verify against `SHA256SUMS-deb`). A pre-release **development** channel exists for testers — unstable, see [`docs/apt-dev-channel.md`](docs/apt-dev-channel.md).
 
+  The unit ships cgroup ceilings (`MemoryHigh=40%`, `MemoryMax=55%`, `MemorySwapMax=512M`, percentages of installed RAM) so a runaway session cannot take the host down. Tune them with a drop-in at `~/.config/systemd/user/mtroamd.service.d/*.conf` — drop-ins survive upgrades and `mtroamd migrate`; edits to the unit file itself do not.
+
   Uninstall: `sudo apt remove mtroamd` stops + removes the daemon but keeps your sessions/cert (so a reinstall reuses the same identity); `sudo apt purge mtroamd` removes those too for a full clean wipe.
 - **Fedora (dnf)** — a GPG-signed yum/dnf repo (`x86_64`, `aarch64`):
 

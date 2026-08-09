@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/build"
@@ -25,6 +27,46 @@ const (
 	connectExitUnknownSession   = 3
 	connectExitCapacity         = 4
 )
+
+// Tuning for the daemon → stdout path in bridgeStdio.
+const (
+	// stdoutQueueDepth buffers bursts so a briefly-slow SSH channel does not
+	// stall the conn reader. Sized against stdoutFlushGrace, not just against
+	// memory: whatever this holds must be drainable within that grace on a poor
+	// link, or a clean disconnect truncates the last screenful. 8 × 32 KiB =
+	// 256 KiB, which drains inside the grace at ~25 KB/s.
+	stdoutQueueDepth = 8
+	// stdoutFlushGrace bounds the drain of already-queued output once teardown
+	// starts, so a disconnect does not lose the last screenful. Must outlast a
+	// full stdoutQueueDepth on a bad link (256 KiB at ~25 KB/s ≈ 10s); a 2s
+	// grace silently truncated exactly what it existed to preserve.
+	stdoutFlushGrace = 12 * time.Second
+)
+
+// stdoutStallTimeout bounds how long a FULL queue may stay full before we tear
+// the bridge down. It is the ONLY exit for the backpressured case, and picking
+// it is a genuine trade with no free answer.
+//
+// The reader normally sees a daemon close instantly, because it parks in
+// conn.Read. But once stdout wedges and the queue fills we are no longer
+// reading, and a close cannot be detected without reading: a non-blocking
+// MSG_PEEK still returns the bytes already buffered ahead of the FIN, so it
+// cannot distinguish "peer gone" from "more data". Reading into an overflow to
+// find the FIN is exactly the unbounded buffering this change exists to avoid.
+//
+// So the two failure modes pull opposite ways. Too SHORT drops a healthy
+// session: a suspended iOS app stops draining the channel entirely, and if the
+// session is still producing output (a build, an agent turn) the queue fills
+// while nothing is wrong. Too LONG re-creates the leak: a client whose channel
+// is genuinely dead lingers, holding one of the daemon's 64 MaxInflight
+// loopback slots, and an app retry-looping over a flaky link stacks them until
+// new attaches are refused.
+//
+// Five minutes sits deliberately between: it comfortably outlasts an
+// app-switch, and a session backgrounded longer than that reattaches on resume,
+// which is mtRoam's ordinary behaviour and not a data loss. Meanwhile a dead
+// client is reclaimed in minutes instead of never.
+const stdoutStallTimeout = 5 * time.Minute
 
 // runConnect is the SSH-side helper. It dials the daemon's unix
 // socket, sends an AllocateRequest, prints the bootstrap line on
@@ -437,21 +479,142 @@ func runStdioMode(resp *ipc.AllocateResponse) int {
 	}
 	defer conn.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	return bridgeStdio(conn, os.Stdin, os.Stdout)
+}
+
+// bridgeStdio pumps bytes between the daemon connection and the SSH
+// channel's stdio until either side ends, then returns so main can
+// exit the process.
+//
+// Split out of runStdioMode so the teardown paths are testable without
+// a real daemon or a real SSH channel; see connect_test.go.
+func bridgeStdio(conn net.Conn, in io.Reader, out io.Writer) int {
+	return bridgeStdioWithStall(conn, in, out, stdoutStallTimeout)
+}
+
+// bridgeStdioWithStall is bridgeStdio with the stall budget injected, so the
+// teardown tests can exercise the backpressure path in milliseconds instead of
+// half an hour. Passing it in beats a mutable package var: nothing shared is
+// rewritten, so the tests cannot race each other or leak state between cases.
+func bridgeStdioWithStall(conn net.Conn, in io.Reader, out io.Writer, stall time.Duration) int {
+	// SIGHUP is the useful one: sshd sends it when a channel goes away, so it
+	// is a teardown signal we previously ignored. SIGTERM/SIGINT make a stuck
+	// client killable by hand instead of needing SIGKILL.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(),
+		syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+	defer stopSignals()
+	ctx, cancel := context.WithCancel(sigCtx)
 	defer cancel()
 
-	// stdin → daemon
+	pending := make(chan []byte, stdoutQueueDepth)
+	flushed := make(chan struct{})
+
+	// stdout writer. A write error CANCELS: it means the channel is gone, and
+	// the old io.Copy tore the process down the instant one happened. Returning
+	// quietly instead would leave the reader pumping into a queue nobody drains
+	// — the leaked-client shape this whole change exists to remove, re-entered
+	// through the error path.
 	go func() {
+		defer close(flushed)
 		defer cancel()
-		_, _ = io.Copy(conn, os.Stdin)
+		for chunk := range pending {
+			if _, err := out.Write(chunk); err != nil {
+				return
+			}
+		}
 	}()
 
-	// daemon → stdout
+	// stdin → daemon. Safe as a plain io.Copy: if it blocks forever in read(2)
+	// the process still exits, because main os.Exit()s on our return and that
+	// does not wait for goroutines.
 	go func() {
 		defer cancel()
-		_, _ = io.Copy(os.Stdout, conn)
+		_, _ = io.Copy(conn, in)
+	}()
+
+	// daemon → stdout, deliberately SPLIT into this reader and the writer above.
+	//
+	// This is the fix for the process leak that froze a box on 2026-08-06. It
+	// used to be a single io.Copy(out, conn), and io.Copy is one read→write
+	// loop: while it is blocked writing to stdout it is NOT reading conn. When
+	// the SSH channel's stdout pipe filled because the far side stopped draining
+	// — phone dropped off, app killed, tailscaled still holding the pipe open so
+	// stdin never hit EOF — that goroutine pinned itself in write(2) and never
+	// came back to notice the daemon closing. Neither fd is deadline-capable (Go
+	// does not register std fds with the netpoller), so nothing could interrupt
+	// it and the process lived until the next reboot.
+	//
+	// Reading in its own goroutine means the conn read parks in the netpoller,
+	// so a daemon close is seen at once whenever we are actually reading — which
+	// is every case except a wedged stdout. That one is bounded by
+	// stdoutStallTimeout instead; see there for why it cannot be detected.
+	go func() {
+		defer cancel()
+		defer close(pending)
+
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				// Copied because buf is reused on the next read: handing the
+				// slice itself to the writer would let the next read overwrite
+				// bytes that have not been written out yet.
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				if !enqueue(ctx, pending, chunk, stall) {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 
 	<-ctx.Done()
+
+	// Unblock the reader so it can finish and close `pending`. Without this the
+	// flush below waits its full grace on every teardown that did NOT come from
+	// the reader — stdin EOF, a signal — because the reader is still parked in
+	// conn.Read and the writer is still ranging over a channel nobody closes.
+	// The conn is being torn down regardless; runStdioMode closes it too.
+	_ = conn.Close()
+
+	// Give the writer a bounded chance to drain what is still queued before main
+	// os.Exit()s, WHICHEVER path cancelled us. Doing this in the reader's defer
+	// instead only covered the reader's own EOF: the stdin pump cancels on a
+	// write error to conn, and the signal handler cancels directly, and both of
+	// those would have exited mid-flush and dropped the last screenful.
+	flushTimer := time.NewTimer(stdoutFlushGrace)
+	defer flushTimer.Stop()
+	select {
+	case <-flushed:
+	case <-flushTimer.C:
+	}
 	return connectExitOK
+}
+
+// enqueue hands a chunk to the stdout writer, reporting false when the bridge
+// should tear down instead.
+//
+// The fast path is a plain send, so a healthy session pays nothing. Backpressure
+// itself is NOT a failure — a suspended iOS app stops draining the channel
+// entirely and its session should survive that — so the wait is bounded only by
+// `stall`, whose value is the trade documented on stdoutStallTimeout.
+func enqueue(ctx context.Context, pending chan<- []byte, chunk []byte, stall time.Duration) bool {
+	select {
+	case pending <- chunk:
+		return true
+	default:
+	}
+	deadline := time.NewTimer(stall)
+	defer deadline.Stop()
+	select {
+	case pending <- chunk:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-deadline.C:
+		return false
+	}
 }
