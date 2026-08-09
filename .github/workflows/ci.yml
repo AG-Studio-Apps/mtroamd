@@ -33,6 +33,23 @@ jobs:
         # macos-install-smoke.yml is NOT a substitute: it is workflow_dispatch
         # only and self-describes as "NOT a recurring guard".
         os: [ubuntu-latest, macos-26]
+    env:
+      # ★★ macOS caps a UNIX socket path (sun_path) at 104 bytes, vs 108 on
+      # Linux, and the runner's default TMPDIR is
+      # /var/folders/df/<20 chars>/T/. A `t.TempDir()` under that plus a test
+      # name plus "/001/mtroamd.sock" reaches 116 bytes, so every test that
+      # binds or dials a socket failed with a bare "bind: invalid argument"
+      # that names no limit. Measured from the first macOS run: 116 vs 104,
+      # and 72 under /tmp.
+      #
+      # These are PRE-EXISTING assumptions in the tests (short temp paths),
+      # surfaced rather than caused by adding this leg - the daemon's own
+      # socket paths are chosen by the installer, not by TMPDIR. Setting a
+      # short TMPDIR for the job fixes every one of them without touching the
+      # tests; a per-test darwin special case would be the same fix repeated
+      # nine times.
+      # Set for both legs: /tmp is already the default on the Linux runner.
+      TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v6
 
@@ -47,14 +64,22 @@ jobs:
       - name: go test -race
         run: go test ./... -race -count=1
 
-      # Diagnostic, not an assertion. The shell-startup tests skip a shell
-      # that is absent, so this records what the leg actually covered - a
-      # silent skip on a missing zsh would otherwise read as a pass.
+      # Diagnostic, not an assertion. The shell-startup tests SKIP a shell that
+      # is absent, so this records what the leg actually covered - a silent skip
+      # on a missing zsh would otherwise read as a pass.
       - name: Shell inventory
         if: always()
         run: |
           echo "bash: $(bash --version 2>/dev/null | head -1 || echo absent)"
           echo "zsh:  $(zsh --version 2>/dev/null || echo absent)"
+
+      # Re-run the shell-startup tests VERBOSELY so each shell's result is
+      # visible per OS. `go test` prints nothing for a passing package, so
+      # without this the macOS coverage this leg exists for is only inferable
+      # from the absence of a failure - and a skipped zsh is invisible.
+      - name: Shell-startup coverage (explicit)
+        if: always()
+        run: go test ./internal/ptysidecar/ -run TestSeededShell -count=1 -v
 
   fuzz:
     name: Fuzz parsers (bounded)
