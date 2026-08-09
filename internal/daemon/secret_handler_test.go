@@ -27,11 +27,24 @@ func allocSession(t *testing.T, c *ipc.Client) string {
 	if len(resp.BootID) != 16 {
 		t.Errorf("allocate BootID = %q, want 16 hex chars", resp.BootID)
 	}
-	// A freshly-spawned session ran shimSpawnEnv, so it is shim-ready:
-	// iOS relies on this to NOT warn "regenerate the session" for a
-	// session that can actually receive a brokered secret.
-	if resp.ShimReady == nil || !*resp.ShimReady {
-		t.Errorf("fresh allocate ShimReady = %v, want *true", resp.ShimReady)
+	// ★★ ShimReady is FALSE here, and that is the corrected behaviour, not a
+	// regression. This helper allocates `/bin/sh -c "while true; …"`: POSIX sh
+	// with non-benign args, so the sidecar seeds NO rcfile and nothing defines
+	// _mt_shim_path. shimSpawnEnv putting the shim dir first at spawn is not
+	// the same guarantee: the flag now means "we seeded this shell, so the
+	// re-assert runs every prompt", because the case that matters is
+	// `bash -c "tmux new"`, where every pane reads the user's untouched rc and
+	// an ordinary `PATH="$HOME/bin:$PATH"` outranks the shim. Reporting true
+	// there let iOS call a secret push `.delivered` while the tool launched
+	// with no secrets.
+	//
+	// ★ Accepted cost: a NON-interactive `-c` session (this one) runs no rc at
+	// all, so its shim really does stay first and the warning is spurious. The
+	// daemon cannot tell that apart from the tmux case without guessing at the
+	// command, and this file's stated bias is that a false "ready" suppressing
+	// a needed warning is the worse error.
+	if resp.ShimReady == nil || *resp.ShimReady {
+		t.Errorf("unseeded `sh -c` ShimReady = %v, want *false", resp.ShimReady)
 	}
 	return resp.SessionID
 }

@@ -101,17 +101,34 @@ func TestSeedPromptHook(t *testing.T) {
 		}
 	})
 
-	t.Run("shim_ready_by_login", func(t *testing.T) {
+	t.Run("shim_ready_only_when_seeded", func(t *testing.T) {
 		dir := t.TempDir()
-		// A non-login POSIX sh keeps the spawn-env shim dir → ready.
-		nonLogin := seedPromptHook(dir, "/bin/sh", []string{"-c", "x"}, []string{home, sess}, discardLogger())
-		if !nonLogin.shimReady {
-			t.Errorf("non-login sh shimReady = false, want true")
+		// ★★ shimReady is now "did we SEED this shell", not "is it non-login".
+		// An unseeded shell gets no _mt_shim_path, so nothing re-asserts after
+		// the user's rc runs and an ordinary `PATH="$HOME/bin:$PATH"` outranks
+		// the shim. Reporting true there let iOS call a secret push
+		// `.delivered` while the tool launched with none.
+		//
+		// `-c x` is the tmux shape (`bash -c "tmux new"`): non-benign args, so
+		// nothing is seeded and every tmux pane reads the user's real rc.
+		notSeeded := seedPromptHook(dir, "/bin/sh", []string{"-c", "x"}, []string{home, sess}, discardLogger())
+		if notSeeded.shimReady {
+			t.Errorf("unseeded sh shimReady = true, want false (nothing re-asserts)")
 		}
-		// A LOGIN sh we can't re-assert into → not guaranteed.
-		login := seedPromptHook(dir, "/bin/sh", []string{"-l"}, []string{home, sess}, discardLogger())
-		if login.shimReady {
-			t.Errorf("login sh shimReady = true, want false (no re-assert possible)")
+		loginSh := seedPromptHook(dir, "/bin/sh", []string{"-l"}, []string{home, sess}, discardLogger())
+		if loginSh.shimReady {
+			t.Errorf("login sh shimReady = true, want false")
+		}
+		// fish/nushell/xonsh: shellUnknown, never seeded.
+		unknown := seedPromptHook(dir, "/usr/bin/fish", nil, []string{home, sess}, discardLogger())
+		if unknown.shimReady {
+			t.Errorf("fish shimReady = true, want false (never seeded)")
+		}
+		// A seeded zsh is ready even when LOGIN: .zlogin is read after .zshrc
+		// but before the first prompt, and the re-assert runs per prompt.
+		zshLogin := seedPromptHook(dir, "/bin/zsh", []string{"-l"}, []string{home, sess}, discardLogger())
+		if !zshLogin.shimReady {
+			t.Errorf("login zsh shimReady = false, want true (per-prompt re-assert)")
 		}
 	})
 

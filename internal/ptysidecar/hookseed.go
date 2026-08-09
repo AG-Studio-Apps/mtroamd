@@ -118,17 +118,34 @@ type seedResult struct {
 	args          []string
 	env           []string
 	hookInstalled bool
-	// shimReady is whether the broker shim dir is guaranteed on the
-	// shell's LIVE PATH. Deliberately CONSERVATIVE - a false "ready"
-	// would suppress the iOS regenerate warning, the worse error - so
-	// true ONLY when guaranteed: seedBash (its --rcfile sources profile
-	// THEN re-asserts, covering login+non-login) always true; every
-	// other shell is true only when NON-login (the spawn-env PATH
-	// survives with no profile rebuild). A LOGIN dash/sh/zsh/unknown we
-	// can't fully re-assert into reports false, so a login shell whose
-	// profile does NOT actually touch PATH warns spuriously - accepted
-	// as the safe direction. The primary target (a PRE-broker session)
-	// reports nil via an absent status file / meta, independent of this.
+	// shimReady is whether the broker shim dir is guaranteed to be FIRST on
+	// the shell's LIVE PATH. Deliberately CONSERVATIVE: a false "ready"
+	// suppresses the iOS regenerate warning and lets the app report a secret
+	// push as `.delivered` when the tool will in fact launch with none, which
+	// is the worse error by a wide margin.
+	//
+	// TRUE only for a shell we actually SEEDED, because only then does
+	// _mt_shim_path exist and run on every prompt. That now covers seedZsh's
+	// login case too: .zlogin runs after .zshrc but BEFORE the first prompt,
+	// so even a login zsh that rebuilds PATH is corrected before the user can
+	// type. It previously reported !login here, which warned spuriously on
+	// every login zsh.
+	//
+	// ★★ FALSE for every shell we do NOT seed. It used to report !login for
+	// those, i.e. TRUE for the common non-login case - but an unseeded shell
+	// has no re-assert at all, and the user's own rc runs untouched, so an
+	// ordinary `PATH="$HOME/bin:$PATH"` outranks the shim exactly as it did
+	// before this whole fix. Reachable via `bash -c "tmux new"` (non-benign
+	// args, so nothing is seeded, and every tmux pane then reads the user's
+	// real rc) and via fish/nushell/xonsh (shellUnknown). Reporting true there
+	// was the same silent-failure-with-positive-confirmation this file exists
+	// to eliminate.
+	//
+	// ★ Known rough edge: iOS renders false as "regenerate the session", which
+	// is actionable for an old pre-broker session but NOT for a fish user -
+	// regenerating never seeds fish. Distinguishing "unsupported shell" from
+	// "stale session" needs more than the 0/1 MTRM_SHIM_READY bit carries, so
+	// it is left as an honest-but-imperfect message rather than a false pass.
 	shimReady bool
 }
 
@@ -137,12 +154,10 @@ type seedResult struct {
 // clobber it. It returns the invocation the sidecar should exec. It is
 // fail-safe: every error path returns the untouched original.
 func seedPromptHook(sessionDir, shell string, args, env []string, log *slog.Logger) seedResult {
-	_, login := classifyShellArgs(args)
-	// Without a seeded rcfile to re-assert it, only a NON-login shell is
-	// guaranteed to keep the spawn-env shim dir on PATH (a login shell
-	// may rebuild PATH from profile and drop it). seedBash/seedZsh
-	// override this to true because their rcfile re-asserts it.
-	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false, shimReady: !login}
+	// An UNSEEDED shell gets no _mt_shim_path, so nothing re-asserts the shim
+	// after the user's rc runs and we can guarantee nothing. seedBash/seedZsh
+	// override this to true on success.
+	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false, shimReady: false}
 	switch classifyShell(shell) {
 	case shellBash:
 		return seedBash(sessionDir, shell, args, env, log, orig)
@@ -267,7 +282,10 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 // Both login and non-login work: ZDOTDIR redirects every startup-file
 // lookup, so we don't touch the shell's args (login stays login).
 func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
-	benign, login := classifyShellArgs(args)
+	// login-ness no longer affects the result: the shim re-assert runs per
+	// prompt, and ZDOTDIR already redirects both the login and non-login
+	// startup files, so a login zsh is seeded exactly as well as a non-login one.
+	benign, _ := classifyShellArgs(args)
 	if !benign {
 		return orig
 	}
@@ -327,12 +345,12 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
-		// Only a NON-login zsh is guaranteed: our .zshrc re-asserts the
-		// shim, but a login zsh reads ~/.zlogin AFTER .zshrc (and after we
-		// restored ZDOTDIR, so it's the user's, un-re-asserted), which can
-		// rebuild PATH and drop the shim (review finding). Bias uncertain
-		// toward "warn" - a false "ready" would SUPPRESS a needed warning.
-		shimReady: !login,
+		// True for login zsh too, now that the re-assert runs per PROMPT
+		// rather than once in .zshrc. ~/.zlogin is read after .zshrc but
+		// BEFORE the first prompt, so even a .zlogin that rebuilds PATH is
+		// corrected before the user can type. The old !login was correct for
+		// the one-shot version and warned spuriously on every login zsh.
+		shimReady: true,
 	}
 }
 
