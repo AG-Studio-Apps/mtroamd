@@ -2,17 +2,37 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Vet + test
-    runs-on: ubuntu-latest
+    name: Vet + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS is not redundant coverage. The sidecar seeds a shell startup
+        # file that is sourced into every user's real interactive shell, and
+        # macOS is the only place we can exercise the shells users actually
+        # have there: Apple ships BASH 3.2 (frozen at the last GPLv2 release,
+        # a decade behind the bash on any Linux CI box) plus its own zsh
+        # build. A modern parameter-expansion assumption in that startup line
+        # would pass every Linux leg and break on a Mac.
+        #
+        # It is also the only environment where the shell-startup tests can
+        # observe macOS PATH composition: the daemon runs as a LaunchAgent
+        # with launchd's minimal PATH, and a NON-login shell never runs
+        # /usr/libexec/path_helper (invoked from /etc/zprofile, a login file),
+        # so /usr/local/bin and every /etc/paths.d entry can be absent.
+        #
+        # macos-install-smoke.yml is NOT a substitute: it is workflow_dispatch
+        # only and self-describes as "NOT a recurring guard".
+        os: [ubuntu-latest, macos-26]
     steps:
       - uses: actions/checkout@v6
 
@@ -27,13 +47,26 @@ jobs:
       - name: go test -race
         run: go test ./... -race -count=1
 
+      # Diagnostic, not an assertion. The shell-startup tests skip a shell
+      # that is absent, so this records what the leg actually covered - a
+      # silent skip on a missing zsh would otherwise read as a pass.
+      - name: Shell inventory
+        if: always()
+        run: |
+          echo "bash: $(bash --version 2>/dev/null | head -1 || echo absent)"
+          echo "zsh:  $(zsh --version 2>/dev/null || echo absent)"
+
   fuzz:
     name: Fuzz parsers (bounded)
     runs-on: ubuntu-latest
-    # Fuzz is slow; only run on pushes to main (and tag pushes), not
-    # every PR. PRs still get the regular -race test pass via the
-    # `test` job above, which exercises the seed corpus deterministically.
-    if: github.event_name == 'push'
+    # Fuzz is slow; only run on pushes to main, not every PR. PRs still get
+    # the regular -race test pass via the `test` job above, which exercises
+    # the seed corpus deterministically.
+    #
+    # ★ Pinned to main explicitly when `develop` joined the push trigger.
+    # `github.event_name == 'push'` alone would have started running this on
+    # every develop push, quietly multiplying the slowest job in the file.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v6
 

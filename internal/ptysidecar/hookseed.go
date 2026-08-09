@@ -52,7 +52,25 @@ const ShimStatusFilename = "shim-ready"
 // re-read these files. See the hookrcSubdir note.) Verified in bash and zsh
 // across already-first, present-late, absent, only-entry, duplicated and
 // trailing cases.
-const shimReassertLine = `[ -n "$MESHTERM_SHIM_DIR" ] && { case ":$PATH:" in ":$MESHTERM_SHIM_DIR:"*) ;; *) _mt_p=":$PATH:"; while case "$_mt_p" in *":$MESHTERM_SHIM_DIR:"*) true;; *) false;; esac; do _mt_p="${_mt_p%%:"$MESHTERM_SHIM_DIR":*}:${_mt_p#*:"$MESHTERM_SHIM_DIR":}"; done; _mt_p="${_mt_p#:}"; _mt_p="${_mt_p%:}"; PATH="$MESHTERM_SHIM_DIR${_mt_p:+:$_mt_p}"; export PATH; unset _mt_p;; esac; }`
+// `if ... fi` with `${VAR:-}` rather than `[ -n "$VAR" ] && { ... }`. An `if`
+// never propagates its condition's exit status and `:-` neutralises `set -u`,
+// so this line cannot end a sourced file on a non-zero status or trip an
+// unbound-variable error.
+//
+// ★ DEFENSIVE, not a fix for a demonstrated bug - stated precisely because the
+// first version of this comment overclaimed. Under a NON-interactive `sh -c`,
+// `set -e` with an empty MESHTERM_SHIM_DIR does end the shell. But the sidecar's
+// shell is INTERACTIVE (it owns a PTY), and in that setting both this form and
+// the old AND-list form survive `set -e` and `set -u`. So the hazard was
+// measured on a shell that is not the one we spawn. The shape is kept because
+// it is free and unambiguously safer, NOT because a session was ever killed
+// this way.
+//
+// ★ A genuinely reachable strict-mode defect does exist nearby, in
+// promptHookBody: it tests `"$ZSH_VERSION"` unguarded, which is an unbound
+// variable in bash. iOS's own copy of the body (AgentEnv.swift) has it too.
+// Out of scope here; tracked separately.
+const shimReassertLine = `if [ -n "${MESHTERM_SHIM_DIR:-}" ]; then case ":$PATH:" in ":$MESHTERM_SHIM_DIR:"*) ;; *) _mt_p=":$PATH:"; while case "$_mt_p" in *":$MESHTERM_SHIM_DIR:"*) true;; *) false;; esac; do _mt_p="${_mt_p%%:"$MESHTERM_SHIM_DIR":*}:${_mt_p#*:"$MESHTERM_SHIM_DIR":}"; done; _mt_p="${_mt_p#:}"; _mt_p="${_mt_p%:}"; PATH="$MESHTERM_SHIM_DIR${_mt_p:+:$_mt_p}"; export PATH; unset _mt_p;; esac; fi`
 
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
