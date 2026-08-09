@@ -21,18 +21,50 @@ const HookStatusFilename = "hook-installed"
 const ShimStatusFilename = "shim-ready"
 
 // shimReassertLine re-prepends the per-session broker shim dir to PATH
-// AFTER the user's rc has run, so a login shell that rebuilds PATH from
-// profile can't drop it (the login-rebuild caveat). Idempotent: only
-// prepends when the dir is set and not already present. Sourced from the
-// seeded bash/zsh rcfile, which is exactly why shimReady is reported true
-// for those shells - the sidecar GUARANTEES the shim is on the live PATH,
-// not merely spawned with it.
-const shimReassertLine = `[ -n "$MESHTERM_SHIM_DIR" ] && case ":$PATH:" in *":$MESHTERM_SHIM_DIR:"*) ;; *) PATH="$MESHTERM_SHIM_DIR:$PATH"; export PATH;; esac`
+// AFTER the user's rc has run, so a shell that rebuilds or prepends to PATH
+// can't outrank it. Sourced from the seeded bash/zsh rcfile, which is why
+// shimReady is reported true for those shells - the sidecar GUARANTEES the
+// shim is FIRST on the live PATH, not merely spawned with it.
+//
+// ★★ It must restore POSITION, not merely presence. The previous version
+// only prepended when the dir was ABSENT:
+//
+//	case ":$PATH:" in *":$MESHTERM_SHIM_DIR:"*) ;; *) PATH="$MESHTERM_SHIM_DIR:$PATH";; esac
+//
+// The sidecar spawns with the shim dir first, then the user's rc runs, so any
+// ordinary `PATH="$HOME/bin:$PATH"` in ~/.bashrc pushed the shim behind it and
+// the guard then DECLINED to fix it ("still present"). Measured on a real box:
+// the shim sat at position 7, behind .bun/bin, .cargo/bin, .local/bin,
+// linuxbrew/{bin,sbin} and npm-global/bin. It kept working only because none of
+// those happened to contain a shadowing binary - positional luck, not design.
+//
+// That mattered because shims are the secret DELIVERY mechanism (ShimScript ->
+// `mtroamd secret-exec`), built from the commands a secret profile declares. An
+// outranked shim means the tool launches with NO secrets, and because seedBash
+// reports shimReady=true unconditionally the daemon still emits
+// MTRM_SHIM_READY 1, so iOS reported the push as `.delivered`. A silent failure
+// carrying a positive confirmation.
+//
+// Strip-then-prepend rather than prepend-always, so the line is idempotent and
+// can never grow PATH: it also collapses a dir the user's own rc happened to
+// add. (Idempotence is NOT needed for nested shells - measured: our .zshrc
+// restores/unsets ZDOTDIR before any child spawns, so a nested zsh does not
+// re-read these files. See the hookrcSubdir note.) Verified in bash and zsh
+// across already-first, present-late, absent, only-entry, duplicated and
+// trailing cases.
+const shimReassertLine = `[ -n "$MESHTERM_SHIM_DIR" ] && { case ":$PATH:" in ":$MESHTERM_SHIM_DIR:"*) ;; *) _mt_p=":$PATH:"; while case "$_mt_p" in *":$MESHTERM_SHIM_DIR:"*) true;; *) false;; esac; do _mt_p="${_mt_p%%:"$MESHTERM_SHIM_DIR":*}:${_mt_p#*:"$MESHTERM_SHIM_DIR":}"; done; _mt_p="${_mt_p#:}"; _mt_p="${_mt_p%:}"; PATH="$MESHTERM_SHIM_DIR${_mt_p:+:$_mt_p}"; export PATH; unset _mt_p;; esac; }`
 
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
-// real rc + the live-inject hook. Kept for the session's lifetime: a
-// zsh child inherits ZDOTDIR pointing here and re-reads these on start.
+// real rc + the live-inject hook.
+//
+// ★ Kept for the session's lifetime because the session's own shell may be
+// re-execed, NOT because children re-read it. An earlier comment here claimed
+// "a zsh child inherits ZDOTDIR pointing here and re-reads these on start";
+// that is FALSE and was corrected by measurement. Our generated .zshrc
+// restores (or unsets) ZDOTDIR as its last act, before any child can spawn, so
+// a nested zsh reads the user's real files. Verified: a marker incremented in
+// the generated .zshrc stayed at 1 across an inner `zsh -i`.
 const hookrcSubdir = "hookrc"
 
 // promptHookBody is the exact shell snippet seeded after the user's rc.
