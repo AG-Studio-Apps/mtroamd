@@ -535,9 +535,14 @@ func (s *Session) HookInstalled() *bool {
 	return s.hookInstalled
 }
 
-// SetShimReady records whether this session's shell was spawned with the
-// secret-broker shim dir on PATH. The daemon calls it true at spawn and
-// on each lazy respawn (both run shimSpawnEnv). nil marks it unknown.
+// SetShimReady records whether the broker shim dir is guaranteed FIRST on
+// this session shell's live PATH. nil marks it unknown.
+//
+// ★★ NOT "was spawned with the shim dir on PATH", which is what this used to
+// say and is a much weaker claim: shimSpawnEnv puts it first at spawn, then
+// the user's rc runs and can outrank it. The value comes from the sidecar,
+// which only reports true for a shell it SEEDED and that is not a login
+// shell.
 func (s *Session) SetShimReady(v *bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -545,8 +550,8 @@ func (s *Session) SetShimReady(v *bool) {
 }
 
 // ShimReady reports whether a brokered secret would reach this shell's
-// tools (shim dir on PATH). nil = unknown (pre-broker spawn; regenerate
-// the session); *true = ready. Read by HandleAllocate on spawn + reattach
+// tools (shim dir FIRST on PATH). nil = unknown (pre-broker spawn;
+// regenerate the session); *true = ready. Read by HandleAllocate on spawn + reattach
 // to fill AllocateResponse.ShimReady.
 func (s *Session) ShimReady() *bool {
 	s.mu.Lock()

@@ -81,12 +81,30 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	// 3. Resolve shell, spawn child + PTY.
+	//
+	// ★★ Order MUST match internal/pty.resolveShell: explicit → $SHELL →
+	// /bin/bash → /bin/sh. This used to skip the /bin/bash step, which mattered
+	// more than it looks: a daemon started by launchd or a systemd user unit
+	// frequently has no SHELL in its environment, so every session fell through
+	// to /bin/sh. /bin/sh classifies as shellPosix and is NEVER seeded, so the
+	// live-inject hook and the broker shim re-assert were both silently absent
+	// and shimReady reported false for every session on that host, forever, with
+	// a "regenerate the session" warning the user could do nothing about. The
+	// two halves of the daemon also disagreed about which shell a session ran.
 	shell := cfg.Shell
 	if shell == "" {
 		shell = os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
+	}
+	if shell == "" {
+		for _, c := range []string{"/bin/bash", "/bin/sh"} {
+			if _, err := os.Stat(c); err == nil {
+				shell = c
+				break
+			}
 		}
+	}
+	if shell == "" {
+		shell = "/bin/sh"
 	}
 	rows, cols := cfg.Rows, cfg.Cols
 	if rows == 0 {

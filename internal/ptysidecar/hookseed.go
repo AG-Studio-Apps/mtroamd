@@ -16,8 +16,12 @@ import (
 const HookStatusFilename = "hook-installed"
 
 // ShimStatusFilename is the per-session file the sidecar writes with the
-// secret-broker shim-readiness bit ("1"/"0"), read by ptyclient.SpawnNew
-// and surfaced as MTRM_SHIM_READY. Mirrors HookStatusFilename.
+// secret-broker shim-readiness bit ("1"/"0"), read by ptyclient.SpawnNew and
+// surfaced as MTRM_SHIM_READY. Mirrors HookStatusFilename.
+//
+// ★ The bit means "the shim dir is guaranteed FIRST on the live PATH", which
+// is NOT the same as "the shell was spawned with it on PATH". See
+// seedResult.shimReady for what earns a true and why.
 const ShimStatusFilename = "shim-ready"
 
 // shimFuncDef defines _mt_shim_path, which moves the broker shim dir to the
@@ -118,34 +122,35 @@ type seedResult struct {
 	args          []string
 	env           []string
 	hookInstalled bool
-	// shimReady is whether the broker shim dir is guaranteed to be FIRST on
-	// the shell's LIVE PATH. Deliberately CONSERVATIVE: a false "ready"
-	// suppresses the iOS regenerate warning and lets the app report a secret
-	// push as `.delivered` when the tool will in fact launch with none, which
-	// is the worse error by a wide margin.
+	// shimReady is whether the broker shim dir is guaranteed to be FIRST on the
+	// shell's LIVE PATH. Deliberately CONSERVATIVE: a false "ready" suppresses
+	// the iOS regenerate warning and lets the app report a secret push as
+	// `.delivered` when the tool will in fact launch with none, which is the
+	// worse error by a wide margin.
 	//
-	// TRUE only for a shell we actually SEEDED, because only then does
-	// _mt_shim_path exist and run on every prompt. That now covers seedZsh's
-	// login case too: .zlogin runs after .zshrc but BEFORE the first prompt,
-	// so even a login zsh that rebuilds PATH is corrected before the user can
-	// type. It previously reported !login here, which warned spuriously on
-	// every login zsh.
+	// TRUE only when the shell was SEEDED **and is not a LOGIN shell**. Both
+	// halves are load-bearing, and each was learned by getting it wrong:
 	//
-	// ★★ FALSE for every shell we do NOT seed. It used to report !login for
-	// those, i.e. TRUE for the common non-login case - but an unseeded shell
-	// has no re-assert at all, and the user's own rc runs untouched, so an
-	// ordinary `PATH="$HOME/bin:$PATH"` outranks the shim exactly as it did
-	// before this whole fix. Reachable via `bash -c "tmux new"` (non-benign
-	// args, so nothing is seeded, and every tmux pane then reads the user's
-	// real rc) and via fish/nushell/xonsh (shellUnknown). Reporting true there
-	// was the same silent-failure-with-positive-confirmation this file exists
-	// to eliminate.
+	//   - SEEDED, because only a seeded shell defines _mt_shim_path and runs it
+	//     on every prompt. This previously reported !login for UNSEEDED shells,
+	//     i.e. true for the common non-login case, which covered
+	//     `bash -c "tmux new"` (nothing seeded, every pane reads the user's
+	//     untouched rc) and fish/nushell (shellUnknown). Reporting true there was
+	//     the silent-failure-with-positive-confirmation this file exists to kill.
 	//
-	// ★ Known rough edge: iOS renders false as "regenerate the session", which
-	// is actionable for an old pre-broker session but NOT for a fish user -
+	//   - NOT LOGIN, because a login startup file can `exec` before the shell
+	//     ever reaches a prompt. `[[ -z $TMUX ]] && exec tmux` in ~/.zlogin or
+	//     ~/.bash_profile is a common idiom, and it means precmd_functions /
+	//     PROMPT_COMMAND never fire; for bash the profile chain is sourced BEFORE
+	//     our lines, so _mt_shim_path is not even defined. Flipping login zsh to
+	//     true was tried and reverted after this was measured: PATH came back
+	//     with the user's dir first and the shim second.
+	//
+	// ★ Known rough edge: iOS renders false as "regenerate the session", which is
+	// actionable for a stale pre-broker session but NOT for a fish user, since
 	// regenerating never seeds fish. Distinguishing "unsupported shell" from
-	// "stale session" needs more than the 0/1 MTRM_SHIM_READY bit carries, so
-	// it is left as an honest-but-imperfect message rather than a false pass.
+	// "stale session" needs more than the 0/1 MTRM_SHIM_READY bit carries, so it
+	// is left honest-but-imperfect rather than a false pass.
 	shimReady bool
 }
 
@@ -271,7 +276,10 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		args:          []string{"--rcfile", rcPath},
 		env:           env,
 		hookInstalled: true,
-		shimReady:     true,
+		// NOT login: see the seedResult.shimReady note. In login mode the
+		// profile chain is sourced BEFORE our lines, so an `exec` there (the
+		// common `exec tmux` idiom) means _mt_shim_path is never even defined.
+		shimReady: !login,
 	}
 }
 
@@ -282,10 +290,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 // Both login and non-login work: ZDOTDIR redirects every startup-file
 // lookup, so we don't touch the shell's args (login stays login).
 func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
-	// login-ness no longer affects the result: the shim re-assert runs per
-	// prompt, and ZDOTDIR already redirects both the login and non-login
-	// startup files, so a login zsh is seeded exactly as well as a non-login one.
-	benign, _ := classifyShellArgs(args)
+	benign, login := classifyShellArgs(args)
 	if !benign {
 		return orig
 	}
@@ -345,12 +350,15 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
-		// True for login zsh too, now that the re-assert runs per PROMPT
-		// rather than once in .zshrc. ~/.zlogin is read after .zshrc but
-		// BEFORE the first prompt, so even a .zlogin that rebuilds PATH is
-		// corrected before the user can type. The old !login was correct for
-		// the one-shot version and warned spuriously on every login zsh.
-		shimReady: true,
+		// NOT login. Flipping this to true was tried and REVERTED: the
+		// reasoning was that .zlogin runs before the first prompt so the
+		// per-prompt re-assert covers it, but a .zlogin that ENDS IN `exec`
+		// (`[[ -z $TMUX ]] && exec tmux`, a very common idiom) never reaches a
+		// prompt at all. precmd_functions never fires, and the replacement
+		// process reads the user's REAL ZDOTDIR - ours was already restored -
+		// so nothing is seeded. Measured: PATH came back $HOME/mybin first,
+		// shim second.
+		shimReady: !login,
 	}
 }
 

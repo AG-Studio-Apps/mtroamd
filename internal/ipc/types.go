@@ -242,12 +242,18 @@ type AllocateResponse struct {
 	// set). Additive/omitempty: old peers drop the unknown key.
 	BootID string `cbor:"boot_id,omitempty"`
 
-	// ShimReady reports whether the session's shell has the secret-broker
-	// PATH-shadow shim dir on PATH (spawned by a v1.7.8-rc1+ daemon), so a
-	// brokered `set-secrets` would actually reach its tools. Pointer:
-	// nil = unknown (pre-broker spawn) → the client warns the user to
-	// regenerate the session before a hidden secret can take effect;
-	// *true = ready. `mtroamd connect` emits it as MTRM_SHIM_READY.
+	// ShimReady reports whether the broker shim dir is guaranteed FIRST on
+	// the session shell's live PATH, so a brokered `set-secrets` would
+	// actually reach its tools. Pointer: nil = unknown (pre-broker spawn) →
+	// the client warns the user to regenerate the session; *true = ready.
+	// `mtroamd connect` emits it as MTRM_SHIM_READY.
+	//
+	// ★★ FIRST, not merely present, and it is a property of the SHELL not of
+	// the spawn. Being on PATH at spawn proves nothing: the user's rc runs
+	// afterwards and an ordinary `PATH="$HOME/bin:$PATH"` outranks it. True
+	// requires a shell the sidecar SEEDED and that is NOT a login shell (a
+	// login startup file can `exec` before the first prompt, so the
+	// per-prompt re-assert never fires). See ptysidecar.seedResult.
 	// Additive/omitempty like Reused: old peers drop the unknown key.
 	ShimReady *bool `cbor:"shim_ready,omitempty"`
 

@@ -124,11 +124,23 @@ func TestSeedPromptHook(t *testing.T) {
 		if unknown.shimReady {
 			t.Errorf("fish shimReady = true, want false (never seeded)")
 		}
-		// A seeded zsh is ready even when LOGIN: .zlogin is read after .zshrc
-		// but before the first prompt, and the re-assert runs per prompt.
+		// ★★ A seeded LOGIN shell is NOT ready. Flipping this to true was tried
+		// and reverted: a .zlogin / .bash_profile that ends in `exec` (the
+		// common `[[ -z $TMUX ]] && exec tmux`) never reaches a prompt, so the
+		// per-prompt re-assert never fires, and for bash the profile chain is
+		// sourced BEFORE our lines so _mt_shim_path is not even defined.
 		zshLogin := seedPromptHook(dir, "/bin/zsh", []string{"-l"}, []string{home, sess}, discardLogger())
-		if !zshLogin.shimReady {
-			t.Errorf("login zsh shimReady = false, want true (per-prompt re-assert)")
+		if zshLogin.shimReady {
+			t.Errorf("login zsh shimReady = true, want false (a startup file may exec)")
+		}
+		bashLogin := seedPromptHook(dir, "/bin/bash", []string{"-l"}, []string{home, sess}, discardLogger())
+		if bashLogin.shimReady {
+			t.Errorf("login bash shimReady = true, want false (profile is sourced before our lines)")
+		}
+		// The seeded NON-login case is the one that is genuinely guaranteed.
+		zshPlain := seedPromptHook(dir, "/bin/zsh", nil, []string{home, sess}, discardLogger())
+		if !zshPlain.shimReady {
+			t.Errorf("non-login zsh shimReady = false, want true")
 		}
 	})
 

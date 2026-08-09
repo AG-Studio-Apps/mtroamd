@@ -143,10 +143,13 @@ func (c *Conn) HookInstalled() *bool {
 	return c.hookInstalled
 }
 
-// ShimReady reports whether the broker shim dir is guaranteed on this
-// session's shell PATH (nil = unknown). SpawnNew sets it from the
-// sidecar's shim-status file; Discover leaves it nil (persisted meta
-// carries it instead). Surfaced as AllocateResponse.ShimReady.
+// ShimReady reports whether the broker shim dir is guaranteed FIRST on this
+// session's shell PATH (nil = unknown). SpawnNew sets it from the sidecar's
+// shim-status file; Discover leaves it nil (persisted meta carries it
+// instead). Surfaced as AllocateResponse.ShimReady.
+//
+// ★ FIRST, not present: an outranked shim never runs, so the tool launches
+// with no secrets. See ptysidecar.seedResult for what earns a true.
 func (c *Conn) ShimReady() *bool {
 	return c.shimReady
 }
