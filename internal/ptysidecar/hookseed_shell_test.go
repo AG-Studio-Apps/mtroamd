@@ -238,3 +238,59 @@ func TestSeededShellInstallsHook(t *testing.T) {
 		})
 	}
 }
+
+// TestSeededShellSurvivesAPerPromptPathMutator is the headline regression.
+//
+// ★★ A one-shot re-assert at rc time is NOT enough. direnv, mise, asdf, conda
+// and nvm all install a PROMPT_COMMAND / precmd hook that re-prepends their own
+// dir on EVERY prompt, which lands AFTER our rc line has run. PATH is therefore
+// correct at the instant the rcfile finishes and wrong from prompt one onward,
+// so a test that only inspects the post-rc PATH (as the first version of this
+// suite did) passes while the shim loses every time it matters.
+//
+// The probe runs the registered prompt hook explicitly rather than trying to
+// drive a real prompt, because a PTY-less test shell never renders one.
+func TestSeededShellSurvivesAPerPromptPathMutator(t *testing.T) {
+	cases := []struct {
+		shell  string
+		rcName string
+		// Re-runs whatever the shell registered as its prompt hook, the way a
+		// real prompt would.
+		fire string
+	}{
+		{"bash", ".bashrc", `eval "$PROMPT_COMMAND"`},
+		{"zsh", ".zshrc", `for f in $precmd_functions; do $f; done`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.shell, func(t *testing.T) {
+			shellPath := lookShell(t, tc.shell)
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, "mybin"), 0o700); err != nil {
+				t.Fatalf("mkdir mybin: %v", err)
+			}
+			// A direnv-shaped hook: prepend our dir on every prompt.
+			rc := "_user_hook(){ PATH=\"$HOME/mybin:$PATH\"; }\n" +
+				"if [ -n \"$ZSH_VERSION\" ]; then precmd_functions+=(_user_hook); " +
+				"else PROMPT_COMMAND=\"${PROMPT_COMMAND:+$PROMPT_COMMAND; }_user_hook\"; fi\n"
+			if err := os.WriteFile(filepath.Join(home, tc.rcName), []byte(rc), 0o600); err != nil {
+				t.Fatalf("write rc: %v", err)
+			}
+
+			// Fire the prompt hook three times, then report PATH.
+			probe := tc.fire + "; " + tc.fire + "; " + tc.fire + "; " + probeFor("$PATH")
+			got, shimDir := runSeeded(t, shellPath, home, nil, probe)
+
+			entries := strings.Split(got, ":")
+			if len(entries) == 0 || entries[0] != shimDir {
+				t.Errorf("shim lost its place to a per-prompt PATH mutator\n first = %q\n want  = %q\n PATH  = %s",
+					entries[0], shimDir, got)
+			}
+			if n := strings.Count(":"+got+":", ":"+shimDir+":"); n != 1 {
+				t.Errorf("shim dir appears %d times after 3 prompts, want 1: %s", n, got)
+			}
+			if !strings.Contains(got, filepath.Join(home, "mybin")) {
+				t.Errorf("the user's own dir was lost: %s", got)
+			}
+		})
+	}
+}

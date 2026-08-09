@@ -94,7 +94,8 @@ func TestSeedPromptHook(t *testing.T) {
 		// The seeded rc re-asserts the broker shim dir on PATH (after the
 		// user's rc) so a login rebuild can't drop it, and shimReady is
 		// reported true (sidecar-guaranteed, not merely spawned-with).
-		mustContain(t, body, shimReassertLine)
+		mustContain(t, body, shimFuncDef)
+		mustContain(t, body, shimRegisterLine)
 		if !got.shimReady {
 			t.Errorf("shimReady = false, want true for a seeded bash")
 		}

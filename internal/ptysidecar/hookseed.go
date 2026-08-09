@@ -20,69 +20,62 @@ const HookStatusFilename = "hook-installed"
 // and surfaced as MTRM_SHIM_READY. Mirrors HookStatusFilename.
 const ShimStatusFilename = "shim-ready"
 
-// shimReassertLine re-prepends the per-session broker shim dir to PATH
-// AFTER the user's rc has run, so a shell that rebuilds or prepends to PATH
-// can't outrank it. Sourced from the seeded bash/zsh rcfile, which is why
-// shimReady is reported true for those shells - the sidecar GUARANTEES the
-// shim is FIRST on the live PATH, not merely spawned with it.
+// shimFuncDef defines _mt_shim_path, which moves the broker shim dir to the
+// FRONT of PATH. Split into a function (from a one-liner) and called on EVERY
+// PROMPT, because a one-shot rc-time re-assert is defeated by any per-prompt
+// PATH mutator - direnv, mise, asdf, conda and nvm all hook PROMPT_COMMAND /
+// precmd and re-prepend their own dir on the first prompt, after our rc line
+// has already run. Measured: PATH is correct when the rcfile finishes, and the
+// user's binary wins from prompt one onward.
 //
-// ★★ It must restore POSITION, not merely presence. The previous version
-// only prepended when the dir was ABSENT:
+// ★★ The strip does NOT pattern-match on the shim dir. An earlier version used
+// `case` to detect and `${var%%pat}` to remove, which are two different pattern
+// engines: under `shopt -s nocasematch` the case kept matching while the strip
+// removed nothing, and `_mt_p` DOUBLED in size every iteration. An iteration
+// counter did not fix that (64 doublings is 2^64 bytes); measurement did, by
+// hanging. This walks PATH element by element and compares with string
+// EQUALITY, so nocasematch, glob metacharacters in the shim path, and
+// case-insensitive filesystems are all irrelevant. Verified in bash, zsh and
+// dash across already-first, present-late, duplicated, substring collisions
+// (/Storage, /S-old), empty elements, a trailing colon, a glob in the shim dir,
+// and nocasematch.
 //
-//	case ":$PATH:" in *":$MESHTERM_SHIM_DIR:"*) ;; *) PATH="$MESHTERM_SHIM_DIR:$PATH";; esac
+// `local` keeps every temporary out of the user's namespace, which the previous
+// one-liner could not do: it used a bare `_mt_p` and then `unset` it,
+// destroying a same-named user variable, and only on one of its two paths.
 //
-// The sidecar spawns with the shim dir first, then the user's rc runs, so any
-// ordinary `PATH="$HOME/bin:$PATH"` in ~/.bashrc pushed the shim behind it and
-// the guard then DECLINED to fix it ("still present"). Measured on a real box:
-// the shim sat at position 7, behind .bun/bin, .cargo/bin, .local/bin,
-// linuxbrew/{bin,sbin} and npm-global/bin. It kept working only because none of
-// those happened to contain a shadowing binary - positional luck, not design.
+// ★ _MT_SHIM_OFF is set BEFORE the assignment and cleared after it succeeds. On
+// a host with `readonly PATH` the assignment aborts the function, so a flag set
+// afterwards would never run and the shell would print an error EVERY prompt.
+// This way it is attempted once and then stays off.
+const shimFuncDef = `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MESHTERM_SHIM_DIR:-}" ] || return 0; [ -z "${_MT_SHIM_OFF:-}" ] || return 0; _mt_new=; _mt_rest="$PATH"; while :; do _mt_e="${_mt_rest%%:*}"; [ "$_mt_e" = "$MESHTERM_SHIM_DIR" ] || _mt_new="$_mt_new:$_mt_e"; [ "$_mt_rest" = "${_mt_rest#*:}" ] && break; _mt_rest="${_mt_rest#*:}"; done; _mt_new="${_mt_new#:}"; _mt_new="$MESHTERM_SHIM_DIR${_mt_new:+:$_mt_new}"; [ "$PATH" = "$_mt_new" ] && return 0; _MT_SHIM_OFF=1; { PATH="$_mt_new"; } 2>/dev/null; if [ "$PATH" = "$_mt_new" ]; then export PATH; unset _MT_SHIM_OFF; fi; return 0; }`
+
+// shimRegisterLine wires _mt_shim_path into the per-prompt hook and runs it
+// once immediately, so the shell starts correct and STAYS correct.
 //
-// That mattered because shims are the secret DELIVERY mechanism (ShimScript ->
-// `mtroamd secret-exec`), built from the commands a secret profile declares. An
-// outranked shim means the tool launches with NO secrets, and because seedBash
-// reports shimReady=true unconditionally the daemon still emits
-// MTRM_SHIM_READY 1, so iOS reported the push as `.delivered`. A silent failure
-// carrying a positive confirmation.
-//
-// Strip-then-prepend rather than prepend-always, so the line is idempotent and
-// can never grow PATH: it also collapses a dir the user's own rc happened to
-// add. (Idempotence is NOT needed for nested shells - measured: our .zshrc
-// restores/unsets ZDOTDIR before any child spawns, so a nested zsh does not
-// re-read these files. See the hookrcSubdir note.) Verified in bash and zsh
-// across already-first, present-late, absent, only-entry, duplicated and
-// trailing cases.
-// `if ... fi` with `${VAR:-}` rather than `[ -n "$VAR" ] && { ... }`. An `if`
-// never propagates its condition's exit status and `:-` neutralises `set -u`,
-// so this line cannot end a sourced file on a non-zero status or trip an
-// unbound-variable error.
-//
-// ★ DEFENSIVE, not a fix for a demonstrated bug - stated precisely because the
-// first version of this comment overclaimed. Under a NON-interactive `sh -c`,
-// `set -e` with an empty MESHTERM_SHIM_DIR does end the shell. But the sidecar's
-// shell is INTERACTIVE (it owns a PTY), and in that setting both this form and
-// the old AND-list form survive `set -e` and `set -u`. So the hazard was
-// measured on a shell that is not the one we spawn. The shape is kept because
-// it is free and unambiguously safer, NOT because a session was ever killed
-// this way.
-//
-// ★ A genuinely reachable strict-mode defect does exist nearby, in
-// promptHookBody: it tests `"$ZSH_VERSION"` unguarded, which is an unbound
-// variable in bash. iOS's own copy of the body (AgentEnv.swift) has it too.
-// Out of scope here; tracked separately.
-const shimReassertLine = `if [ -n "${MESHTERM_SHIM_DIR:-}" ]; then case ":$PATH:" in ":$MESHTERM_SHIM_DIR:"*) ;; *) _mt_p=":$PATH:"; while case "$_mt_p" in *":$MESHTERM_SHIM_DIR:"*) true;; *) false;; esac; do _mt_p="${_mt_p%%:"$MESHTERM_SHIM_DIR":*}:${_mt_p#*:"$MESHTERM_SHIM_DIR":}"; done; _mt_p="${_mt_p#:}"; _mt_p="${_mt_p%:}"; PATH="$MESHTERM_SHIM_DIR${_mt_p:+:$_mt_p}"; export PATH; unset _mt_p;; esac; fi`
+// ★ Registered SEPARATELY rather than called from inside promptHookBody. That
+// body is a shared contract with iOS, which seeds its own byte-comparable copy
+// (AgentEnv.injectHookInstall) that does NOT define _mt_shim_path - so a call
+// added there would become "command not found" on every prompt of an
+// iOS-seeded session.
+const shimRegisterLine = `if [ -n "$ZSH_VERSION" ]; then precmd_functions+=(_mt_shim_path); else PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_path"; fi; _mt_shim_path`
 
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
 // real rc + the live-inject hook.
 //
-// ★ Kept for the session's lifetime because the session's own shell may be
-// re-execed, NOT because children re-read it. An earlier comment here claimed
-// "a zsh child inherits ZDOTDIR pointing here and re-reads these on start";
-// that is FALSE and was corrected by measurement. Our generated .zshrc
-// restores (or unsets) ZDOTDIR as its last act, before any child can spawn, so
-// a nested zsh reads the user's real files. Verified: a marker incremented in
-// the generated .zshrc stayed at 1 across an inner `zsh -i`.
+// ★ Kept for the session's lifetime: a child CAN still inherit ZDOTDIR pointing
+// here, so these files must not vanish underneath it.
+//
+// ★★ Two wrong versions of this comment preceded this one, which is why it is
+// specific about what was measured. The original claimed children always
+// re-read these files; I replaced it with the opposite absolute ("restored
+// before any child can spawn"); both are wrong. What is true: only the
+// generated .zshrc restores ZDOTDIR, and only as its LAST statement. So a child
+// started AFTER .zshrc completes sees the user's real ZDOTDIR and does not
+// re-read (measured: a counter in the generated .zshrc stayed at 1 across an
+// inner `zsh -i`), while a child started from .zshenv, .zprofile, or from
+// inside the user's own .zshrc still inherits ours and does re-read them.
 const hookrcSubdir = "hookrc"
 
 // promptHookBody is the exact shell snippet seeded after the user's rc.
@@ -250,8 +243,9 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		b.WriteString(`[ -r /etc/bash.bashrc ] && . /etc/bash.bashrc` + "\n")
 		b.WriteString(`[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"` + "\n")
 	}
+	b.WriteString(shimFuncDef + "\n")
 	b.WriteString(promptHookBody + "\n")
-	b.WriteString(shimReassertLine + "\n")
+	b.WriteString(shimRegisterLine + "\n")
 
 	if err := os.WriteFile(rcPath, []byte(b.String()), 0o600); err != nil {
 		log.Warn("sidecar.hookseed.write_failed", "shell", "bash", "err", err.Error())
@@ -312,8 +306,9 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 	// .zshrc (interactive). Source the user's rc, install the hook
 	// AFTER it, then restore ZDOTDIR.
 	zshrc := "[ -r " + realExpr + "/.zshrc ] && . " + realExpr + "/.zshrc\n" +
+		shimFuncDef + "\n" +
 		promptHookBody + "\n" +
-		shimReassertLine + "\n" +
+		shimRegisterLine + "\n" +
 		restore
 
 	for name, body := range map[string]string{
