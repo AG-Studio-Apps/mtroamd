@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests EXECUTE a real shell through the real seed functions and assert
@@ -455,5 +456,188 @@ func TestLoginZshThatExecsAwayNeverAnnounces(t *testing.T) {
 	if got := announceStatus(t, zsh, home, []string{"-l"}); got == "1" {
 		t.Errorf("login zsh whose .zlogin execs away: shim-ready = %q, want NOT \"1\" "+
 			"(it never reached a prompt, so it cannot have observed anything)", got)
+	}
+}
+
+// TestRehashActuallyRedirectsAToolThatWasRunFirst is the test whose ABSENCE let
+// the same defect ship three times.
+//
+// The stale-command-hash bug was filed against rc2, "fixed" in rc3 by putting
+// `hash -r` on a branch the default spawn never takes, and "fixed" again in rc4
+// with a generation mechanism that was entirely inert because `read` returns 1
+// at EOF and the `|| _mt_g=` arm wiped the value it had just read. Both times
+// the code looked right and no test executed it.
+//
+// This drives the real production sequence in a real shell: the shim dir is
+// first on PATH from spawn but EMPTY, the user runs a tool (so the shell hashes
+// the real binary), the shim appears later exactly as SyncShims creates it, the
+// daemon bumps the generation, and the next prompt must make the tool resolve to
+// the shim.
+func TestRehashActuallyRedirectsAToolThatWasRunFirst(t *testing.T) {
+	bash := lookShell(t, "bash")
+
+	sessionDir := t.TempDir()
+	shimDir := filepath.Join(sessionDir, "shims")
+	realDir := filepath.Join(sessionDir, "realbin")
+	for _, d := range []string{shimDir, realDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	// The real binary the shell will hash on first use.
+	if err := os.WriteFile(filepath.Join(realDir, "mytool"),
+		[]byte("#!/bin/sh\necho REAL-BINARY\n"), 0o700); err != nil {
+		t.Fatalf("write real mytool: %v", err)
+	}
+	genPath := filepath.Join(sessionDir, ShimGenFilename)
+	if err := os.WriteFile(genPath, []byte("gen1\n"), 0o600); err != nil {
+		t.Fatalf("write gen: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, ShimStatusFilename), []byte("0"), 0o600); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte(""), 0o600); err != nil {
+		t.Fatalf("write .bashrc: %v", err)
+	}
+
+	env := []string{
+		"HOME=" + home,
+		"PATH=" + shimDir + ":" + realDir + ":/usr/bin:/bin",
+		"MESHTERM_SHIM_DIR=" + shimDir,
+		"MESHTERM_SESSION_ID=testsession",
+		"TERM=xterm",
+	}
+	res := seedPromptHook(sessionDir, bash, nil, env, "leasenonce", discardLogger())
+	if !res.hookInstalled {
+		t.Fatal("bash was not seeded")
+	}
+
+	// ★★ The assertion is on the MECHANISM, not on a downstream side effect.
+	//
+	// An earlier version of this test checked only that the tool resolved to the
+	// shim afterwards - and it PASSED with the rc4 bug reintroduced, because bash
+	// clears its hash table for other reasons too. A test that cannot fail on the
+	// broken code is worse than no test: it is what let this defect ship twice.
+	//
+	// ★ The generation is written WITHOUT a trailing newline, deliberately. That
+	// is the hostile shape - it is exactly what rc4's bumpShimGen produced - and
+	// it is the only shape that distinguishes the two implementations, because
+	// `read` returns 0 (not 1) when the file DOES end in a newline, which would
+	// mask the bug entirely. The daemon now writes a newline as well, but the
+	// hook must not depend on it.
+	//
+	// `_MT_SHIM_GEN` is unambiguous. With the fix, `read` populates `_mt_g`, it
+	// differs from the empty `_MT_SHIM_GEN`, and the variable is assigned. With
+	// the `|| _mt_g=` bug, `_mt_g` is wiped, compares equal to the equally-empty
+	// `_MT_SHIM_GEN`, and the function returns before assigning anything - so the
+	// variable stays unset and nothing is ever rehashed.
+	script := "mytool\n" +
+		"printf '#!/bin/sh\\necho SHIM-BINARY\\n' > " + shSingleQuote(filepath.Join(shimDir, "mytool")) + "\n" +
+		"chmod 0700 " + shSingleQuote(filepath.Join(shimDir, "mytool")) + "\n" +
+		"printf 'gen2' > " + shSingleQuote(genPath) + "\n" +
+		"true\n" +
+		"echo \"MTGEN=[${_MT_SHIM_GEN-unset}]\"\n" +
+		"mytool\n" +
+		"exit\n"
+
+	cmd := exec.Command(res.shell, append(append([]string{}, res.args...), "-i")...)
+	cmd.Env = res.env
+	cmd.Stdin = strings.NewReader(script)
+	out, _ := cmd.Output()
+	got := string(out)
+
+	if !strings.Contains(got, "REAL-BINARY") {
+		t.Fatalf("setup failed: the first call never resolved the real binary.\nout=%q", got)
+	}
+	// The generation the daemon wrote must have been observed and recorded.
+	if !strings.Contains(got, "MTGEN=[gen2]") {
+		t.Errorf("_mt_shim_rehash never picked up the bumped generation "+
+			"(want MTGEN=[gen2]); the rehash is inert, which is the rc3+rc4 defect.\nout=%q", got)
+	}
+	if strings.Contains(got, "MTGEN=[unset]") {
+		t.Errorf("_MT_SHIM_GEN was never assigned - `read` populated nothing, so "+
+			"hash -r can never run.\nout=%q", got)
+	}
+	if !strings.Contains(got, "SHIM-BINARY") {
+		t.Errorf("after the shim appeared and the generation was bumped, the tool still "+
+			"resolved to the real binary.\nout=%q", got)
+	}
+}
+
+// TestLeaseRenewsOnEveryPrompt pins the property that makes the lease a lease.
+// rc3 and rc4 both wrote the claim exactly once and latched it, which is why an
+// `exec`ed-away shell stayed "ready" forever.
+//
+// ★★ Both prompts happen in the SAME shell, and the lease is aged from INSIDE
+// the script. An earlier version used two separate shell invocations and passed
+// against a latched implementation, because a per-shell latch grants one write
+// per shell - so two runs produced two writes and looked identical to a lease.
+// The distinguishing question is whether a SECOND prompt in an ALREADY-ANNOUNCED
+// shell rewrites the file, and only a single-session test can ask it.
+func TestLeaseRenewsOnEveryPrompt(t *testing.T) {
+	bash := lookShell(t, "bash")
+
+	sessionDir := t.TempDir()
+	shimDir := filepath.Join(sessionDir, "shims")
+	if err := os.MkdirAll(shimDir, 0o700); err != nil {
+		t.Fatalf("mkdir shims: %v", err)
+	}
+	statusPath := filepath.Join(sessionDir, ShimStatusFilename)
+	if err := os.WriteFile(statusPath, []byte("0"), 0o600); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte(""), 0o600); err != nil {
+		t.Fatalf("write .bashrc: %v", err)
+	}
+	env := []string{
+		"HOME=" + home,
+		"PATH=" + shimDir + ":/usr/bin:/bin",
+		"MESHTERM_SHIM_DIR=" + shimDir,
+		"MESHTERM_SESSION_ID=testsession",
+		"TERM=xterm",
+	}
+	res := seedPromptHook(sessionDir, bash, nil, env, "leasenonce", discardLogger())
+	if !res.hookInstalled {
+		t.Fatal("bash was not seeded")
+	}
+
+	// Prompt 1 renews the lease. Then age it to 2001 from inside the session and
+	// take prompt 2, which must renew it again.
+	q := shSingleQuote(statusPath)
+	// ★ The age-and-observe must be ONE line: a prompt fires between every input
+	// line and renews the lease, so a `touch` on its own line is undone before the
+	// next line can read it. AFTER is then read on the FOLLOWING line, i.e. after
+	// exactly one intervening prompt - which is the thing under test.
+	script := "true\n" +
+		"touch -t 200101010000 " + q + "; echo \"AGED=$(date -r " + q + " +%Y)\"\n" +
+		"echo \"AFTER=$(date -r " + q + " +%Y)\"\n" +
+		"exit\n"
+
+	cmd := exec.Command(res.shell, append(append([]string{}, res.args...), "-i")...)
+	cmd.Env = res.env
+	cmd.Stdin = strings.NewReader(script)
+	out, _ := cmd.Output()
+	got := string(out)
+
+	if !strings.Contains(got, "AGED=2001") {
+		t.Fatalf("setup failed: the lease was not aged.\nout=%q", got)
+	}
+	thisYear := time.Now().Format("2006")
+	if !strings.Contains(got, "AFTER="+thisYear) {
+		t.Errorf("after a LATER prompt in the same shell the lease mtime is still %s, "+
+			"want %s. The claim is latched (write-once), not leased - which is exactly "+
+			"why rc3/rc4 kept reporting ready after an `exec`.\nout=%q",
+			strings.TrimSpace(got[strings.Index(got, "AFTER="):]), thisYear, got)
+	}
+
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read lease: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != res.shimNonce {
+		t.Errorf("lease content = %q, want the spawn nonce %q", string(data), res.shimNonce)
 	}
 }

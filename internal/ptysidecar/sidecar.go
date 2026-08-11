@@ -109,15 +109,20 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	candidates = append(candidates, "/bin/bash", "/bin/sh")
 	for _, c := range candidates {
-		// ★ A candidate with no separator is a BARE NAME (`mtroamd connect --shell
-		// fish`), which exec.Command resolves against PATH. Statting it would
-		// resolve it against the daemon's cwd instead, fail, and silently fall
-		// through to /bin/bash - so the user asks for fish and quietly gets bash.
-		// Bare names are therefore taken as-is, exactly as before this change;
-		// only path-ish candidates are probed for existence.
+		// ★★ A candidate with no separator is a BARE NAME (`mtroamd connect --shell
+		// fish`), which exec.Command resolves against PATH - statting it would
+		// resolve against the daemon's cwd, fail, and silently substitute bash.
+		// It is resolved with LookPath and, crucially, FALLS THROUGH when that
+		// fails. rc4 accepted bare names unconditionally and broke out of the
+		// loop, skipping the /bin/bash and /bin/sh fallbacks entirely, so
+		// `--shell fish` on a host without fish killed the spawn outright - a
+		// regression introduced while fixing the silent-substitution bug.
 		if !strings.ContainsRune(c, os.PathSeparator) {
-			shell = c
-			break
+			if resolved, lErr := exec.LookPath(c); lErr == nil {
+				shell = resolved
+				break
+			}
+			continue
 		}
 		// #nosec G703 -- taint FP. Candidates are the daemon's own cfg.Shell, the
 		// daemon's $SHELL, or two literals; os.Stat only reads metadata and opens

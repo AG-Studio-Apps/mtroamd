@@ -75,6 +75,25 @@ func runSetSecrets(args []string) int {
 		}
 		return connectExitGenericError
 	}
+	// ★★ Surface the readiness the daemon reports for THIS push. Without these
+	// two lines the fields are unreachable: iOS drives this through
+	// `mtroamd set-secrets` over SSH exec and reads its stdout, and every earlier
+	// attempt at this signal added a field that no client could observe - the
+	// rc3 reason field and the rc4 set-secrets fields both shipped dead.
+	//
+	// This is the ONE place the answer is load-bearing, because it describes the
+	// push that just happened: 1 means the secrets will reach their tools, 0
+	// means they will not and the reason line says why.
+	if resp.ShimReady != nil {
+		v := 0
+		if *resp.ShimReady {
+			v = 1
+		}
+		fmt.Printf("MTRM_SHIM_READY %d\n", v)
+	}
+	if resp.ShimNotReadyReason != "" {
+		fmt.Printf("MTRM_SHIM_NOT_READY_REASON %s\n", resp.ShimNotReadyReason)
+	}
 	return connectExitOK
 }
 

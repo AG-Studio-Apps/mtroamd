@@ -160,11 +160,11 @@ func TestSeedPromptHook(t *testing.T) {
 				t.Fatalf("%s: hookInstalled = false, want true", tc.name)
 			}
 			body := seededBody(t, dir, got)
-			mustContain(t, body, "_mt_shim_announce")
+			mustContain(t, body, "_mt_shim_renew")
 			mustContain(t, body, statusPath)
-			// ★ The announce must be reachable ONLY through the per-prompt
-			// wrapper. rc3 also called it from the rc-time line, which let a
-			// login shell announce and then `exec` away.
+			// ★ The lease renew must be reachable ONLY through the per-prompt
+			// wrapper. rc3 called it from the rc-time line too, which let a
+			// login shell claim ready and then `exec` away.
 			mustContain(t, body, "_mt_shim_prompt")
 			if strings.Contains(body, "fi; _mt_shim_prompt\n") {
 				t.Errorf("%s: rc-time immediate call announces; it must call _mt_shim_path only", tc.name)

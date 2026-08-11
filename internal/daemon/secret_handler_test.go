@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
@@ -89,6 +90,8 @@ func TestAllocateShimReadyIsLiveFromDisk(t *testing.T) {
 		t.Fatalf("write shim status: %v", err)
 	}
 
+	// The lease must also be FRESH. os.WriteFile sets mtime to now, so this
+	// stands in for a prompt that just renewed it.
 	resp, err2 := c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
 	if err2 != nil || !resp.Ok {
 		t.Fatalf("reattach allocate: %v %s %s", err2, resp.Err, resp.Msg)
@@ -123,6 +126,25 @@ func TestAllocateShimReadyIsLiveFromDisk(t *testing.T) {
 	}
 	if resp.ShimReady != nil && *resp.ShimReady {
 		t.Error("a legacy literal \"1\" was accepted as ready; pre-v1.7.11 status files must not be trusted")
+	}
+
+	// ★★ THE LEASE. A correct nonce that is STALE must not be ready. This is the
+	// property three previous attempts lacked: they all kept a claim forever, so
+	// an `exec`ed-away shell, a lost hook and a dead shell all stayed "ready".
+	if err := os.WriteFile(statusPath, nonce, 0o600); err != nil {
+		t.Fatalf("re-write lease: %v", err)
+	}
+	stale := time.Now().Add(-2 * shimLeaseTTL)
+	if err := os.Chtimes(statusPath, stale, stale); err != nil {
+		t.Fatalf("age the lease: %v", err)
+	}
+	resp, err2 = c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err2 != nil || !resp.Ok {
+		t.Fatalf("stale-lease allocate: %v %s %s", err2, resp.Err, resp.Msg)
+	}
+	if resp.ShimReady == nil || *resp.ShimReady {
+		t.Errorf("an EXPIRED lease with the correct nonce was reported ready (%v); "+
+			"freshness is the whole mechanism", resp.ShimReady)
 	}
 }
 

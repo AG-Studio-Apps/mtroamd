@@ -232,47 +232,65 @@ func sessionShimDir(stateDir, sid string) string {
 	return filepath.Join(stateDir, "sessions", sid, "shims")
 }
 
-// readShimStatus reports a session's broker-shim readiness LIVE from disk.
+// shimLeaseTTL is how long a renewed lease stays valid.
 //
-// Ready requires ALL THREE of:
+// The seeded prompt hook rewrites the lease on EVERY prompt, so a healthy,
+// actively-used session is never close to this bound. The value trades two
+// bounded, opposite errors against each other:
 //
-//  1. the session owns a live PTY - a restored session whose shell died has a
-//     stale status file describing a shell that no longer exists;
-//  2. a non-empty per-spawn nonce in ShimNonceFilename; and
-//  3. ShimStatusFilename containing EXACTLY that nonce.
+//   - a session idle for longer than this reports NOT ready, which is a spurious
+//     warning (fail-CLOSED, the safe direction); and
+//   - a shell that `exec`s away is still reported ready for at most this long
+//     (fail-open, but BOUNDED - the previous three attempts were unbounded).
 //
-// ★★ The nonce is what makes the claim belong to a live, current shell, and rc3
-// shipped without it. A bare "1" is indelible: it survived the shell that wrote
-// it (measured - a reattach after a daemon restart reported ready with no shell
-// running), and it was byte-identical to the "1" that v1.7.8-v1.7.10 sidecars
-// wrote under far weaker rules, so removing the meta.cbor copy closed one channel
-// for a stale claim while leaving an older one wide open. Requiring a match
-// against a freshly minted random token closes both, because neither a dead
-// shell's nonce nor a legacy literal "1" can equal this spawn's value.
+// Two minutes keeps the fail-open window short while covering the realistic gap
+// between a user's last prompt and a client pushing a secret. ★ It is a
+// deliberate trade, not a tuning knob to raise casually: every second added here
+// is a second an exec'd-away shell can be misreported.
+const shimLeaseTTL = 2 * time.Minute
+
+// readShimStatus reports a session's broker-shim readiness from its lease file.
 //
-// nil (unknown) rather than false whenever we cannot tell, preserving the
-// existing "unknown -> client says regenerate" behaviour for pre-broker sessions.
-func readShimStatus(stateDir, sid string, live bool) *bool {
-	no := false
-	if !live {
-		// A session with no PTY has no shell to make the claim. Not "unknown":
-		// we know positively that nothing is currently asserting it.
-		return &no
-	}
+// Ready requires the lease file to CONTAIN this spawn's nonce and to have been
+// written within shimLeaseTTL. nil (unknown) when there is no nonce file at all,
+// which means a pre-v1.7.11 sidecar whose status file must not be trusted.
+//
+// ★★ This replaced a latch, three times over. rc2 predicted readiness at seed
+// time; rc3 observed it once and kept the answer forever; rc4 added a nonce so
+// the answer belonged to a spawn, but still kept it forever. Every one of them
+// fail-opened, because "was true once" is not "is true now" and the gap has to
+// be closed by enumerating failure modes - `exec`, a lost hook, a dead shell, a
+// failed write - which is exactly what kept being incomplete.
+//
+// Freshness closes the whole class at once and needs no enumeration: anything
+// that stops the seeded shell reaching a prompt also stops the lease renewing.
+// Note there is deliberately NO liveness gate here any more; the rc4 one used
+// Session.HasPTY, which never returns false because s.pty is never cleared on
+// any exit path. The lease subsumes it correctly.
+func readShimStatus(stateDir, sid string, now time.Time) *bool {
 	dir := filepath.Join(stateDir, "sessions", sid)
 	nonce, err := os.ReadFile(filepath.Join(dir, ptysidecar.ShimNonceFilename)) // #nosec G304 -- stateDir + validated session id
 	if err != nil {
-		// No nonce file at all: either a pre-v1.7.11 sidecar (whose status file we
-		// must NOT trust) or a mint failure. Unknown.
-		return nil
+		return nil // pre-v1.7.11 sidecar: genuinely unknown.
 	}
 	want := strings.TrimSpace(string(nonce))
 	if want == "" {
 		return nil
 	}
-	got, err := os.ReadFile(filepath.Join(dir, ptysidecar.ShimStatusFilename)) // #nosec G304 -- stateDir + validated session id
+	no := false
+	leasePath := filepath.Join(dir, ptysidecar.ShimStatusFilename)
+	fi, err := os.Stat(leasePath)
 	if err != nil {
-		return nil
+		return &no
+	}
+	if now.Sub(fi.ModTime()) > shimLeaseTTL {
+		// Expired. Whatever the content says, no seeded shell has reached a
+		// prompt recently enough for the claim to still be meaningful.
+		return &no
+	}
+	got, err := os.ReadFile(leasePath) // #nosec G304 -- stateDir + validated session id
+	if err != nil {
+		return &no
 	}
 	yes := strings.TrimSpace(string(got)) == want
 	return &yes
@@ -899,7 +917,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		// ★★ LIVE from disk, not sess.ShimReady(). The shell announces readiness
 		// at its first prompt, long after the value the session cached at spawn.
 		// See readShimStatus for why the cache (and the persisted copy) had to go.
-		shimReady = readShimStatus(d.stateDir, sess.ID().String(), sess.HasPTY())
+		shimReady = readShimStatus(d.stateDir, sess.ID().String(), time.Now())
 		shimReason = shimNotReadyReason(shimReady, hookInstalled)
 	}
 
@@ -1012,15 +1030,13 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 	// shell announces from its first prompt, measured at ~389ms, while allocate
 	// returns in ~28ms and `connect` allocates exactly once, so every fresh
 	// session would report not-ready forever.
-	live := false
-	if sess, lookErr := d.registry.Lookup(sid); lookErr == nil {
-		live = sess.HasPTY()
-	}
-	shimReady := readShimStatus(d.stateDir, sidStr, live)
+	// ONE lookup: rc4 did three per request, so the two readiness fields could
+	// describe different states if the session was reaped between them.
 	var hookInstalled *bool
 	if sess, lookErr := d.registry.Lookup(sid); lookErr == nil {
 		hookInstalled = sess.HookInstalled()
 	}
+	shimReady := readShimStatus(d.stateDir, sidStr, time.Now())
 
 	d.logger.Info("secret.set", "session", sidStr,
 		"keys", len(payload.Secrets), "commands", len(cmds))
@@ -1043,7 +1059,10 @@ func (d *Daemon) bumpShimGen(sid string) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return
 	}
-	if err := os.WriteFile(path, []byte(hex.EncodeToString(b[:])), 0o600); err != nil {
+	// ★ Trailing newline: `read` returns 1 at EOF without one, which is half of
+	// what made rc4's rehash inert. The hook no longer depends on the return
+	// value, but writing a well-formed line costs nothing and removes the trap.
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(b[:])+"\n"), 0o600); err != nil {
 		d.logger.Warn("secret.shimgen.write_failed", "session", sid, "err", err.Error())
 	}
 }
