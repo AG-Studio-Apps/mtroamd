@@ -73,15 +73,25 @@ func TestAllocateShimReadyIsLiveFromDisk(t *testing.T) {
 	// allocSession asserts the freshly spawned, unseeded session reports *false.
 	sid := allocSession(t, c)
 
-	// Stand in for `_mt_shim_announce` running at the shell's first prompt.
-	statusPath := filepath.Join(d.stateDir, "sessions", sid, ptysidecar.ShimStatusFilename)
-	if err := os.WriteFile(statusPath, []byte("1"), 0o600); err != nil {
+	// Stand in for `_mt_shim_announce` running at the shell's first prompt: it
+	// echoes THIS spawn's nonce, which the sidecar published at seed.
+	sessDir := filepath.Join(d.stateDir, "sessions", sid)
+	statusPath := filepath.Join(sessDir, ptysidecar.ShimStatusFilename)
+	noncePath := filepath.Join(sessDir, ptysidecar.ShimNonceFilename)
+	nonce, err := os.ReadFile(noncePath)
+	if err != nil {
+		t.Fatalf("sidecar published no shim nonce: %v", err)
+	}
+	if len(nonce) == 0 {
+		t.Fatal("shim nonce is empty")
+	}
+	if err := os.WriteFile(statusPath, nonce, 0o600); err != nil {
 		t.Fatalf("write shim status: %v", err)
 	}
 
-	resp, err := c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
-	if err != nil || !resp.Ok {
-		t.Fatalf("reattach allocate: %v %s %s", err, resp.Err, resp.Msg)
+	resp, err2 := c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err2 != nil || !resp.Ok {
+		t.Fatalf("reattach allocate: %v %s %s", err2, resp.Err, resp.Msg)
 	}
 	if resp.ShimReady == nil || !*resp.ShimReady {
 		t.Fatalf("after announce, ShimReady = %v, want *true (the daemon must re-read the file, not reuse its spawn-time snapshot)", resp.ShimReady)
@@ -92,12 +102,27 @@ func TestAllocateShimReadyIsLiveFromDisk(t *testing.T) {
 	if err := os.WriteFile(statusPath, []byte("0"), 0o600); err != nil {
 		t.Fatalf("reset shim status: %v", err)
 	}
-	resp, err = c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
-	if err != nil || !resp.Ok {
-		t.Fatalf("second reattach allocate: %v %s %s", err, resp.Err, resp.Msg)
+	resp, err2 = c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err2 != nil || !resp.Ok {
+		t.Fatalf("second reattach allocate: %v %s %s", err2, resp.Err, resp.Msg)
 	}
 	if resp.ShimReady == nil || *resp.ShimReady {
 		t.Errorf("after reset, ShimReady = %v, want *false", resp.ShimReady)
+	}
+
+	// ★★ A LITERAL "1" must NOT be accepted. That is exactly what v1.7.8-v1.7.10
+	// sidecars wrote, under much weaker rules, and rc3 read those files verbatim -
+	// so the upgrade hole the release set out to close stayed open through the
+	// status file. Only this spawn's nonce counts.
+	if err := os.WriteFile(statusPath, []byte("1"), 0o600); err != nil {
+		t.Fatalf("write legacy status: %v", err)
+	}
+	resp, err2 = c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err2 != nil || !resp.Ok {
+		t.Fatalf("legacy-status allocate: %v %s %s", err2, resp.Err, resp.Msg)
+	}
+	if resp.ShimReady != nil && *resp.ShimReady {
+		t.Error("a legacy literal \"1\" was accepted as ready; pre-v1.7.11 status files must not be trusted")
 	}
 }
 

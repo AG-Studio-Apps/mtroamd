@@ -83,7 +83,7 @@ func runSeeded(t *testing.T, shellPath, home string, args []string, probe string
 		"TERM=xterm",
 	}
 
-	res := seedPromptHook(sessionDir, shellPath, args, env, discardLogger())
+	res := seedPromptHook(sessionDir, shellPath, args, env, "testnonce", discardLogger())
 	if !res.hookInstalled {
 		t.Fatalf("seedPromptHook did not install a hook for %s", shellPath)
 	}
@@ -190,7 +190,7 @@ func TestSeededShellShimActuallyWins(t *testing.T) {
 				"MESHTERM_SESSION_ID=testsession",
 				"TERM=xterm",
 			}
-			res := seedPromptHook(sessionDir, shellPath, nil, env, discardLogger())
+			res := seedPromptHook(sessionDir, shellPath, nil, env, "testnonce", discardLogger())
 			// `$(printenv)` so the marker wrapper captures which binary ran,
 			// isolated from the rc's own stdout chatter.
 			probe := probeFor("$(printenv)")
@@ -323,18 +323,32 @@ func announceStatus(t *testing.T, shellPath, home string, args []string) string 
 		"MESHTERM_SESSION_ID=testsession",
 		"TERM=xterm",
 	}
-	res := seedPromptHook(sessionDir, shellPath, args, env, discardLogger())
+	res := seedPromptHook(sessionDir, shellPath, args, env, "testnonce", discardLogger())
 	if !res.hookInstalled {
 		t.Fatalf("seedPromptHook did not install a hook for %s", shellPath)
 	}
-	cmd := exec.Command(res.shell, append(append([]string{}, res.args...), "-i", "-c", "true")...)
+	// ★★ The announce now fires only from the PER-PROMPT hook, so the shell has
+	// to actually reach a prompt. `-i -c cmd` never displays one. Feeding a
+	// command on STDIN of an interactive shell does: bash/zsh run the prompt
+	// cycle (and therefore PROMPT_COMMAND / precmd_functions) per input line.
+	cmd := exec.Command(res.shell, append(append([]string{}, res.args...), "-i")...)
 	cmd.Env = res.env
+	cmd.Stdin = strings.NewReader("true\nexit\n")
 	_ = cmd.Run()
 	data, err := os.ReadFile(statusPath)
 	if err != nil {
 		return "<absent>"
 	}
-	return strings.TrimSpace(string(data))
+	got := strings.TrimSpace(string(data))
+	// Normalise to "1"/"0" so the cases below read as readiness rather than as
+	// token comparison. Ready means the shell echoed back THIS spawn's nonce.
+	if res.shimNonce != "" && got == res.shimNonce {
+		return "1"
+	}
+	if got == "" {
+		return "<empty>"
+	}
+	return got
 }
 
 // writeHomeRC builds a throwaway HOME with an arbitrary rc body.
@@ -403,4 +417,43 @@ func TestAnnounceOnlyWhenShellActuallyGetsThere(t *testing.T) {
 			t.Errorf("login bash reaching a prompt: shim-ready = %q, want \"1\"", got)
 		}
 	})
+}
+
+// TestLoginZshThatExecsAwayNeverAnnounces is the regression test for the defect
+// that blocked v1.7.11-rc3, and it is worth its own function because rc3 made
+// this case WORSE than the rc2 it replaced.
+//
+// rc2 predicted readiness as `!login` and so reported this session not-ready,
+// which was right by accident. rc3 replaced the prediction with an observation
+// but took the observation at the wrong moment - the end of the rc rather than a
+// prompt - so the shell announced ready and then exec'd into a tmux whose panes
+// had never been seeded. Measured on zsh 5.9 during review.
+//
+// zsh reads .zshrc and THEN .zlogin, and our generated .zshrc restores the real
+// ZDOTDIR as its last statement, so the user's .zlogin is the real one. An
+// `exec` there means no prompt is ever reached, which must mean no announce.
+func TestLoginZshThatExecsAwayNeverAnnounces(t *testing.T) {
+	zsh := lookShell(t, "zsh")
+
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "mybin"), 0o700); err != nil {
+		t.Fatalf("mkdir mybin: %v", err)
+	}
+	// An ordinary rc: prepend a personal bin dir. On its own this session would
+	// be perfectly ready.
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"),
+		[]byte("PATH=\"$HOME/mybin:$PATH\"\nexport PATH\n"), 0o600); err != nil {
+		t.Fatalf("write .zshrc: %v", err)
+	}
+	// ...but the login file execs away before any prompt. This is the common
+	// `[[ -z $TMUX ]] && exec tmux` shape, reduced to something that terminates.
+	if err := os.WriteFile(filepath.Join(home, ".zlogin"),
+		[]byte("exec /bin/true\n"), 0o600); err != nil {
+		t.Fatalf("write .zlogin: %v", err)
+	}
+
+	if got := announceStatus(t, zsh, home, []string{"-l"}); got == "1" {
+		t.Errorf("login zsh whose .zlogin execs away: shim-ready = %q, want NOT \"1\" "+
+			"(it never reached a prompt, so it cannot have observed anything)", got)
+	}
 }

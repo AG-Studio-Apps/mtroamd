@@ -1,6 +1,8 @@
 package ptysidecar
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -43,6 +45,44 @@ const HookStatusFilename = "hook-installed"
 // internal/daemon) rather than caching it at spawn, because the announce
 // necessarily happens after the spawn has returned.
 const ShimStatusFilename = "shim-ready"
+
+// ShimNonceFilename holds the per-spawn nonce the sidecar mints and bakes into
+// the generated rc. A session is READY only when ShimStatusFilename contains
+// exactly this value.
+//
+// ★★ This is what ties a readiness claim to a LIVE, CURRENT shell, and it exists
+// because rc3 shipped without it. A bare "1" in the status file is indelible: it
+// outlived the shell that wrote it (a reattach after a daemon restart reported
+// ready with no shell running at all) and it was indistinguishable from the "1"
+// that v1.7.8-v1.7.10 sidecars wrote under much weaker rules, so the upgrade hole
+// the release set out to close stayed open through this file instead of meta.cbor.
+// A fresh random nonce per spawn makes both stale claims simply not match.
+const ShimNonceFilename = "shim-nonce"
+
+// ShimGenFilename is a counter the DAEMON bumps whenever it rewrites the shim
+// dir. The prompt hook re-reads it and clears the shell's command hash when it
+// changes.
+//
+// ★★ Needed because hash invalidation cannot be driven by "did we just change
+// PATH". The common spawn already has the shim dir first, so the hook takes its
+// fast path and never rewrites anything, while the shim FILES are created later
+// by SyncShims on the first set-secrets. rc3 tied `hash -r` to the rewrite branch
+// and therefore never ran it in the case that actually needed it: a tool invoked
+// once before its shim existed stayed hashed to the real binary for the life of
+// the shell, while the session reported ready.
+const ShimGenFilename = "shim-gen"
+
+// newShimNonce mints the per-spawn nonce. crypto/rand because this value is what
+// distinguishes "a shell I am talking to right now said this" from "some file on
+// disk says this"; a predictable or repeated value would let a stale status file
+// match a fresh spawn by luck.
+func newShimNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
 
 // shimFuncDef defines _mt_shim_path, which moves the broker shim dir to the
 // FRONT of PATH. Split into a function (from a one-liner) and called on EVERY
@@ -87,15 +127,41 @@ const ShimStatusFilename = "shim-ready"
 // spawn but POPULATED LAZILY by SyncShims on the first SetSessionSecrets. A tool
 // run before its shim file existed is hashed to the real binary and STAYS hashed
 // there, so fixing PATH order alone does not redirect it. Measured.
-func shimFuncDef(statusPath string) string {
-	q := shSingleQuote(statusPath)
-	// _mt_shim_announce records the OBSERVATION that the shim is first. Written
-	// at most once per shell (_MT_SHIM_ANNOUNCED is deliberately not `local`, so
-	// it persists across prompts). Failure is silent: a read-only session dir
-	// leaves the bit "0", which is the fail-CLOSED direction.
-	announce := `_mt_shim_announce() { [ -z "${_MT_SHIM_ANNOUNCED:-}" ] || return 0; _MT_SHIM_ANNOUNCED=1; { printf 1 > ` + q + `; } 2>/dev/null; return 0; }`
-	path := `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MESHTERM_SHIM_DIR:-}" ] || return 0; [ -z "${_MT_SHIM_OFF:-}" ] || return 0; if [ "$PATH" = "$MESHTERM_SHIM_DIR" ] || [ "${PATH%%:*}" = "$MESHTERM_SHIM_DIR" ]; then _mt_shim_announce; return 0; fi; _mt_new=; _mt_rest="$PATH"; while :; do _mt_e="${_mt_rest%%:*}"; [ "$_mt_e" = "$MESHTERM_SHIM_DIR" ] || _mt_new="$_mt_new:$_mt_e"; [ "$_mt_rest" = "${_mt_rest#*:}" ] && break; _mt_rest="${_mt_rest#*:}"; done; _mt_new="${_mt_new#:}"; _mt_new="$MESHTERM_SHIM_DIR${_mt_new:+:$_mt_new}"; [ "$PATH" = "$_mt_new" ] && { _mt_shim_announce; return 0; }; _MT_SHIM_OFF=1; { PATH="$_mt_new"; } 2>/dev/null; if [ "$PATH" = "$_mt_new" ]; then export PATH; unset _MT_SHIM_OFF; if [ -n "${ZSH_VERSION:-}" ]; then rehash 2>/dev/null; else hash -r 2>/dev/null; fi; _mt_shim_announce; fi; return 0; }`
-	return announce + "\n" + path
+func shimFuncDef(statusPath, genPath, nonce string) string {
+	qs, qg, qn := shSingleQuote(statusPath), shSingleQuote(genPath), shSingleQuote(nonce)
+	// ★★ The announce writes the NONCE, not "1". The nonce is minted per spawn and
+	// also written to shim-nonce, and the daemon calls a session ready only when
+	// the two match. That is what makes the claim belong to THIS shell: a stale
+	// file from a dead shell, or from a pre-v1.7.11 sidecar that wrote a literal
+	// "1", can never equal a fresh random nonce.
+	//
+	// `>|` not `>`: the sidecar guarantees the target already exists, so a user rc
+	// with `set -o noclobber` made a plain `>` fail, silently and permanently.
+	announce := `_mt_shim_announce() { [ -z "${_MT_SHIM_ANNOUNCED:-}" ] || return 0; _MT_SHIM_ANNOUNCED=1; { printf %s ` + qn + ` >| ` + qs + `; } 2>/dev/null; return 0; }`
+	// Revocation. The observation has to be withdrawable or it is just a latched
+	// prediction again: a shell that stops being able to keep the shim first
+	// (readonly PATH, a hook we lost) must take the claim back.
+	revoke := `_mt_shim_revoke() { [ -n "${_MT_SHIM_ANNOUNCED:-}" ] || return 0; _MT_SHIM_ANNOUNCED=; { printf 0 >| ` + qs + `; } 2>/dev/null; return 0; }`
+	// ★★ Hash invalidation is driven by a GENERATION file the daemon bumps when it
+	// rewrites the shim dir, not by whether we just changed PATH. Tying it to the
+	// PATH rewrite was wrong: the default spawn already has the shim dir first, so
+	// it takes the fast path, and the shims are created LATER by SyncShims on the
+	// first set-secrets. That left a tool hashed to the real binary forever while
+	// the session reported ready. `read < file` is a builtin with a redirect - no
+	// fork - so this is cheap enough to run on every prompt.
+	rehash := `_mt_shim_rehash() { local _mt_g=; { read _mt_g < ` + qg + `; } 2>/dev/null || _mt_g=; [ "$_mt_g" = "${_MT_SHIM_GEN-}" ] && return 0; _MT_SHIM_GEN="$_mt_g"; if [ -n "${ZSH_VERSION:-}" ]; then rehash 2>/dev/null; else hash -r 2>/dev/null; fi; return 0; }`
+	// _mt_shim_path now ONLY manipulates PATH and reports whether the shim ended
+	// up first. It deliberately does not announce: see _mt_shim_prompt.
+	path := `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MESHTERM_SHIM_DIR:-}" ] || return 1; [ -z "${_MT_SHIM_OFF:-}" ] || return 1; if [ "$PATH" = "$MESHTERM_SHIM_DIR" ] || [ "${PATH%%:*}" = "$MESHTERM_SHIM_DIR" ]; then return 0; fi; _mt_new=; _mt_rest="$PATH"; while :; do _mt_e="${_mt_rest%%:*}"; [ "$_mt_e" = "$MESHTERM_SHIM_DIR" ] || _mt_new="$_mt_new:$_mt_e"; [ "$_mt_rest" = "${_mt_rest#*:}" ] && break; _mt_rest="${_mt_rest#*:}"; done; _mt_new="${_mt_new#:}"; _mt_new="$MESHTERM_SHIM_DIR${_mt_new:+:$_mt_new}"; [ "$PATH" = "$_mt_new" ] && return 0; _MT_SHIM_OFF=1; { PATH="$_mt_new"; } 2>/dev/null; if [ "$PATH" = "$_mt_new" ]; then export PATH; unset _MT_SHIM_OFF; return 0; fi; return 1; }`
+	// ★★ THE announce point, and the only one. Registered per prompt.
+	//
+	// rc3 announced from the immediate rc-time call as well, which reintroduced
+	// the fail-open it was meant to close: a login zsh whose .zlogin ends in
+	// `exec tmux` ran our .zshrc, announced ready, and then vanished into a shell
+	// that had never been seeded. Reaching a PROMPT is the evidence that the shell
+	// survived its own startup files; finishing an rc is not.
+	prompt := `_mt_shim_prompt() { if _mt_shim_path; then _mt_shim_rehash; _mt_shim_announce; else _mt_shim_revoke; fi; return 0; }`
+	return announce + "\n" + revoke + "\n" + rehash + "\n" + path + "\n" + prompt
 }
 
 // shimRegisterLine wires _mt_shim_path into the per-prompt hook and runs it
@@ -121,7 +187,17 @@ func shimFuncDef(statusPath string) string {
 // the modern `PROMPT_COMMAND+=(...)` form ran AFTER our re-assert on every
 // prompt and re-prepended its own dir. That defeats the entire premise of
 // re-asserting per prompt, so the array case has to append as an array element.
-const shimRegisterLine = `if [ -n "${ZSH_VERSION:-}" ]; then precmd_functions+=(_mt_shim_path); elif [ -n "${BASH_VERSION:-}" ] && [ "$(declare -p PROMPT_COMMAND 2>/dev/null | cut -c1-11)" = "declare -a " ]; then PROMPT_COMMAND+=(_mt_shim_path); else PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_path"; fi; _mt_shim_path`
+// ★ The array probe is a `case` glob, not a `cut` prefix compare. `declare -a `
+// with a trailing space missed `declare -ax` (exported) and `declare -ar`
+// (readonly), which fell back to the scalar append and reproduced the very
+// element-[0] bug this was added to fix. The glob matches every attribute
+// combination, and dropping `cut` also drops a pipeline whose stderr was
+// unredirected into the user's terminal.
+//
+// ★ The trailing immediate call is `_mt_shim_path`, NOT `_mt_shim_prompt`: PATH
+// should be correct the moment the rc finishes, but announcing there is exactly
+// the rc3 defect. Only a real prompt announces.
+const shimRegisterLine = `if [ -n "${ZSH_VERSION:-}" ]; then precmd_functions+=(_mt_shim_prompt); elif [ -n "${BASH_VERSION:-}" ]; then case "$(declare -p PROMPT_COMMAND 2>/dev/null)" in "declare -a"*) PROMPT_COMMAND+=(_mt_shim_prompt) ;; *) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_prompt" ;; esac; else PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_prompt"; fi; _mt_shim_path`
 
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
@@ -198,22 +274,28 @@ type seedResult struct {
 	// Keeping a seed-time field here at all would re-open the hole, because the
 	// only honest value it could carry ("we wrote the lines") is exactly what
 	// hookInstalled already means.
+
+	// shimNonce is the per-spawn token baked into the generated rc. The sidecar
+	// writes it to ShimNonceFilename; the shell echoes it into
+	// ShimStatusFilename once it observes the shim first from a PROMPT. Empty
+	// when nothing was seeded.
+	shimNonce string
 }
 
 // seedPromptHook installs the live-inject prompt hook for a session's
 // shell, after the user's own rc so a user PROMPT_COMMAND/precmd can't
 // clobber it. It returns the invocation the sidecar should exec. It is
 // fail-safe: every error path returns the untouched original.
-func seedPromptHook(sessionDir, shell string, args, env []string, log *slog.Logger) seedResult {
+func seedPromptHook(sessionDir, shell string, args, env []string, nonce string, log *slog.Logger) seedResult {
 	// An UNSEEDED shell gets no _mt_shim_path, so nothing re-asserts the shim
 	// after the user's rc runs and we can guarantee nothing. seedBash/seedZsh
 	// override this to true on success.
 	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false}
 	switch classifyShell(shell) {
 	case shellBash:
-		return seedBash(sessionDir, shell, args, env, log, orig)
+		return seedBash(sessionDir, shell, args, env, nonce, log, orig)
 	case shellZsh:
-		return seedZsh(sessionDir, shell, args, env, log, orig)
+		return seedZsh(sessionDir, shell, args, env, nonce, log, orig)
 	case shellPosix:
 		// sh / dash have no per-prompt hook (no PROMPT_COMMAND /
 		// precmd), so the live-inject shim can never fire there. We
@@ -283,7 +365,7 @@ func makeHookrcDir(sessionDir string) (string, error) {
 // then append the hook LAST. A PTY-attached bash with no command arg is
 // interactive by default, so dropping the original -l/-i flags in favour
 // of --rcfile keeps it interactive while making --rcfile take effect.
-func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
+func seedBash(sessionDir, shell string, args, env []string, nonce string, log *slog.Logger, orig seedResult) seedResult {
 	benign, login := classifyShellArgs(args)
 	if !benign {
 		return orig
@@ -309,7 +391,10 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		b.WriteString(`[ -r /etc/bash.bashrc ] && . /etc/bash.bashrc` + "\n")
 		b.WriteString(`[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"` + "\n")
 	}
-	b.WriteString(shimFuncDef(filepath.Join(sessionDir, ShimStatusFilename)) + "\n")
+	b.WriteString(shimFuncDef(
+		filepath.Join(sessionDir, ShimStatusFilename),
+		filepath.Join(sessionDir, ShimGenFilename),
+		nonce) + "\n")
 	b.WriteString(promptHookBody + "\n")
 	b.WriteString(shimRegisterLine + "\n")
 
@@ -322,6 +407,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		args:          []string{"--rcfile", rcPath},
 		env:           env,
 		hookInstalled: true,
+		shimNonce:     nonce,
 	}
 }
 
@@ -331,7 +417,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 // ZDOTDIR so child processes and a login .zlogin see the real value.
 // Both login and non-login work: ZDOTDIR redirects every startup-file
 // lookup, so we don't touch the shell's args (login stays login).
-func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
+func seedZsh(sessionDir, shell string, args, env []string, nonce string, log *slog.Logger, orig seedResult) seedResult {
 	// login is discarded: zsh seeding is identical either way (ZDOTDIR redirects
 	// every startup-file lookup), and the login flag's only other use was the
 	// seed-time shimReady prediction that this release deletes. A login .zlogin
@@ -376,7 +462,10 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 	// .zshrc (interactive). Source the user's rc, install the hook
 	// AFTER it, then restore ZDOTDIR.
 	zshrc := "[ -r " + realExpr + "/.zshrc ] && . " + realExpr + "/.zshrc\n" +
-		shimFuncDef(filepath.Join(sessionDir, ShimStatusFilename)) + "\n" +
+		shimFuncDef(
+			filepath.Join(sessionDir, ShimStatusFilename),
+			filepath.Join(sessionDir, ShimGenFilename),
+			nonce) + "\n" +
 		promptHookBody + "\n" +
 		shimRegisterLine + "\n" +
 		restore
@@ -397,6 +486,7 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
+		shimNonce:     nonce,
 	}
 }
 
@@ -459,4 +549,29 @@ func envReplace(env []string, key, val string) []string {
 // quotes, so it is a safe literal in a POSIX shell script.
 func shSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// writeShimNonce publishes this spawn's nonce for the daemon to compare against
+// whatever the shell later writes into ShimStatusFilename. Best-effort: an empty
+// nonce (mint failure) or a write failure leaves the session permanently
+// not-ready, which is the fail-CLOSED direction.
+//
+// ★ Written for EVERY spawn, including shells we did not seed. An unseeded shell
+// has a nonce that nothing will ever echo back, so it reads as not-ready (false)
+// rather than unknown (nil) - which is the honest answer, because we know
+// positively that nothing is asserting readiness. Absence of this file means a
+// PRE-v1.7.11 sidecar, which is the only genuinely unknown case.
+func writeShimNonce(sessionDir, nonce string, log *slog.Logger) {
+	path := filepath.Join(sessionDir, ShimNonceFilename)
+	if nonce == "" {
+		// No trustworthy token: remove any previous spawn's nonce so a stale one
+		// cannot be matched by a stale status file.
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Warn("sidecar.hookseed.nonce_remove_failed", "err", err.Error())
+		}
+		return
+	}
+	if err := os.WriteFile(path, []byte(nonce), 0o600); err != nil {
+		log.Warn("sidecar.hookseed.nonce_write_failed", "err", err.Error())
+	}
 }

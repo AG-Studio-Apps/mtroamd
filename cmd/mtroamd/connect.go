@@ -329,6 +329,16 @@ func printSessionShimReady(resp *ipc.AllocateResponse) {
 		v = 1
 	}
 	fmt.Printf("MTRM_SHIM_READY %d\n", v)
+	// ★★ The reason line, without which the reason field is unreachable. It was
+	// added to the wire type and populated by the daemon, but nothing ever
+	// transmitted it - iOS reads these MTRM_* lines and nothing else - so the
+	// fish/nushell user it exists for still got the same dead-end "regenerate the
+	// session" advice. A field no client can observe is not a fix.
+	//
+	// Additive and last: older clients ignore an unrecognised MTRM_ line.
+	if resp.ShimNotReadyReason != "" {
+		fmt.Printf("MTRM_SHIM_NOT_READY_REASON %s\n", resp.ShimNotReadyReason)
+	}
 }
 
 // printSessionHookInstalled emits the optional MTRM_LIVE_INJECT

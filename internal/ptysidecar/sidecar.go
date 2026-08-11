@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -108,6 +109,16 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	candidates = append(candidates, "/bin/bash", "/bin/sh")
 	for _, c := range candidates {
+		// ★ A candidate with no separator is a BARE NAME (`mtroamd connect --shell
+		// fish`), which exec.Command resolves against PATH. Statting it would
+		// resolve it against the daemon's cwd instead, fail, and silently fall
+		// through to /bin/bash - so the user asks for fish and quietly gets bash.
+		// Bare names are therefore taken as-is, exactly as before this change;
+		// only path-ish candidates are probed for existence.
+		if !strings.ContainsRune(c, os.PathSeparator) {
+			shell = c
+			break
+		}
 		// #nosec G703 -- taint FP. Candidates are the daemon's own cfg.Shell, the
 		// daemon's $SHELL, or two literals; os.Stat only reads metadata and opens
 		// nothing. The real trust decision on this value is the exec.Command below,
@@ -139,18 +150,25 @@ func Run(ctx context.Context, cfg Config) error {
 	// seeding. The session dir is the socket's parent. Record the
 	// outcome for the spawning ptyclient to read after it dials.
 	sessionDir := filepath.Dir(cfg.SocketPath)
-	seed := seedPromptHook(sessionDir, shell, cfg.ShellArgs, env, log)
+	// ★ Mint the nonce HERE, before seeding, so every spawn publishes one even
+	// when the shell turns out not to be seedable. See writeShimNonce.
+	nonce, nonceErr := newShimNonce()
+	if nonceErr != nil {
+		log.Warn("sidecar.hookseed.nonce_failed", "err", nonceErr.Error())
+		nonce = ""
+	}
+	seed := seedPromptHook(sessionDir, shell, cfg.ShellArgs, env, nonce, log)
 	shell = seed.shell
 	shellArgs := seed.args
 	env = seed.env
 	writeHookStatus(sessionDir, seed.hookInstalled, log)
-	// ★★ Always FALSE here, never seed.shimReady - that field no longer exists.
-	// This is the reset, not the answer: it marks the session not-ready before
-	// the shell starts, and only `_mt_shim_announce`, running inside that shell
-	// once the shim is observed first on the live PATH, promotes it to "1". A
-	// respawn re-runs this and correctly drops the claim back to not-ready until
-	// the new shell earns it again.
+	// ★★ Reset to not-ready, and publish THIS spawn's nonce. Readiness is granted
+	// only when the shell echoes the nonce back into the status file from a
+	// prompt, so a respawn (new nonce) automatically invalidates any claim the
+	// previous shell left behind, and a status file written by a pre-v1.7.11
+	// sidecar - which contained a literal "1" - can never match.
 	writeShimStatus(sessionDir, false, log)
+	writeShimNonce(sessionDir, nonce, log)
 
 	cmd := exec.Command(shell, shellArgs...)
 	cmd.Env = env

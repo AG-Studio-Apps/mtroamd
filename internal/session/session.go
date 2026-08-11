@@ -1900,6 +1900,18 @@ var ErrSessionHasPTY = errors.New("session already has a PTY")
 // The caller must also start the session's Pump goroutine
 // (`go sess.Pump()`) after a successful AssignPTY — this method
 // only wires the handle; it doesn't kick off reads.
+// HasPTY reports whether this session currently owns a live PTY.
+//
+// ★★ Used to gate broker shim-readiness. A session restored from disk after a
+// daemon restart has no PTY until its first attach lazily respawns one, and the
+// shim-ready file on disk still holds whatever the PREVIOUS shell announced.
+// Reporting that as ready described a shell that no longer exists.
+func (s *Session) HasPTY() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pty != nil
+}
+
 func (s *Session) AssignPTY(p PTY) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

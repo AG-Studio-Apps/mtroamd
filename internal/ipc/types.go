@@ -62,6 +62,20 @@ type SetSessionSecretsResponse struct {
 	Ok  bool   `cbor:"ok"`
 	Err string `cbor:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty"`
+
+	// ShimReady / ShimNotReadyReason report, at the moment of the push, whether
+	// the brokered secrets will actually reach their tools. Same semantics as the
+	// AllocateResponse fields.
+	//
+	// ★★ This is the authoritative place to ask. Allocate cannot answer it: the
+	// shell announces readiness from its first PROMPT (measured ~389ms) while
+	// allocate returns in ~28ms and `connect` allocates exactly once, so an
+	// allocate-only answer reports not-ready for every freshly spawned session no
+	// matter how healthy it is. Here the session has been running for as long as
+	// it takes the user to push a secret, and - more importantly - this is the
+	// call whose outcome actually depends on the answer.
+	ShimReady          *bool  `cbor:"shim_ready,omitempty"`
+	ShimNotReadyReason string `cbor:"shim_not_ready_reason,omitempty"`
 }
 
 // GetSecretsRequest is `secret-exec`'s ask: give me the env for
@@ -186,9 +200,9 @@ type AllocateResponse struct {
 	Ok bool   `cbor:"ok"`
 
 	// On success:
-	SessionID   string `cbor:"sid,omitempty"`     // 32 hex chars
-	AttachToken string `cbor:"tok,omitempty"`     // 32 hex chars, single-use, 30s TTL
-	Port        uint16 `cbor:"port,omitempty"`    // QUIC UDP port
+	SessionID   string `cbor:"sid,omitempty"`  // 32 hex chars
+	AttachToken string `cbor:"tok,omitempty"`  // 32 hex chars, single-use, 30s TTL
+	Port        uint16 `cbor:"port,omitempty"` // QUIC UDP port
 	// TCPPort is the plain-TCP mtRoam listener's bound port, populated
 	// when the daemon was started with --mtroam-tcp-addr. Surfaced on
 	// the bootstrap line as MTRM_TCP so the iOS client can dial the
@@ -411,23 +425,23 @@ type StatusResponse struct {
 	T  string `cbor:"t" json:"-"`
 	Ok bool   `cbor:"ok" json:"ok"`
 
-	Version             string `cbor:"ver,omitempty" json:"version"`
-	StartedAtNs         int64  `cbor:"sat,omitempty" json:"started_at_ns"`
-	UptimeNs            int64  `cbor:"upt,omitempty" json:"uptime_ns"`
-	QUICAddr            string `cbor:"qa,omitempty" json:"quic_addr"`
+	Version     string `cbor:"ver,omitempty" json:"version"`
+	StartedAtNs int64  `cbor:"sat,omitempty" json:"started_at_ns"`
+	UptimeNs    int64  `cbor:"upt,omitempty" json:"uptime_ns"`
+	QUICAddr    string `cbor:"qa,omitempty" json:"quic_addr"`
 	// MTRoamTCPAddr is the plain-TCP mtRoam listener's bound address,
 	// surfaced when the daemon is started with --mtroam-tcp-addr.
 	// Empty when the TCP listener is disabled (the default —
 	// daemon ships QUIC-only). iOS clients in embedded-Tailscale
 	// mode use this to dial the daemon via tsnet; system / direct
 	// mode clients ignore it and use QUICAddr.
-	MTRoamTCPAddr         string `cbor:"rta,omitempty" json:"mtroam_tcp_addr,omitempty"`
-	CertFingerprint     string `cbor:"fp,omitempty" json:"cert_fingerprint"`
-	SessionCount        int    `cbor:"sc,omitempty" json:"session_count"`
-	MaxSessions         int    `cbor:"ms,omitempty" json:"max_sessions"`
-	IdleTimeoutNs       int64  `cbor:"itn,omitempty" json:"idle_timeout_ns"`
-	MaxIdleTimeoutNs    int64  `cbor:"mitn,omitempty" json:"max_idle_timeout_ns"`
-	PendingTokens       int    `cbor:"pt,omitempty" json:"pending_tokens"`
+	MTRoamTCPAddr    string `cbor:"rta,omitempty" json:"mtroam_tcp_addr,omitempty"`
+	CertFingerprint  string `cbor:"fp,omitempty" json:"cert_fingerprint"`
+	SessionCount     int    `cbor:"sc,omitempty" json:"session_count"`
+	MaxSessions      int    `cbor:"ms,omitempty" json:"max_sessions"`
+	IdleTimeoutNs    int64  `cbor:"itn,omitempty" json:"idle_timeout_ns"`
+	MaxIdleTimeoutNs int64  `cbor:"mitn,omitempty" json:"max_idle_timeout_ns"`
+	PendingTokens    int    `cbor:"pt,omitempty" json:"pending_tokens"`
 
 	Err string `cbor:"err,omitempty" json:"err,omitempty"`
 	Msg string `cbor:"msg,omitempty" json:"msg,omitempty"`

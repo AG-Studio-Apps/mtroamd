@@ -74,7 +74,7 @@ func TestSeedPromptHook(t *testing.T) {
 
 	t.Run("bash_non_login", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/bin/bash", nil, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/bin/bash", nil, []string{home, sess}, "testnonce", discardLogger())
 		if !got.hookInstalled {
 			t.Fatalf("hookInstalled = false, want true")
 		}
@@ -93,10 +93,15 @@ func TestSeedPromptHook(t *testing.T) {
 		}
 		// The seeded rc re-asserts the broker shim dir on PATH (after the
 		// user's rc) so a login rebuild can't drop it.
-		mustContain(t, body, shimFuncDef(filepath.Join(dir, ShimStatusFilename)))
 		mustContain(t, body, shimRegisterLine)
-		// The announce writes to THIS session's status file, by absolute path.
+		// The announce writes to THIS session's status file, by absolute path,
+		// and carries this spawn's nonce rather than a bare "1".
 		mustContain(t, body, filepath.Join(dir, ShimStatusFilename))
+		mustContain(t, body, filepath.Join(dir, ShimGenFilename))
+		if got.shimNonce == "" {
+			t.Fatal("seeded bash carries no shim nonce")
+		}
+		mustContain(t, body, got.shimNonce)
 	})
 
 	// ★★ This replaces `shim_ready_only_when_seeded`, which asserted the SEED-TIME
@@ -124,7 +129,7 @@ func TestSeedPromptHook(t *testing.T) {
 			{"fish_unknown", "/usr/bin/fish", nil},
 			{"bash_dash_c", "/bin/bash", []string{"-c", "tmux new"}},
 		} {
-			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, discardLogger())
+			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, "testnonce", discardLogger())
 			if got.hookInstalled {
 				t.Errorf("%s: hookInstalled = true, want false (must not be seeded)", tc.name)
 			}
@@ -139,6 +144,7 @@ func TestSeedPromptHook(t *testing.T) {
 		// login startup file that `exec`s away simply never reaches a prompt, so
 		// it never announces, and the bit stays "0" on its own.
 		statusPath := filepath.Join(dir, ShimStatusFilename)
+		_ = statusPath
 		for _, tc := range []struct {
 			name  string
 			shell string
@@ -149,19 +155,26 @@ func TestSeedPromptHook(t *testing.T) {
 			{"zsh_plain", "/bin/zsh", nil},
 			{"zsh_login", "/bin/zsh", []string{"-l"}},
 		} {
-			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, discardLogger())
+			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, "testnonce", discardLogger())
 			if !got.hookInstalled {
 				t.Fatalf("%s: hookInstalled = false, want true", tc.name)
 			}
 			body := seededBody(t, dir, got)
 			mustContain(t, body, "_mt_shim_announce")
 			mustContain(t, body, statusPath)
+			// ★ The announce must be reachable ONLY through the per-prompt
+			// wrapper. rc3 also called it from the rc-time line, which let a
+			// login shell announce and then `exec` away.
+			mustContain(t, body, "_mt_shim_prompt")
+			if strings.Contains(body, "fi; _mt_shim_prompt\n") {
+				t.Errorf("%s: rc-time immediate call announces; it must call _mt_shim_path only", tc.name)
+			}
 		}
 	})
 
 	t.Run("bash_login", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/bin/bash", []string{"-l"}, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/bin/bash", []string{"-l"}, []string{home, sess}, "testnonce", discardLogger())
 		if !got.hookInstalled {
 			t.Fatalf("hookInstalled = false, want true")
 		}
@@ -176,7 +189,7 @@ func TestSeedPromptHook(t *testing.T) {
 
 	t.Run("bash_custom_command_skips", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/bin/bash", []string{"-c", "tmux new"}, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/bin/bash", []string{"-c", "tmux new"}, []string{home, sess}, "testnonce", discardLogger())
 		if got.hookInstalled {
 			t.Errorf("hookInstalled = true, want false for a -c command")
 		}
@@ -187,7 +200,7 @@ func TestSeedPromptHook(t *testing.T) {
 
 	t.Run("zsh_sets_zdotdir", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/usr/bin/zsh", nil, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/usr/bin/zsh", nil, []string{home, sess}, "testnonce", discardLogger())
 		if !got.hookInstalled {
 			t.Fatalf("hookInstalled = false, want true")
 		}
@@ -214,7 +227,7 @@ func TestSeedPromptHook(t *testing.T) {
 	t.Run("zsh_preserves_existing_zdotdir", func(t *testing.T) {
 		dir := t.TempDir()
 		got := seedPromptHook(dir, "/usr/bin/zsh", nil,
-			[]string{home, sess, "ZDOTDIR=/custom/zdot"}, discardLogger())
+			[]string{home, sess, "ZDOTDIR=/custom/zdot"}, "testnonce", discardLogger())
 		zdot, _ := envLookup(got.env, "ZDOTDIR")
 		zshrc := readFile(t, filepath.Join(zdot, ".zshrc"))
 		mustContain(t, zshrc, "'/custom/zdot'/.zshrc")
@@ -224,7 +237,7 @@ func TestSeedPromptHook(t *testing.T) {
 
 	t.Run("dash_skipped_untouched", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/bin/dash", nil, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/bin/dash", nil, []string{home, sess}, "testnonce", discardLogger())
 		if got.hookInstalled {
 			t.Errorf("hookInstalled = true, want false (dash has no prompt hook)")
 		}
@@ -241,7 +254,7 @@ func TestSeedPromptHook(t *testing.T) {
 
 	t.Run("unknown_shell_untouched", func(t *testing.T) {
 		dir := t.TempDir()
-		got := seedPromptHook(dir, "/bin/cat", []string{"-A"}, []string{home, sess}, discardLogger())
+		got := seedPromptHook(dir, "/bin/cat", []string{"-A"}, []string{home, sess}, "testnonce", discardLogger())
 		if got.hookInstalled {
 			t.Errorf("hookInstalled = true, want false for an unknown shell")
 		}

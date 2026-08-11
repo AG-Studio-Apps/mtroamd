@@ -232,26 +232,52 @@ func sessionShimDir(stateDir, sid string) string {
 	return filepath.Join(stateDir, "sessions", sid, "shims")
 }
 
-// readShimStatus reads a session's broker-shim readiness LIVE from disk:
-// "1" → *true, "0" → *false, missing/unreadable/anything else → nil (unknown).
+// readShimStatus reports a session's broker-shim readiness LIVE from disk.
 //
-// ★★ Read fresh on EVERY allocate, deliberately, rather than cached at spawn or
-// round-tripped through meta.cbor. The bit is now written by the shell itself
-// (`_mt_shim_announce`) at its first prompt, which is necessarily AFTER the
-// spawn call has returned, so a value captured at spawn can only ever say "not
-// yet". Two bugs died with the cache:
+// Ready requires ALL THREE of:
 //
-//   - The spawn-time snapshot in ptyclient could never observe the announce.
-//   - A session persisted by v1.7.10 carried that daemon's WEAKER shim_ready
-//     across the upgrade. persistenceFormatVersion could not be bumped to reject
-//     it, because LoadPersisted treats a version mismatch as a hard error and
-//     would have discarded every existing session on upgrade. Ignoring the
-//     stored field and re-deriving from disk fixes it without touching anyone's
-//     sessions: an upgraded session simply reads "0" until its shell announces,
-//     which is the fail-closed direction.
+//  1. the session owns a live PTY - a restored session whose shell died has a
+//     stale status file describing a shell that no longer exists;
+//  2. a non-empty per-spawn nonce in ShimNonceFilename; and
+//  3. ShimStatusFilename containing EXACTLY that nonce.
 //
-// A missing file is nil, not false, preserving the existing "unknown → iOS says
-// regenerate" behaviour for pre-broker sessions.
+// ★★ The nonce is what makes the claim belong to a live, current shell, and rc3
+// shipped without it. A bare "1" is indelible: it survived the shell that wrote
+// it (measured - a reattach after a daemon restart reported ready with no shell
+// running), and it was byte-identical to the "1" that v1.7.8-v1.7.10 sidecars
+// wrote under far weaker rules, so removing the meta.cbor copy closed one channel
+// for a stale claim while leaving an older one wide open. Requiring a match
+// against a freshly minted random token closes both, because neither a dead
+// shell's nonce nor a legacy literal "1" can equal this spawn's value.
+//
+// nil (unknown) rather than false whenever we cannot tell, preserving the
+// existing "unknown -> client says regenerate" behaviour for pre-broker sessions.
+func readShimStatus(stateDir, sid string, live bool) *bool {
+	no := false
+	if !live {
+		// A session with no PTY has no shell to make the claim. Not "unknown":
+		// we know positively that nothing is currently asserting it.
+		return &no
+	}
+	dir := filepath.Join(stateDir, "sessions", sid)
+	nonce, err := os.ReadFile(filepath.Join(dir, ptysidecar.ShimNonceFilename)) // #nosec G304 -- stateDir + validated session id
+	if err != nil {
+		// No nonce file at all: either a pre-v1.7.11 sidecar (whose status file we
+		// must NOT trust) or a mint failure. Unknown.
+		return nil
+	}
+	want := strings.TrimSpace(string(nonce))
+	if want == "" {
+		return nil
+	}
+	got, err := os.ReadFile(filepath.Join(dir, ptysidecar.ShimStatusFilename)) // #nosec G304 -- stateDir + validated session id
+	if err != nil {
+		return nil
+	}
+	yes := strings.TrimSpace(string(got)) == want
+	return &yes
+}
+
 // shimNotReadyReason turns the two facts the daemon actually has - did we seed
 // this shell, and has it announced - into advice the client can act on. Empty
 // when the shim IS ready.
@@ -276,24 +302,6 @@ func shimNotReadyReason(shimReady, hookInstalled *bool) string {
 	}
 	// Pre-broker session, or the status file could not be read.
 	return ipc.ShimNotReadyUnknown
-}
-
-func readShimStatus(stateDir, sid string) *bool {
-	path := filepath.Join(stateDir, "sessions", sid, ptysidecar.ShimStatusFilename)
-	data, err := os.ReadFile(path) // #nosec G304 -- path built from stateDir + validated session id
-	if err != nil {
-		return nil
-	}
-	switch strings.TrimSpace(string(data)) {
-	case "1":
-		v := true
-		return &v
-	case "0":
-		v := false
-		return &v
-	default:
-		return nil
-	}
 }
 
 // defaultSpawnPATH seeds the child's PATH only when the daemon itself has
@@ -891,7 +899,7 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 		// ★★ LIVE from disk, not sess.ShimReady(). The shell announces readiness
 		// at its first prompt, long after the value the session cached at spawn.
 		// See readShimStatus for why the cache (and the persisted copy) had to go.
-		shimReady = readShimStatus(d.stateDir, sess.ID().String())
+		shimReady = readShimStatus(d.stateDir, sess.ID().String(), sess.HasPTY())
 		shimReason = shimNotReadyReason(shimReady, hookInstalled)
 	}
 
@@ -992,9 +1000,52 @@ func (d *Daemon) HandleSetSessionSecrets(_ context.Context, req ipc.SetSessionSe
 		d.logger.Warn("secret.shims.sync_failed", "session", sidStr, "err", err.Error())
 		return ipc.SetSessionSecretsResponse{Ok: false, Err: ipc.ErrInternal, Msg: err.Error()}
 	}
+	// ★★ Bump the shim generation so the session's prompt hook clears the shell's
+	// command hash. Without it, a tool the user ran BEFORE its shim existed stays
+	// hashed to the real binary for the life of the shell, and the brokered secret
+	// silently never reaches it - PATH order alone does not undo a cached lookup.
+	d.bumpShimGen(sidStr)
+
+	// ★★ Readiness is reported HERE, not only at allocate, because this is the
+	// moment it is load-bearing: the caller is pushing a secret and needs to know
+	// whether it will actually reach the tools. Allocate cannot answer it - the
+	// shell announces from its first prompt, measured at ~389ms, while allocate
+	// returns in ~28ms and `connect` allocates exactly once, so every fresh
+	// session would report not-ready forever.
+	live := false
+	if sess, lookErr := d.registry.Lookup(sid); lookErr == nil {
+		live = sess.HasPTY()
+	}
+	shimReady := readShimStatus(d.stateDir, sidStr, live)
+	var hookInstalled *bool
+	if sess, lookErr := d.registry.Lookup(sid); lookErr == nil {
+		hookInstalled = sess.HookInstalled()
+	}
+
 	d.logger.Info("secret.set", "session", sidStr,
 		"keys", len(payload.Secrets), "commands", len(cmds))
-	return ipc.SetSessionSecretsResponse{Ok: true}
+	return ipc.SetSessionSecretsResponse{
+		Ok:                 true,
+		ShimReady:          shimReady,
+		ShimNotReadyReason: shimNotReadyReason(shimReady, hookInstalled),
+	}
+}
+
+// bumpShimGen writes a monotonically-changing token to the session's shim
+// generation file. The seeded prompt hook reads it with the `read` builtin (no
+// fork) and clears the shell's command hash whenever it changes.
+//
+// Best-effort: a failure only means a stale hash entry survives, which is the
+// pre-existing behaviour, so it must never fail the secret push.
+func (d *Daemon) bumpShimGen(sid string) {
+	path := filepath.Join(d.stateDir, "sessions", sid, ptysidecar.ShimGenFilename)
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return
+	}
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(b[:])), 0o600); err != nil {
+		d.logger.Warn("secret.shimgen.write_failed", "session", sid, "err", err.Error())
+	}
 }
 
 // HandleGetSecrets returns ONLY the env a command should be exec'd with
