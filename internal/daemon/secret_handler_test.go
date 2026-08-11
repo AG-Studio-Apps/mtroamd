@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 )
 
@@ -47,6 +48,57 @@ func allocSession(t *testing.T, c *ipc.Client) string {
 		t.Errorf("unseeded `sh -c` ShimReady = %v, want *false", resp.ShimReady)
 	}
 	return resp.SessionID
+}
+
+// TestAllocateShimReadyIsLiveFromDisk pins the POSITIVE end-to-end wiring:
+// shim-ready file → readShimStatus → AllocateResponse.ShimReady.
+//
+// ★★ This is the assertion the review found missing. Before it, the only test in
+// the tree touching ShimReady asserted it was *false, so the entire chain could
+// have been dead - a renamed status file, a path typo, a dropped field - and the
+// suite would still have passed green on both CI legs. A barrier that is only
+// ever tested in its "closed" state is not tested.
+//
+// It also pins the LIVENESS that the whole fix depends on. The shell announces
+// readiness at its FIRST PROMPT, which is necessarily after the spawn returned,
+// so a daemon that snapshots the bit at spawn (as every version before rc3 did)
+// can only ever report "not yet". Writing the file after the session exists and
+// then reattaching reproduces exactly that ordering.
+func TestAllocateShimReadyIsLiveFromDisk(t *testing.T) {
+	t.Parallel()
+	d, c, cleanup := startDaemon(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// allocSession asserts the freshly spawned, unseeded session reports *false.
+	sid := allocSession(t, c)
+
+	// Stand in for `_mt_shim_announce` running at the shell's first prompt.
+	statusPath := filepath.Join(d.stateDir, "sessions", sid, ptysidecar.ShimStatusFilename)
+	if err := os.WriteFile(statusPath, []byte("1"), 0o600); err != nil {
+		t.Fatalf("write shim status: %v", err)
+	}
+
+	resp, err := c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err != nil || !resp.Ok {
+		t.Fatalf("reattach allocate: %v %s %s", err, resp.Err, resp.Msg)
+	}
+	if resp.ShimReady == nil || !*resp.ShimReady {
+		t.Fatalf("after announce, ShimReady = %v, want *true (the daemon must re-read the file, not reuse its spawn-time snapshot)", resp.ShimReady)
+	}
+
+	// And it must track the file DOWNWARD too, so a respawn that resets the bit
+	// cannot leave a stale "ready" behind.
+	if err := os.WriteFile(statusPath, []byte("0"), 0o600); err != nil {
+		t.Fatalf("reset shim status: %v", err)
+	}
+	resp, err = c.Allocate(ctx, ipc.AllocateRequest{SessionID: sid, Rows: 24, Cols: 80})
+	if err != nil || !resp.Ok {
+		t.Fatalf("second reattach allocate: %v %s %s", err, resp.Err, resp.Msg)
+	}
+	if resp.ShimReady == nil || *resp.ShimReady {
+		t.Errorf("after reset, ShimReady = %v, want *false", resp.ShimReady)
+	}
 }
 
 func TestSecretBrokerHandlersEndToEnd(t *testing.T) {

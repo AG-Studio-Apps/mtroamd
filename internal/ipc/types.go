@@ -250,12 +250,36 @@ type AllocateResponse struct {
 	//
 	// ★★ FIRST, not merely present, and it is a property of the SHELL not of
 	// the spawn. Being on PATH at spawn proves nothing: the user's rc runs
-	// afterwards and an ordinary `PATH="$HOME/bin:$PATH"` outranks it. True
-	// requires a shell the sidecar SEEDED and that is NOT a login shell (a
-	// login startup file can `exec` before the first prompt, so the
-	// per-prompt re-assert never fires). See ptysidecar.seedResult.
+	// afterwards and an ordinary `PATH="$HOME/bin:$PATH"` outranks it.
+	//
+	// ★★ As of v1.7.11 this is an OBSERVATION, not a prediction. True means the
+	// session's shell itself reported, from its own prompt, that it found the
+	// shim dir first on its live PATH. Earlier versions computed it at seed time
+	// from whether the shell was a login shell, which was a guess about what the
+	// user's rc would do and was wrong in at least six ways that all reported
+	// ready while the shim was outranked or absent. The daemon re-reads it live
+	// on every allocate. See ptysidecar.ShimStatusFilename.
 	// Additive/omitempty like Reused: old peers drop the unknown key.
 	ShimReady *bool `cbor:"shim_ready,omitempty"`
+
+	// ShimNotReadyReason explains a non-true ShimReady so the client can say
+	// something the user can act on. Empty when ShimReady is *true.
+	//
+	// The single bool could not carry this: the client rendered every false as
+	// "regenerate the session", which is right for a stale pre-broker session and
+	// useless for a fish or nushell user, since regenerating never seeds those
+	// shells. Those users got the same dead-end warning on every allocate forever.
+	//
+	// Values (additive; treat an unrecognised value as ShimNotReadyUnknown):
+	//   - "unsupported_shell" - we never seeded this shell (fish/nushell/csh, or
+	//     a `-c` invocation). Regenerating will NOT help; the user must change
+	//     their login shell. Do not tell them to regenerate.
+	//   - "awaiting_prompt"   - seeded, but the shell has not yet reported from a
+	//     prompt. Either it genuinely has not reached one, or a startup file
+	//     `exec`ed away before it could. Transient for a normal shell.
+	//   - "unknown"           - pre-broker session, or the status could not be
+	//     read. Regenerating IS the right advice here.
+	ShimNotReadyReason string `cbor:"shim_not_ready_reason,omitempty"`
 
 	// On failure:
 	Err string `cbor:"err,omitempty"`
@@ -463,6 +487,24 @@ type SessionSearchResponse struct {
 	Err     string            `cbor:"err,omitempty" json:"err,omitempty"`
 	Msg     string            `cbor:"msg,omitempty" json:"msg,omitempty"`
 }
+
+// Reasons for a non-true AllocateResponse.ShimReady. Wire-stable strings.
+// Additive: a client must treat an unrecognised value as ShimNotReadyUnknown
+// rather than assuming the set is closed.
+const (
+	// ShimNotReadyUnsupportedShell: never seeded (fish/nushell/csh, or a `-c`
+	// invocation). ★ Regenerating the session does NOT help - the client must not
+	// offer that as the fix here, which is precisely what the old bare bool made
+	// it do.
+	ShimNotReadyUnsupportedShell = "unsupported_shell"
+	// ShimNotReadyAwaitingPrompt: seeded, but the shell has not reported from a
+	// prompt yet. Transient for a healthy shell; permanent if a startup file
+	// `exec`ed away before the first prompt.
+	ShimNotReadyAwaitingPrompt = "awaiting_prompt"
+	// ShimNotReadyUnknown: pre-broker session or unreadable status. Regenerating
+	// IS the right advice.
+	ShimNotReadyUnknown = "unknown"
+)
 
 // Error codes used in AllocateResponse.Err. Wire-stable strings.
 const (

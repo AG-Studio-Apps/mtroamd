@@ -31,6 +31,7 @@ import (
 	"github.com/AG-Studio-Apps/mtroamd/internal/cert"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ipc"
 	"github.com/AG-Studio-Apps/mtroamd/internal/ptyclient"
+	"github.com/AG-Studio-Apps/mtroamd/internal/ptysidecar"
 	"github.com/AG-Studio-Apps/mtroamd/internal/secret"
 	"github.com/AG-Studio-Apps/mtroamd/internal/session"
 	"github.com/AG-Studio-Apps/mtroamd/internal/transport"
@@ -229,6 +230,70 @@ func sessionExtraEnv(sess *session.Session) []string {
 // never populates, secrets silently undelivered).
 func sessionShimDir(stateDir, sid string) string {
 	return filepath.Join(stateDir, "sessions", sid, "shims")
+}
+
+// readShimStatus reads a session's broker-shim readiness LIVE from disk:
+// "1" → *true, "0" → *false, missing/unreadable/anything else → nil (unknown).
+//
+// ★★ Read fresh on EVERY allocate, deliberately, rather than cached at spawn or
+// round-tripped through meta.cbor. The bit is now written by the shell itself
+// (`_mt_shim_announce`) at its first prompt, which is necessarily AFTER the
+// spawn call has returned, so a value captured at spawn can only ever say "not
+// yet". Two bugs died with the cache:
+//
+//   - The spawn-time snapshot in ptyclient could never observe the announce.
+//   - A session persisted by v1.7.10 carried that daemon's WEAKER shim_ready
+//     across the upgrade. persistenceFormatVersion could not be bumped to reject
+//     it, because LoadPersisted treats a version mismatch as a hard error and
+//     would have discarded every existing session on upgrade. Ignoring the
+//     stored field and re-deriving from disk fixes it without touching anyone's
+//     sessions: an upgraded session simply reads "0" until its shell announces,
+//     which is the fail-closed direction.
+//
+// A missing file is nil, not false, preserving the existing "unknown → iOS says
+// regenerate" behaviour for pre-broker sessions.
+// shimNotReadyReason turns the two facts the daemon actually has - did we seed
+// this shell, and has it announced - into advice the client can act on. Empty
+// when the shim IS ready.
+//
+// The distinction that matters is "unsupported shell" vs everything else: a fish
+// or nushell user cannot fix their situation by regenerating the session, which
+// is the only remedy the old bare bool could express, so they were told to do a
+// thing that could never work on every single allocate.
+func shimNotReadyReason(shimReady, hookInstalled *bool) string {
+	if shimReady != nil && *shimReady {
+		return ""
+	}
+	// Never seeded: the shell has no _mt_shim_path and never will. Regenerating
+	// produces the same unsupported shell again.
+	if hookInstalled != nil && !*hookInstalled {
+		return ipc.ShimNotReadyUnsupportedShell
+	}
+	// Seeded, but no announce yet. Either the shell has not reached its first
+	// prompt, or a startup file exec'd away before it could.
+	if hookInstalled != nil && *hookInstalled {
+		return ipc.ShimNotReadyAwaitingPrompt
+	}
+	// Pre-broker session, or the status file could not be read.
+	return ipc.ShimNotReadyUnknown
+}
+
+func readShimStatus(stateDir, sid string) *bool {
+	path := filepath.Join(stateDir, "sessions", sid, ptysidecar.ShimStatusFilename)
+	data, err := os.ReadFile(path) // #nosec G304 -- path built from stateDir + validated session id
+	if err != nil {
+		return nil
+	}
+	switch strings.TrimSpace(string(data)) {
+	case "1":
+		v := true
+		return &v
+	case "0":
+		v := false
+		return &v
+	default:
+		return nil
+	}
 }
 
 // defaultSpawnPATH seeds the child's PATH only when the daemon itself has
@@ -820,9 +885,14 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	// from the extension path here.
 	var hookInstalled *bool
 	var shimReady *bool
+	var shimReason string
 	if reused != nil {
 		hookInstalled = sess.HookInstalled()
-		shimReady = sess.ShimReady()
+		// ★★ LIVE from disk, not sess.ShimReady(). The shell announces readiness
+		// at its first prompt, long after the value the session cached at spawn.
+		// See readShimStatus for why the cache (and the persisted copy) had to go.
+		shimReady = readShimStatus(d.stateDir, sess.ID().String())
+		shimReason = shimNotReadyReason(shimReady, hookInstalled)
 	}
 
 	tok, err := d.registry.IssueAttachToken(sess.ID())
@@ -847,18 +917,19 @@ func (d *Daemon) HandleAllocate(ctx context.Context, req ipc.AllocateRequest) ip
 	}
 
 	return ipc.AllocateResponse{
-		Ok:              true,
-		SessionID:       sess.ID().String(),
-		AttachToken:     tok.String(),
-		Port:            uint16(d.quic.Addr().Port),
-		TCPPort:         tcpPort,
-		LoopbackTCPPort: loopbackPort,
-		CertFP:          d.certFP.String(),
-		Name:            sess.Name(),
-		Reused:          reused,
-		HookInstalled:   hookInstalled,
-		ShimReady:       shimReady,
-		BootID:          d.bootID,
+		Ok:                 true,
+		SessionID:          sess.ID().String(),
+		AttachToken:        tok.String(),
+		Port:               uint16(d.quic.Addr().Port),
+		TCPPort:            tcpPort,
+		LoopbackTCPPort:    loopbackPort,
+		CertFP:             d.certFP.String(),
+		Name:               sess.Name(),
+		Reused:             reused,
+		HookInstalled:      hookInstalled,
+		ShimReady:          shimReady,
+		ShimNotReadyReason: shimReason,
+		BootID:             d.bootID,
 	}
 }
 

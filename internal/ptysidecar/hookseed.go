@@ -15,13 +15,33 @@ import (
 // its listener, so a successful dial implies the file is present.
 const HookStatusFilename = "hook-installed"
 
-// ShimStatusFilename is the per-session file the sidecar writes with the
-// secret-broker shim-readiness bit ("1"/"0"), read by ptyclient.SpawnNew and
-// surfaced as MTRM_SHIM_READY. Mirrors HookStatusFilename.
+// ShimStatusFilename is the per-session file carrying the secret-broker
+// shim-readiness bit ("1"/"0"), surfaced as MTRM_SHIM_READY.
 //
-// ★ The bit means "the shim dir is guaranteed FIRST on the live PATH", which
-// is NOT the same as "the shell was spawned with it on PATH". See
-// seedResult.shimReady for what earns a true and why.
+// ★★ The WRITER changed in v1.7.11-rc3, and it is the whole point of this
+// release. The sidecar now only ever writes "0" here, at seed time. The "1" is
+// written by the SHELL ITSELF, from `_mt_shim_announce`, and only after
+// `_mt_shim_path` has observed the shim dir actually sitting first on the live
+// PATH.
+//
+// Every earlier version computed this bit at SEED time from `!login`, i.e. it
+// PREDICTED that the shell would end up with the shim first. rc1/rc2 tightened
+// the prediction but kept it a prediction, and the review found six separate
+// ways for it to be wrong while still reporting ready: an `exec` in the user's
+// rc (the shell never reaches a prompt), `set -u` aborting the register line, an
+// array PROMPT_COMMAND reordering the re-assert, a nested shell, a stale command
+// hash, and a session carried across the v1.7.10 upgrade. All six produced the
+// same silent failure - iOS reports a brokered secret `.delivered` while the tool
+// launches with none.
+//
+// A prediction can be wrong. An observation made by the shell that will actually
+// run the tool cannot be wrong in the same direction: a shell that never reaches
+// a prompt never announces, so the bit stays "0" and iOS warns. That asymmetry
+// is the fix; the individual shell-quoting bugs below are secondary.
+//
+// The daemon re-reads this file LIVE on every allocate (see readShimStatus in
+// internal/daemon) rather than caching it at spawn, because the announce
+// necessarily happens after the spawn has returned.
 const ShimStatusFilename = "shim-ready"
 
 // shimFuncDef defines _mt_shim_path, which moves the broker shim dir to the
@@ -52,7 +72,31 @@ const ShimStatusFilename = "shim-ready"
 // a host with `readonly PATH` the assignment aborts the function, so a flag set
 // afterwards would never run and the shell would print an error EVERY prompt.
 // This way it is attempted once and then stays off.
-const shimFuncDef = `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MESHTERM_SHIM_DIR:-}" ] || return 0; [ -z "${_MT_SHIM_OFF:-}" ] || return 0; _mt_new=; _mt_rest="$PATH"; while :; do _mt_e="${_mt_rest%%:*}"; [ "$_mt_e" = "$MESHTERM_SHIM_DIR" ] || _mt_new="$_mt_new:$_mt_e"; [ "$_mt_rest" = "${_mt_rest#*:}" ] && break; _mt_rest="${_mt_rest#*:}"; done; _mt_new="${_mt_new#:}"; _mt_new="$MESHTERM_SHIM_DIR${_mt_new:+:$_mt_new}"; [ "$PATH" = "$_mt_new" ] && return 0; _MT_SHIM_OFF=1; { PATH="$_mt_new"; } 2>/dev/null; if [ "$PATH" = "$_mt_new" ]; then export PATH; unset _MT_SHIM_OFF; fi; return 0; }`
+// ★ statusPath is baked in as a shell literal rather than read from an env var.
+// The sidecar already knows the session dir, and a literal cannot be cleared,
+// shadowed or exported away by the user's rc - which matters when the whole
+// point of the write is to be trustworthy.
+//
+// ★ The fast path (`${PATH%%:*}`) is not just a speed fix. The full walk is
+// quadratic in PATH length - measured 0.30 ms at 10 entries, 2.3 ms at 40,
+// 11.4 ms at 100, 39 ms at 200 - and it ran on EVERY prompt even when the shim
+// was already first, which is the overwhelmingly common case. A nix/conda/asdf
+// user with a long PATH was paying ~39 ms of prompt latency for nothing.
+//
+// ★ `hash -r` / `rehash` after a successful change: the shim dir is on PATH from
+// spawn but POPULATED LAZILY by SyncShims on the first SetSessionSecrets. A tool
+// run before its shim file existed is hashed to the real binary and STAYS hashed
+// there, so fixing PATH order alone does not redirect it. Measured.
+func shimFuncDef(statusPath string) string {
+	q := shSingleQuote(statusPath)
+	// _mt_shim_announce records the OBSERVATION that the shim is first. Written
+	// at most once per shell (_MT_SHIM_ANNOUNCED is deliberately not `local`, so
+	// it persists across prompts). Failure is silent: a read-only session dir
+	// leaves the bit "0", which is the fail-CLOSED direction.
+	announce := `_mt_shim_announce() { [ -z "${_MT_SHIM_ANNOUNCED:-}" ] || return 0; _MT_SHIM_ANNOUNCED=1; { printf 1 > ` + q + `; } 2>/dev/null; return 0; }`
+	path := `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MESHTERM_SHIM_DIR:-}" ] || return 0; [ -z "${_MT_SHIM_OFF:-}" ] || return 0; if [ "$PATH" = "$MESHTERM_SHIM_DIR" ] || [ "${PATH%%:*}" = "$MESHTERM_SHIM_DIR" ]; then _mt_shim_announce; return 0; fi; _mt_new=; _mt_rest="$PATH"; while :; do _mt_e="${_mt_rest%%:*}"; [ "$_mt_e" = "$MESHTERM_SHIM_DIR" ] || _mt_new="$_mt_new:$_mt_e"; [ "$_mt_rest" = "${_mt_rest#*:}" ] && break; _mt_rest="${_mt_rest#*:}"; done; _mt_new="${_mt_new#:}"; _mt_new="$MESHTERM_SHIM_DIR${_mt_new:+:$_mt_new}"; [ "$PATH" = "$_mt_new" ] && { _mt_shim_announce; return 0; }; _MT_SHIM_OFF=1; { PATH="$_mt_new"; } 2>/dev/null; if [ "$PATH" = "$_mt_new" ]; then export PATH; unset _MT_SHIM_OFF; if [ -n "${ZSH_VERSION:-}" ]; then rehash 2>/dev/null; else hash -r 2>/dev/null; fi; _mt_shim_announce; fi; return 0; }`
+	return announce + "\n" + path
+}
 
 // shimRegisterLine wires _mt_shim_path into the per-prompt hook and runs it
 // once immediately, so the shell starts correct and STAYS correct.
@@ -62,7 +106,22 @@ const shimFuncDef = `_mt_shim_path() { local _mt_new _mt_e _mt_rest; [ -n "${MES
 // (AgentEnv.injectHookInstall) that does NOT define _mt_shim_path - so a call
 // added there would become "command not found" on every prompt of an
 // iOS-seeded session.
-const shimRegisterLine = `if [ -n "$ZSH_VERSION" ]; then precmd_functions+=(_mt_shim_path); else PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_path"; fi; _mt_shim_path`
+// ★ `${ZSH_VERSION:-}`, not `$ZSH_VERSION`. A user rc running `set -u` (or
+// `setopt nounset`) turned the bare dereference into an "unbound variable" error
+// that aborted the rest of this line, so _mt_shim_path was never registered -
+// while the old seed-time bit still reported ready. Measured: the error printed
+// into the user's terminal at every session start and PROMPT_COMMAND stayed
+// unset. shimFuncDef beside it was already written with `${VAR:-}` guards
+// throughout; this line was the one that was not.
+//
+// ★ bash 5.1+ allows PROMPT_COMMAND to be an ARRAY, and appending a scalar to an
+// array variable lands in element [0]. Verified in bash 5.2: with
+// PROMPT_COMMAND=(a b), the old scalar append produced
+// ([0]="a; _mt_shim_path" [1]="b"), so a direnv/conda/mise hook registered with
+// the modern `PROMPT_COMMAND+=(...)` form ran AFTER our re-assert on every
+// prompt and re-prepended its own dir. That defeats the entire premise of
+// re-asserting per prompt, so the array case has to append as an array element.
+const shimRegisterLine = `if [ -n "${ZSH_VERSION:-}" ]; then precmd_functions+=(_mt_shim_path); elif [ -n "${BASH_VERSION:-}" ] && [ "$(declare -p PROMPT_COMMAND 2>/dev/null | cut -c1-11)" = "declare -a " ]; then PROMPT_COMMAND+=(_mt_shim_path); else PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }_mt_shim_path"; fi; _mt_shim_path`
 
 // hookrcSubdir is the per-session directory (under the session dir)
 // holding the temp rc files the sidecar generates to chain the user's
@@ -122,36 +181,23 @@ type seedResult struct {
 	args          []string
 	env           []string
 	hookInstalled bool
-	// shimReady is whether the broker shim dir is guaranteed to be FIRST on the
-	// shell's LIVE PATH. Deliberately CONSERVATIVE: a false "ready" suppresses
-	// the iOS regenerate warning and lets the app report a secret push as
-	// `.delivered` when the tool will in fact launch with none, which is the
-	// worse error by a wide margin.
+	// ★★ There is deliberately NO shimReady field any more.
 	//
-	// TRUE only when the shell was SEEDED **and is not a LOGIN shell**. Both
-	// halves are load-bearing, and each was learned by getting it wrong:
+	// It used to live here, computed from `!login` at seed time, and every
+	// version of that computation was a PREDICTION about what the user's rc would
+	// do next. Predictions about other people's shell configuration are wrong in
+	// ways that are invisible from here: an `exec` in the rc, `set -u`, an array
+	// PROMPT_COMMAND, a nested shell. Each one left the bit reporting ready while
+	// the shim was outranked or absent.
 	//
-	//   - SEEDED, because only a seeded shell defines _mt_shim_path and runs it
-	//     on every prompt. This previously reported !login for UNSEEDED shells,
-	//     i.e. true for the common non-login case, which covered
-	//     `bash -c "tmux new"` (nothing seeded, every pane reads the user's
-	//     untouched rc) and fish/nushell (shellUnknown). Reporting true there was
-	//     the silent-failure-with-positive-confirmation this file exists to kill.
+	// The bit is now written by `_mt_shim_announce` from inside the shell that
+	// will actually run the tool, once `_mt_shim_path` has observed the shim
+	// sitting first on the live PATH. Seeding therefore no longer has an opinion
+	// about readiness - it just seeds, and the shell reports what happened.
 	//
-	//   - NOT LOGIN, because a login startup file can `exec` before the shell
-	//     ever reaches a prompt. `[[ -z $TMUX ]] && exec tmux` in ~/.zlogin or
-	//     ~/.bash_profile is a common idiom, and it means precmd_functions /
-	//     PROMPT_COMMAND never fire; for bash the profile chain is sourced BEFORE
-	//     our lines, so _mt_shim_path is not even defined. Flipping login zsh to
-	//     true was tried and reverted after this was measured: PATH came back
-	//     with the user's dir first and the shim second.
-	//
-	// ★ Known rough edge: iOS renders false as "regenerate the session", which is
-	// actionable for a stale pre-broker session but NOT for a fish user, since
-	// regenerating never seeds fish. Distinguishing "unsupported shell" from
-	// "stale session" needs more than the 0/1 MTRM_SHIM_READY bit carries, so it
-	// is left honest-but-imperfect rather than a false pass.
-	shimReady bool
+	// Keeping a seed-time field here at all would re-open the hole, because the
+	// only honest value it could carry ("we wrote the lines") is exactly what
+	// hookInstalled already means.
 }
 
 // seedPromptHook installs the live-inject prompt hook for a session's
@@ -162,7 +208,7 @@ func seedPromptHook(sessionDir, shell string, args, env []string, log *slog.Logg
 	// An UNSEEDED shell gets no _mt_shim_path, so nothing re-asserts the shim
 	// after the user's rc runs and we can guarantee nothing. seedBash/seedZsh
 	// override this to true on success.
-	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false, shimReady: false}
+	orig := seedResult{shell: shell, args: args, env: env, hookInstalled: false}
 	switch classifyShell(shell) {
 	case shellBash:
 		return seedBash(sessionDir, shell, args, env, log, orig)
@@ -263,7 +309,7 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		b.WriteString(`[ -r /etc/bash.bashrc ] && . /etc/bash.bashrc` + "\n")
 		b.WriteString(`[ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"` + "\n")
 	}
-	b.WriteString(shimFuncDef + "\n")
+	b.WriteString(shimFuncDef(filepath.Join(sessionDir, ShimStatusFilename)) + "\n")
 	b.WriteString(promptHookBody + "\n")
 	b.WriteString(shimRegisterLine + "\n")
 
@@ -276,10 +322,6 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 		args:          []string{"--rcfile", rcPath},
 		env:           env,
 		hookInstalled: true,
-		// NOT login: see the seedResult.shimReady note. In login mode the
-		// profile chain is sourced BEFORE our lines, so an `exec` there (the
-		// common `exec tmux` idiom) means _mt_shim_path is never even defined.
-		shimReady: !login,
 	}
 }
 
@@ -290,7 +332,12 @@ func seedBash(sessionDir, shell string, args, env []string, log *slog.Logger, or
 // Both login and non-login work: ZDOTDIR redirects every startup-file
 // lookup, so we don't touch the shell's args (login stays login).
 func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, orig seedResult) seedResult {
-	benign, login := classifyShellArgs(args)
+	// login is discarded: zsh seeding is identical either way (ZDOTDIR redirects
+	// every startup-file lookup), and the login flag's only other use was the
+	// seed-time shimReady prediction that this release deletes. A login .zlogin
+	// that `exec`s away now takes care of itself - it never reaches a prompt, so
+	// it never announces, so the bit stays "0".
+	benign, _ := classifyShellArgs(args)
 	if !benign {
 		return orig
 	}
@@ -329,7 +376,7 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 	// .zshrc (interactive). Source the user's rc, install the hook
 	// AFTER it, then restore ZDOTDIR.
 	zshrc := "[ -r " + realExpr + "/.zshrc ] && . " + realExpr + "/.zshrc\n" +
-		shimFuncDef + "\n" +
+		shimFuncDef(filepath.Join(sessionDir, ShimStatusFilename)) + "\n" +
 		promptHookBody + "\n" +
 		shimRegisterLine + "\n" +
 		restore
@@ -350,15 +397,6 @@ func seedZsh(sessionDir, shell string, args, env []string, log *slog.Logger, ori
 		args:          args,
 		env:           envReplace(env, "ZDOTDIR", dir),
 		hookInstalled: true,
-		// NOT login. Flipping this to true was tried and REVERTED: the
-		// reasoning was that .zlogin runs before the first prompt so the
-		// per-prompt re-assert covers it, but a .zlogin that ENDS IN `exec`
-		// (`[[ -z $TMUX ]] && exec tmux`, a very common idiom) never reaches a
-		// prompt at all. precmd_functions never fires, and the replacement
-		// process reads the user's REAL ZDOTDIR - ours was already restored -
-		// so nothing is seeded. Measured: PATH came back $HOME/mybin first,
-		// shim second.
-		shimReady: !login,
 	}
 }
 

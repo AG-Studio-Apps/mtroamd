@@ -118,10 +118,23 @@ type persistedSessionMeta struct {
 	// (unknown); the next lazy respawn reconciles the real value.
 	HookInstalled *bool `cbor:"hook,omitempty"`
 
-	// ShimReady snapshots Session.shimReady so a reattach after a daemon
-	// restart reports whether the shell has the broker shim dir on PATH
-	// without a respawn. Pointer + omitempty so pre-broker snapshots
-	// round-trip as nil (unknown → iOS warns to regenerate).
+	// ShimReady is DEAD as of v1.7.11-rc3 and is neither written nor read.
+	//
+	// It used to snapshot Session.shimReady so a reattach after a daemon restart
+	// could report readiness without a respawn. That made the bit survive an
+	// upgrade: a session persisted by v1.7.10 carried THAT daemon's weaker
+	// "spawned with the dir on PATH" claim into a daemon that had redefined the
+	// term, so the redefinition never reached any pre-existing session.
+	//
+	// Readiness is now an observation the shell writes at its first prompt and
+	// the daemon reads live (daemon.readShimStatus), so there is nothing worth
+	// snapshotting - a stored copy can only ever be stale or wrong.
+	//
+	// The FIELD is retained, unused, on purpose: persistenceFormatVersion cannot
+	// be bumped to retire it, because LoadPersisted treats a version mismatch as
+	// a hard error and a bump would discard every existing session on upgrade.
+	// Keeping the field lets v1.7.10 metadata decode cleanly under StrictDecMode
+	// while its value is ignored.
 	ShimReady *bool `cbor:"shim_ready,omitempty"`
 
 	// ScreenRepaint is the alt-screen model's self-contained redraw frame
@@ -231,7 +244,8 @@ func (s *Session) SaveTo(parentDir string) error {
 		AltScreenActive:        altActive,
 		LastTitle:              lastTitle,
 		HookInstalled:          s.hookInstalled,
-		ShimReady:              s.shimReady,
+		// ShimReady deliberately NOT written - see the field comment. Persisting
+		// it is what let a v1.7.10 claim outlive the definition it was made under.
 		ScreenRepaint:          screenRepaint,
 	}
 	s.mu.Unlock()
@@ -448,7 +462,9 @@ func loadSessionFromDir(dir string, now time.Time, logger *slog.Logger) (*Sessio
 		lastSnapshotSeq:  meta.HeadSeq,
 		lastSidecarSeq:   meta.LastConsumedSidecarSeq,
 		hookInstalled:    meta.HookInstalled,
-		shimReady:        meta.ShimReady,
+		// shimReady deliberately NOT restored from meta: a stored value is either
+		// stale or made under an older definition. It is re-derived live from the
+		// session's shim-ready file on every allocate.
 		restoredFromDisk: true,
 		// Without this the wedge watcher is nil on restored sessions
 		// and every nil-guarded call site (Resize → ArmResize, Pump →

@@ -294,3 +294,113 @@ func TestSeededShellSurvivesAPerPromptPathMutator(t *testing.T) {
 		})
 	}
 }
+
+// announceStatus seeds a shell for a throwaway session whose HOME carries the
+// given rc, runs it, and returns what ended up in the shim-ready file.
+//
+// It pre-writes "0" exactly as the sidecar does, so the test sees the real
+// production starting point: not-ready until the shell earns it. The return is
+// the raw file contents ("1", "0") or "<absent>".
+//
+// Errors from the shell run are deliberately ignored. One of the cases under
+// test is an rc that `exec`s away, where the exit status belongs to whatever it
+// exec'd, and the only thing that matters is what the file says afterwards.
+func announceStatus(t *testing.T, shellPath, home string, args []string) string {
+	t.Helper()
+	sessionDir := t.TempDir()
+	shimDir := filepath.Join(sessionDir, "shims")
+	if err := os.MkdirAll(shimDir, 0o700); err != nil {
+		t.Fatalf("mkdir shims: %v", err)
+	}
+	statusPath := filepath.Join(sessionDir, ShimStatusFilename)
+	if err := os.WriteFile(statusPath, []byte("0"), 0o600); err != nil {
+		t.Fatalf("seed status file: %v", err)
+	}
+	env := []string{
+		"HOME=" + home,
+		"PATH=" + shimDir + ":/usr/bin:/bin",
+		"MESHTERM_SHIM_DIR=" + shimDir,
+		"MESHTERM_SESSION_ID=testsession",
+		"TERM=xterm",
+	}
+	res := seedPromptHook(sessionDir, shellPath, args, env, discardLogger())
+	if !res.hookInstalled {
+		t.Fatalf("seedPromptHook did not install a hook for %s", shellPath)
+	}
+	cmd := exec.Command(res.shell, append(append([]string{}, res.args...), "-i", "-c", "true")...)
+	cmd.Env = res.env
+	_ = cmd.Run()
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return "<absent>"
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// writeHomeRC builds a throwaway HOME with an arbitrary rc body.
+func writeHomeRC(t *testing.T, rcName, body string) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "mybin"), 0o700); err != nil {
+		t.Fatalf("mkdir mybin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, rcName), []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rcName, err)
+	}
+	return home
+}
+
+// TestAnnounceOnlyWhenShellActuallyGetsThere is the regression test for the
+// defect that blocked v1.7.11-rc2: readiness was PREDICTED at seed time from
+// `!login`, so a shell that never reached its prompt still reported ready. iOS
+// then marked a brokered secret `.delivered` while the tool launched with none.
+//
+// Readiness is now announced by the shell itself. These cases pin the asymmetry
+// that makes that safe: a shell that gets through its rc with the shim first
+// says so, and a shell that does not says nothing, leaving the sidecar's "0".
+func TestAnnounceOnlyWhenShellActuallyGetsThere(t *testing.T) {
+	bash := lookShell(t, "bash")
+
+	t.Run("ordinary_rc_announces", func(t *testing.T) {
+		// The everyday case: an rc that prepends a personal bin dir. The shim is
+		// re-asserted to the front, so the shell is genuinely ready and says so.
+		home := writeHomeRC(t, ".bashrc", "PATH=\"$HOME/mybin:$PATH\"\nexport PATH\n")
+		if got := announceStatus(t, bash, home, nil); got != "1" {
+			t.Errorf("ordinary rc: shim-ready = %q, want \"1\"", got)
+		}
+	})
+
+	t.Run("rc_that_execs_away_never_announces", func(t *testing.T) {
+		// ★★ THE headline case. `[ -z "$TMUX" ] && exec tmux new-session -A -s main`
+		// is a near-universal dotfile idiom, and the generated rcfile sources the
+		// user's rc BEFORE our shim lines, so the exec means they never run.
+		// rc2 reported this session READY because the shell merely was not a login
+		// shell. It must now stay not-ready.
+		home := writeHomeRC(t, ".bashrc", "exec /bin/true\n")
+		if got := announceStatus(t, bash, home, nil); got == "1" {
+			t.Errorf("rc that execs away: shim-ready = %q, want NOT \"1\" (the shell never reached our lines)", got)
+		}
+	})
+
+	t.Run("set_u_rc_still_announces_and_stays_quiet", func(t *testing.T) {
+		// `set -u` turned the old bare `$ZSH_VERSION` into an unbound-variable
+		// error that aborted the register line, so _mt_shim_path was never wired
+		// up - while the seed-time bit still said ready. With `${ZSH_VERSION:-}`
+		// the line survives and the shell announces honestly.
+		home := writeHomeRC(t, ".bashrc", "set -u\nPATH=\"$HOME/mybin:$PATH\"\nexport PATH\n")
+		if got := announceStatus(t, bash, home, nil); got != "1" {
+			t.Errorf("set -u rc: shim-ready = %q, want \"1\"", got)
+		}
+	})
+
+	t.Run("login_shell_that_reaches_a_prompt_is_ready", func(t *testing.T) {
+		// The flip side of dropping the `!login` prediction: a login shell whose
+		// profile does NOT exec away is perfectly capable of being ready, and
+		// rc1/rc2 reported it not-ready purely because it was a login shell. That
+		// was a false NEGATIVE - a permanent, unactionable "regenerate" warning.
+		home := writeHomeRC(t, ".bash_profile", "PATH=\"$HOME/mybin:$PATH\"\nexport PATH\n")
+		if got := announceStatus(t, bash, home, []string{"-l"}); got != "1" {
+			t.Errorf("login bash reaching a prompt: shim-ready = %q, want \"1\"", got)
+		}
+	})
+}

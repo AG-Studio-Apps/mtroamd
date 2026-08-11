@@ -91,19 +91,37 @@ func Run(ctx context.Context, cfg Config) error {
 	// and shimReady reported false for every session on that host, forever, with
 	// a "regenerate the session" warning the user could do nothing about. The
 	// two halves of the daemon also disagreed about which shell a session ran.
-	shell := cfg.Shell
-	if shell == "" {
-		shell = os.Getenv("SHELL")
+	// ★ Every candidate is STATTED, including the explicit one and $SHELL. The
+	// previous version took those two on trust and only statted /bin/bash and
+	// /bin/sh, so the two halves still disagreed whenever $SHELL pointed at a
+	// shell that no longer exists - a Homebrew prefix migration, a distro
+	// upgrade, or an uninstalled fish/zsh. pty.resolveShell would stat it, fail,
+	// and fall back to /bin/bash; the sidecar took it unchecked and died at
+	// exec.Command with a bare ENOENT instead of falling back at all.
+	shell := ""
+	candidates := make([]string, 0, 4)
+	if cfg.Shell != "" {
+		candidates = append(candidates, cfg.Shell)
 	}
-	if shell == "" {
-		for _, c := range []string{"/bin/bash", "/bin/sh"} {
-			if _, err := os.Stat(c); err == nil {
-				shell = c
-				break
-			}
+	if s := os.Getenv("SHELL"); s != "" {
+		candidates = append(candidates, s)
+	}
+	candidates = append(candidates, "/bin/bash", "/bin/sh")
+	for _, c := range candidates {
+		// #nosec G703 -- taint FP. Candidates are the daemon's own cfg.Shell, the
+		// daemon's $SHELL, or two literals; os.Stat only reads metadata and opens
+		// nothing. The real trust decision on this value is the exec.Command below,
+		// which is the long-accepted G204 hit. Statting first is strictly safer
+		// than the previous code, which took cfg.Shell and $SHELL unchecked.
+		if _, err := os.Stat(c); err == nil {
+			shell = c
+			break
 		}
 	}
 	if shell == "" {
+		// pty.resolveShell errors here. The sidecar cannot usefully refuse to
+		// start, and /bin/sh is what its old fallback produced, so keep that
+		// behaviour rather than introducing a new failure mode in a patch release.
 		shell = "/bin/sh"
 	}
 	rows, cols := cfg.Rows, cfg.Cols
@@ -126,7 +144,13 @@ func Run(ctx context.Context, cfg Config) error {
 	shellArgs := seed.args
 	env = seed.env
 	writeHookStatus(sessionDir, seed.hookInstalled, log)
-	writeShimStatus(sessionDir, seed.shimReady, log)
+	// ★★ Always FALSE here, never seed.shimReady - that field no longer exists.
+	// This is the reset, not the answer: it marks the session not-ready before
+	// the shell starts, and only `_mt_shim_announce`, running inside that shell
+	// once the shim is observed first on the live PATH, promotes it to "1". A
+	// respawn re-runs this and correctly drops the claim back to not-ready until
+	// the new shell earns it again.
+	writeShimStatus(sessionDir, false, log)
 
 	cmd := exec.Command(shell, shellArgs...)
 	cmd.Env = env

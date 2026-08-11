@@ -92,55 +92,70 @@ func TestSeedPromptHook(t *testing.T) {
 			t.Errorf("hook installed before the user's .bashrc")
 		}
 		// The seeded rc re-asserts the broker shim dir on PATH (after the
-		// user's rc) so a login rebuild can't drop it, and shimReady is
-		// reported true (sidecar-guaranteed, not merely spawned-with).
-		mustContain(t, body, shimFuncDef)
+		// user's rc) so a login rebuild can't drop it.
+		mustContain(t, body, shimFuncDef(filepath.Join(dir, ShimStatusFilename)))
 		mustContain(t, body, shimRegisterLine)
-		if !got.shimReady {
-			t.Errorf("shimReady = false, want true for a seeded bash")
-		}
+		// The announce writes to THIS session's status file, by absolute path.
+		mustContain(t, body, filepath.Join(dir, ShimStatusFilename))
 	})
 
-	t.Run("shim_ready_only_when_seeded", func(t *testing.T) {
+	// ★★ This replaces `shim_ready_only_when_seeded`, which asserted the SEED-TIME
+	// PREDICTION (`!login`) that this release deletes. There is no longer any
+	// readiness value produced at seed time to assert - the shell announces it at
+	// its first prompt instead (see hookseed_shell_test.go for the behavioural
+	// coverage that actually runs a shell).
+	//
+	// What is still worth pinning here is the structural half: only a SEEDED
+	// shell gets the announce machinery at all, so a shell we never touched can
+	// never announce ready no matter what its rc does.
+	t.Run("only_seeded_shells_get_the_announce", func(t *testing.T) {
 		dir := t.TempDir()
-		// ★★ shimReady is now "did we SEED this shell", not "is it non-login".
-		// An unseeded shell gets no _mt_shim_path, so nothing re-asserts after
-		// the user's rc runs and an ordinary `PATH="$HOME/bin:$PATH"` outranks
-		// the shim. Reporting true there let iOS call a secret push
-		// `.delivered` while the tool launched with none.
-		//
-		// `-c x` is the tmux shape (`bash -c "tmux new"`): non-benign args, so
-		// nothing is seeded and every tmux pane reads the user's real rc.
-		notSeeded := seedPromptHook(dir, "/bin/sh", []string{"-c", "x"}, []string{home, sess}, discardLogger())
-		if notSeeded.shimReady {
-			t.Errorf("unseeded sh shimReady = true, want false (nothing re-asserts)")
+
+		// Every shape that must NOT be seeded. `-c x` is the tmux shape
+		// (`bash -c "tmux new"`): non-benign args, so nothing is seeded and every
+		// pane reads the user's real rc.
+		for _, tc := range []struct {
+			name  string
+			shell string
+			args  []string
+		}{
+			{"sh_dash_c", "/bin/sh", []string{"-c", "x"}},
+			{"login_sh", "/bin/sh", []string{"-l"}},
+			{"fish_unknown", "/usr/bin/fish", nil},
+			{"bash_dash_c", "/bin/bash", []string{"-c", "tmux new"}},
+		} {
+			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, discardLogger())
+			if got.hookInstalled {
+				t.Errorf("%s: hookInstalled = true, want false (must not be seeded)", tc.name)
+			}
+			// Unseeded means the invocation comes back untouched, so there is no
+			// generated rc carrying _mt_shim_announce anywhere.
+			if got.shell != tc.shell {
+				t.Errorf("%s: shell rewritten to %q, want untouched %q", tc.name, got.shell, tc.shell)
+			}
 		}
-		loginSh := seedPromptHook(dir, "/bin/sh", []string{"-l"}, []string{home, sess}, discardLogger())
-		if loginSh.shimReady {
-			t.Errorf("login sh shimReady = true, want false")
-		}
-		// fish/nushell/xonsh: shellUnknown, never seeded.
-		unknown := seedPromptHook(dir, "/usr/bin/fish", nil, []string{home, sess}, discardLogger())
-		if unknown.shimReady {
-			t.Errorf("fish shimReady = true, want false (never seeded)")
-		}
-		// ★★ A seeded LOGIN shell is NOT ready. Flipping this to true was tried
-		// and reverted: a .zlogin / .bash_profile that ends in `exec` (the
-		// common `[[ -z $TMUX ]] && exec tmux`) never reaches a prompt, so the
-		// per-prompt re-assert never fires, and for bash the profile chain is
-		// sourced BEFORE our lines so _mt_shim_path is not even defined.
-		zshLogin := seedPromptHook(dir, "/bin/zsh", []string{"-l"}, []string{home, sess}, discardLogger())
-		if zshLogin.shimReady {
-			t.Errorf("login zsh shimReady = true, want false (a startup file may exec)")
-		}
-		bashLogin := seedPromptHook(dir, "/bin/bash", []string{"-l"}, []string{home, sess}, discardLogger())
-		if bashLogin.shimReady {
-			t.Errorf("login bash shimReady = true, want false (profile is sourced before our lines)")
-		}
-		// The seeded NON-login case is the one that is genuinely guaranteed.
-		zshPlain := seedPromptHook(dir, "/bin/zsh", nil, []string{home, sess}, discardLogger())
-		if !zshPlain.shimReady {
-			t.Errorf("non-login zsh shimReady = false, want true")
+
+		// Seeded shells DO get it, login or not. Login is no longer special: a
+		// login startup file that `exec`s away simply never reaches a prompt, so
+		// it never announces, and the bit stays "0" on its own.
+		statusPath := filepath.Join(dir, ShimStatusFilename)
+		for _, tc := range []struct {
+			name  string
+			shell string
+			args  []string
+		}{
+			{"bash_plain", "/bin/bash", nil},
+			{"bash_login", "/bin/bash", []string{"-l"}},
+			{"zsh_plain", "/bin/zsh", nil},
+			{"zsh_login", "/bin/zsh", []string{"-l"}},
+		} {
+			got := seedPromptHook(dir, tc.shell, tc.args, []string{home, sess}, discardLogger())
+			if !got.hookInstalled {
+				t.Fatalf("%s: hookInstalled = false, want true", tc.name)
+			}
+			body := seededBody(t, dir, got)
+			mustContain(t, body, "_mt_shim_announce")
+			mustContain(t, body, statusPath)
 		}
 	})
 
@@ -274,6 +289,18 @@ func TestEnvReplaceAndLookup(t *testing.T) {
 	if v, ok := envLookup(out, "A"); !ok || v != "1" {
 		t.Errorf("A = %q (ok=%v), want 1", v, ok)
 	}
+}
+
+// seededBody returns the generated startup file a seeded result actually reads:
+// bash's --rcfile argument, or the .zshrc in the ZDOTDIR we redirected to. Both
+// shells end up sourcing the shim definitions from one of these two places, so a
+// test can assert on "what the shell will run" without caring which shell it is.
+func seededBody(t *testing.T, dir string, got seedResult) string {
+	t.Helper()
+	if len(got.args) == 2 && got.args[0] == "--rcfile" {
+		return readFile(t, got.args[1])
+	}
+	return readFile(t, filepath.Join(dir, hookrcSubdir, ".zshrc"))
 }
 
 func readFile(t *testing.T, path string) string {
