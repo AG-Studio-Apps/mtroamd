@@ -136,6 +136,11 @@ jobs:
         with:
           name: dist
           path: dist/
+          # Same-run hand-off to the publish jobs only; the built binaries live
+          # permanently on the GitHub Release afterwards, so this artifact needs no
+          # long life. 1 day (the minimum) keeps standing Actions storage near zero
+          # instead of retaining ~83MB per run for the default 90 days.
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
