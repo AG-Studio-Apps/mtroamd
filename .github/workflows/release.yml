@@ -136,6 +136,11 @@ jobs:
         with:
           name: dist
           path: dist/
+          # Same-run hand-off to the publish jobs only; the built binaries live
+          # permanently on the GitHub Release afterwards, so this artifact needs no
+          # long life. 1 day (the minimum) keeps standing Actions storage near zero
+          # instead of retaining ~83MB per run for the default 90 days.
+          retention-days: 1
 
   release:
     name: Publish GitHub Release
@@ -463,4 +468,44 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "apk: publish ${TAG} to ${SUITE}" || { echo "nothing to publish"; exit 0; }
+          git push origin HEAD:gh-pages
+
+  pages-version:
+    name: Show the version on the install page (gh-pages)
+    # Runs AFTER apk-repo: every gh-pages writer in this workflow is serialized to avoid a non-fast-forward race.
+    # prune-releases runs only after this whole workflow succeeds (workflow_run), so it cannot race either.
+    needs: [release, apt-repo, rpm-repo, apk-repo]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for branch routing)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Update the routed channel's version on index.html
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Same routing as apt/rpm/apk: main-ancestor + clean semver -> stable, else dev.
+          git fetch --no-tags origin main
+          SUITE=dev
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main && [[ "$TAG" != *-* ]]; then
+            SUITE=stable
+          fi
+
+          if ! git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "::notice::gh-pages not seeded yet, skipping the version line"
+            exit 0
+          fi
+          git fetch --no-tags origin gh-pages
+          git worktree add --checkout pagesrepo origin/gh-pages
+          scripts/pages-set-version.sh pagesrepo/index.html "$SUITE" "$TAG" "$(date -u +%F)"
+
+          cd pagesrepo
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "site: show ${TAG} as ${SUITE}" || { echo "version line already current"; exit 0; }
           git push origin HEAD:gh-pages

@@ -122,6 +122,5 @@ mtroamd: installed at $BIN, but couldn't auto-start the --user service for '$u'.
     sudo -u $u env XDG_RUNTIME_DIR=/run/user/$uid systemctl --user enable --now mtroamd
 
   Verify with: mtroamd doctor
-  Or open this host in the meshTerm iOS app and choose "Reuse system binary".
 EOF
 exit 0
