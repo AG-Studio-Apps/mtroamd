@@ -6,8 +6,8 @@
 #
 # Manual only:
 #
-#   gh workflow run publish-psmux-flags -f on=false
-#   gh workflow run publish-psmux-flags -f on=true -f confirm_on=psmux-release-shipped
+#   gh workflow run publish-psmux-flags -f enabled=false
+#   gh workflow run publish-psmux-flags -f enabled=true -f confirm_on=psmux-release-shipped
 #
 # Notes:
 #   * Signed with the same minisign key as releases and the iOS channel.
@@ -18,14 +18,14 @@
 #   * The serial is monotonic: the live manifest's serial + 1, starting at
 #     1 when the asset is absent from the release.
 #   * Turning it ON is gated on psmux shipping a release with our reported
-#     fixes; `confirm_on` must be typed to publish on=true.
+#     fixes; `confirm_on` must be typed to publish enabled=true.
 
 name: publish-psmux-flags
 
 on:
   workflow_dispatch:
     inputs:
-      on:
+      enabled:
         description: "psmux control mode on for the fleet"
         type: choice
         options: ["false", "true"]
@@ -35,7 +35,7 @@ on:
         required: false
         default: ""
       confirm_on:
-        description: "Required when on=true: type psmux-release-shipped"
+        description: "Required when enabled=true: type psmux-release-shipped"
         required: false
         default: ""
 
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      ON: ${{ inputs.on }}
+      ON: ${{ inputs.enabled }}
       MAX_BUILD: ${{ inputs.max_build }}
       CONFIRM_ON: ${{ inputs.confirm_on }}
       ASSET: psmux-flags.json
@@ -55,9 +55,9 @@ jobs:
       - name: Validate inputs
         run: |
           set -euo pipefail
-          [[ "$ON" == "false" || "$ON" == "true" ]] || { echo "::error::on must be true or false"; exit 1; }
+          [[ "$ON" == "false" || "$ON" == "true" ]] || { echo "::error::enabled must be true or false"; exit 1; }
           if [ "$ON" = "true" ] && [ "$CONFIRM_ON" != "psmux-release-shipped" ]; then
-            echo "::error::on=true needs confirm_on=psmux-release-shipped"; exit 1
+            echo "::error::enabled=true needs confirm_on=psmux-release-shipped"; exit 1
           fi
           if [ -n "$MAX_BUILD" ]; then
             [[ "$MAX_BUILD" =~ ^[0-9]{1,15}$ ]] || { echo "::error::max_build must be digits"; exit 1; }
