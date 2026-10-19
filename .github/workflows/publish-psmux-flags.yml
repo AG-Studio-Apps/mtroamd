@@ -1,0 +1,115 @@
+# Publishes the signed psmux control-mode lever (psmux-flags.json +
+# psmux-flags.json.minisig) to the rolling `channel-ios` release. The
+# meshTerm iOS app fetches it (PsmuxFlagsLever) to turn psmux control
+# mode on or off for the fleet without an app update. Absent manifest =
+# OFF. Design: the iOS repo's docs/psmux-control-plan.md 1.5.
+#
+# Manual only:
+#
+#   gh workflow run publish-psmux-flags -f on=false
+#   gh workflow run publish-psmux-flags -f on=true -f confirm_on=psmux-release-shipped
+#
+# Notes:
+#   * Signed with the same minisign key as releases and the iOS channel.
+#   * Trusted comment is the bash twin of
+#     PsmuxFlagsLever.expectedTrustedComment (iOS):
+#       meshterm psmux-flags serial N on B maxBuild M|none
+#     Format drift makes every device reject the manifest (fail-safe).
+#   * The serial is monotonic: the live manifest's serial + 1, starting at
+#     1 when the asset is absent from the release.
+#   * Turning it ON is gated on psmux shipping a release with our reported
+#     fixes; `confirm_on` must be typed to publish on=true.
+
+name: publish-psmux-flags
+
+on:
+  workflow_dispatch:
+    inputs:
+      on:
+        description: "psmux control mode on for the fleet"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+      max_build:
+        description: "Optional: apply only to iOS builds with CFBundleVersion <= this (blank = all)"
+        required: false
+        default: ""
+      confirm_on:
+        description: "Required when on=true: type psmux-release-shipped"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ON: ${{ inputs.on }}
+      MAX_BUILD: ${{ inputs.max_build }}
+      CONFIRM_ON: ${{ inputs.confirm_on }}
+      ASSET: psmux-flags.json
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          [[ "$ON" == "false" || "$ON" == "true" ]] || { echo "::error::on must be true or false"; exit 1; }
+          if [ "$ON" = "true" ] && [ "$CONFIRM_ON" != "psmux-release-shipped" ]; then
+            echo "::error::on=true needs confirm_on=psmux-release-shipped"; exit 1
+          fi
+          if [ -n "$MAX_BUILD" ]; then
+            [[ "$MAX_BUILD" =~ ^[0-9]{1,15}$ ]] || { echo "::error::max_build must be digits"; exit 1; }
+          fi
+
+      - name: Compute next serial
+        run: |
+          set -euo pipefail
+          SERIAL=1
+          if gh release view channel-ios -R "$GITHUB_REPOSITORY" --json name >/dev/null 2>&1; then
+            HAVE="$(gh release view channel-ios -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -cFx "$ASSET" || true)"
+            if [ "$HAVE" -gt 0 ]; then
+              gh release download channel-ios -R "$GITHUB_REPOSITORY" -p "$ASSET" -O /tmp/prev.json --clobber || {
+                echo "::error::channel-ios lists $ASSET but it could not be downloaded"; exit 1; }
+              PREV="$(jq -r '.serial // empty' /tmp/prev.json || true)"
+              [[ "$PREV" =~ ^[0-9]+$ ]] || {
+                echo "::error::previous $ASSET serial unreadable ('${PREV}'), refusing to restart numbering"; exit 1; }
+              SERIAL=$((PREV + 1))
+            fi
+          fi
+          echo "SERIAL=$SERIAL" >> "$GITHUB_ENV"
+          echo "serial: $SERIAL"
+
+      - name: Write + sign manifest
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "$MINISIGN_KEY" ] || { echo "::error::MINISIGN_KEY secret missing"; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          if [ -n "$MAX_BUILD" ]; then MB_JSON="$MAX_BUILD"; MB_TEXT="$MAX_BUILD"; else MB_JSON="null"; MB_TEXT="none"; fi
+          printf '{"schema":1,"kind":"meshterm-psmux-flags","serial":%d,"psmuxControl":{"on":%s,"maxBuild":%s}}\n' \
+            "$SERIAL" "$ON" "$MB_JSON" > "$ASSET"
+          jq . "$ASSET"
+          echo "$MINISIGN_KEY" > /tmp/minisign.key
+          chmod 600 /tmp/minisign.key
+          echo "$MINISIGN_PASSWORD" | minisign -S \
+            -s /tmp/minisign.key \
+            -t "meshterm psmux-flags serial $SERIAL on $ON maxBuild $MB_TEXT" \
+            -m "$ASSET"
+          rm /tmp/minisign.key
+
+      - name: Publish to rolling channel-ios release
+        run: |
+          set -euo pipefail
+          gh release view channel-ios -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || {
+            echo "::error::channel-ios release missing (publish-ios-channel creates it)"; exit 1; }
+          gh release upload channel-ios -R "$GITHUB_REPOSITORY" "$ASSET" "$ASSET.minisig" --clobber
+          {
+            echo "## psmux flags published"
+            echo "- on: \`$ON\`"
+            echo "- maxBuild: \`${MAX_BUILD:-none}\`"
+            echo "- serial: \`$SERIAL\`"
+          } >> "$GITHUB_STEP_SUMMARY"
