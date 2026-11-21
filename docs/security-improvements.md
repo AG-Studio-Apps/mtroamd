@@ -10,24 +10,15 @@ Detection sources used across the project: `govulncheck`, dependency advisories
 scans, manual code review (including adversarial multi-agent review), and
 independent agent audits (e.g. Codex 5.5).
 
-## develop (2026-11-21, pending release)
+## v1.8.2 (2026-11-21, first shipping in `v1.8.2-rc1`)
 
-_Re-ran the full static / binary / dependency scan suite against `develop`
-(== `v1.8.1`, which only changed packaging/CI — no daemon code touched since
-the v1.8.0 baseline). `govulncheck` had drifted from clean to **11 reachable
-stdlib/`x/net` advisories** (toolchain pinned at go1.26.6, `x/net` at v0.57.0,
-both stale against the fast-moving Nov 2026 Go security releases); everything
-else (`go vet`, `gosec` at the 90 prior-accepted baseline, `staticcheck`
-style/unused only, `gitleaks` 1 prior-accepted match, `go test -race`) was
-still clean. Fixed below — code audit unchanged (no daemon logic touched)._
+_Dependency / toolchain security release. A re-run of the full static / binary / dependency scan suite against `develop` (== `v1.8.1`, packaging/CI-only since the v1.8.0 baseline) found `govulncheck` had drifted from clean to **11 call-graph-reachable stdlib / `x/net` advisories** - the pinned toolchain (go1.26.6) and `x/net` (v0.57.0) had gone stale against the Oct-Nov 2026 Go security releases. Everything else was unchanged from the accepted baseline. **No daemon code changed in this release** (`go.mod`, `go.sum` and the Nix `vendorHash` only), so there was no new logic to review; details + pre-stable gate in `.security/security-audit-v1.8.2.md`. After the bump: `govulncheck` **0 in code and 0 in imports** (source, and binary mode against freshly rebuilt daemon+cli binaries on go1.26.11); `osv-scanner` 0; `go vet` clean; `gosec` unchanged at the **90** prior-accepted baseline; `staticcheck` style/unused only; `gitleaks` clean (one prior-accepted match: the public offline release-signing key); `go test -race` green across every package; full CI matrix green including the Nix flake build with the re-locked `vendorHash`._
 
 | Finding | Severity | Source | Fix |
 |---|---|---|---|
 | **GO-2026-6607** - crypto/tls accepted a malformed ECH outer-extension reference; reachable via the QUIC listener's own TLS handshake (`transport.New` → `quic.Listen` → `tls.QUICConn.Start`) - the one advisory in this batch reachable from attacker-controlled input to the daemon's network-facing listener, not just the outbound release-fetch client | Medium | govulncheck (source) | Toolchain bump clears it (see Fix column below) |
 | **GO-2026-6809** - crypto/x509 failed to distrust a compromised intermediate certificate; reachable via `release.ChecksumOf`'s cert verification on downloaded release artifacts | Low | govulncheck (source) | Same toolchain bump |
 | **GO-2026-6859/6613/6605/6603/6610/6611/6612/6617/6608** - a batch of net/http HTTP/1 desync, HTTP/2 (via the vendored `x/net` h2 implementation) flow-control/CPU-exhaustion, and `net/textproto` MIME-header memory-limit advisories, all reachable via `release.Fetcher`'s outbound HTTP client (GitHub release downloads) | Low | govulncheck (source) / osv-scanner | Bumped toolchain `go1.26.6` → **go1.26.11** (covers the go1.26.9/.10/.11 stdlib fixes) and `golang.org/x/net` `v0.57.0` → **v0.62.0** (covers v0.60.0's h2 fixes, plus proactively clears two further unreachable `x/net` `html`-package advisories — GO-2026-6866/6860 — while we were in there, same precedent as past proactive bumps). Transitively pulled `x/crypto` → v0.58.0, `x/sys` → v0.49.0, `x/term` → v0.47.0. `govulncheck` is back to **0 reachable in code, 0 in imports** (one remaining note, `GO-2026-5932` `x/crypto/openpgp` unmaintained/no-fix, not imported by the daemon - same as prior releases). `go vet`, `go build`, `go test -race` all green across every package; `gosec`/`staticcheck`/`gitleaks` unchanged from baseline |
-
-★ **Nix `vendorHash` in `flake.nix` needs re-locking for this `go.sum` change** (`nix` isn't available on the box this fix was made from) - same as the v1.8.0 bump; do this before cutting a release or the Nix build breaks.
 
 ## v1.8.0 (2026-09-11)
 
